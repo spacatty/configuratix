@@ -41,37 +41,67 @@ func getEmbeddedInstallScript() string {
 	return `#!/bin/bash
 set -e
 
-TOKEN="$1"
 SERVER_URL="${CONFIGURATIX_SERVER:-http://localhost:8080}"
 REINSTALL=false
+FORCE_NEW=false
 CONFIG_FILE="/etc/configuratix/agent.json"
+
+# Parse arguments
+TOKEN=""
+for arg in "$@"; do
+    case $arg in
+        --force)
+            FORCE_NEW=true
+            ;;
+        *)
+            if [ -z "$TOKEN" ]; then
+                TOKEN="$arg"
+            fi
+            ;;
+    esac
+done
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Error: This script must be run as root"
     exit 1
 fi
 
-echo "=== Configuratix Agent Installer ==="
+echo "==========================================="
+echo "    Configuratix Agent Installer v2.0     "
+echo "==========================================="
+echo ""
 echo "Server: $SERVER_URL"
+if [ "$FORCE_NEW" = true ]; then
+    echo "Mode: FORCE NEW ENROLLMENT"
+fi
 echo ""
 
 # Check if agent already exists
-if [ -f "$CONFIG_FILE" ]; then
-    echo "Existing agent configuration found."
+if [ -f "$CONFIG_FILE" ] || [ -f "/opt/configuratix/bin/configuratix-agent" ] || systemctl is-active --quiet configuratix-agent 2>/dev/null; then
+    echo "=== Existing agent detected ==="
     REINSTALL=true
     
-    # Stop existing agent
-    if systemctl is-active --quiet configuratix-agent; then
-        echo "Stopping existing agent..."
-        systemctl stop configuratix-agent
+    # Stop existing agent service
+    if systemctl is-active --quiet configuratix-agent 2>/dev/null; then
+        echo "Stopping existing agent service..."
+        systemctl stop configuratix-agent 2>/dev/null || true
+        sleep 2
     fi
-fi
-
-# If no config exists, token is required
-if [ "$REINSTALL" = false ] && [ -z "$TOKEN" ]; then
-    echo "Error: Enrollment token is required for new installation"
-    echo "Usage: curl -sSL $SERVER_URL/install.sh | sudo bash -s -- YOUR_TOKEN"
-    exit 1
+    
+    # Force kill any lingering agent processes
+    if pgrep -f "configuratix-agent" > /dev/null 2>&1; then
+        echo "Force killing agent processes..."
+        pkill -9 -f "configuratix-agent" 2>/dev/null || true
+        sleep 1
+    fi
+    
+    # Remove old binary (will be rebuilt)
+    if [ -f "/opt/configuratix/bin/configuratix-agent" ]; then
+        echo "Removing old agent binary..."
+        rm -f /opt/configuratix/bin/configuratix-agent
+    fi
+    
+    echo "Old agent cleaned up. Proceeding with reinstallation..."
 fi
 
 # Install dependencies
@@ -152,7 +182,7 @@ import (
 	"time"
 )
 
-const Version = "0.2.0"
+const Version = "0.3.0"
 const ConfigDir = "/etc/configuratix"
 const ConfigFile = "agent.json"
 
@@ -893,12 +923,25 @@ MAINEOF
 go build -o /opt/configuratix/bin/configuratix-agent ./cmd/agent
 cd / && rm -rf /tmp/configuratix-agent-build
 
-# Only enroll if this is a new installation (no existing config)
-if [ "$REINSTALL" = false ]; then
-    echo "Enrolling new agent..."
+# Handle enrollment
+if [ "$REINSTALL" = false ] || [ "$FORCE_NEW" = true ]; then
+    if [ -z "$TOKEN" ]; then
+        echo "Error: Enrollment token is required"
+        echo "Usage: curl -sSL $SERVER_URL/install.sh | sudo bash -s -- YOUR_TOKEN"
+        echo "       curl -sSL $SERVER_URL/install.sh | sudo bash -s -- YOUR_TOKEN --force"
+        exit 1
+    fi
+    
+    if [ "$FORCE_NEW" = true ]; then
+        echo "Force mode: Removing old configuration..."
+        rm -f "$CONFIG_FILE"
+    fi
+    
+    echo "Enrolling agent with server..."
     /opt/configuratix/bin/configuratix-agent enroll --server "$SERVER_URL" --token "$TOKEN"
 else
     echo "Re-using existing agent configuration..."
+    echo "  (Use --force flag with a new token to re-enroll)"
 fi
 
 cat > /etc/systemd/system/configuratix-agent.service << EOF
@@ -920,10 +963,32 @@ systemctl daemon-reload
 systemctl enable configuratix-agent
 systemctl start configuratix-agent
 
-echo ""
-echo "=== Installation Complete ==="
-echo "Agent enrolled and running"
-echo "Nginx, Certbot, Fail2ban, and UFW installed and configured"
-echo "Check status: systemctl status configuratix-agent"
+# Wait a moment and check if agent is running
+sleep 2
+if systemctl is-active --quiet configuratix-agent; then
+    echo ""
+    echo "==========================================="
+    if [ "$REINSTALL" = true ]; then
+        echo "=== Agent Reinstalled Successfully ==="
+    else
+        echo "=== Installation Complete ==="
+    fi
+    echo "==========================================="
+    echo ""
+    echo "Agent status: RUNNING"
+    echo "Agent version: $(cat /opt/configuratix/bin/configuratix-agent 2>/dev/null | head -c 100 || echo 'latest')"
+    echo ""
+    echo "Services configured:"
+    echo "  - Nginx: $(systemctl is-active nginx)"
+    echo "  - Fail2ban: $(systemctl is-active fail2ban)"
+    echo "  - UFW: $(ufw status | head -1)"
+    echo ""
+    echo "Check status: systemctl status configuratix-agent"
+    echo "View logs: journalctl -u configuratix-agent -f"
+else
+    echo ""
+    echo "WARNING: Agent may not have started correctly"
+    echo "Check logs: journalctl -u configuratix-agent -n 50"
+fi
 `
 }
