@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"net/http"
-	"os"
 	"strings"
 )
 
@@ -22,28 +21,10 @@ func (h *InstallHandler) ServeInstallScript(w http.ResponseWriter, r *http.Reque
 	}
 	serverURL := scheme + "://" + r.Host
 
-	// Read the install script template
-	scriptPaths := []string{
-		"../agent/install.sh",
-		"agent/install.sh",
-	}
-
-	var script []byte
-	var err error
-	for _, path := range scriptPaths {
-		script, err = os.ReadFile(path)
-		if err == nil {
-			break
-		}
-	}
-
-	if err != nil {
-		// Fallback: embedded minimal script
-		script = []byte(getEmbeddedInstallScript())
-	}
+	// Always use the embedded script (contains full 'run' job type support)
+	scriptStr := getEmbeddedInstallScript()
 
 	// Replace the default SERVER_URL with the actual server URL
-	scriptStr := string(script)
 	scriptStr = strings.Replace(
 		scriptStr,
 		`SERVER_URL="${CONFIGURATIX_SERVER:-http://localhost:8080}"`,
