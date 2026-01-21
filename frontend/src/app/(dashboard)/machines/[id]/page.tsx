@@ -424,7 +424,6 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
   // Local state for edits (to prevent refresh issues)
   const [localNotes, setLocalNotes] = useState("");
   const [notesDirty, setNotesDirty] = useState(false);
-  const [notesTab, setNotesTab] = useState<string>("preview");
 
   // Optimistic UI states
   const [ufwEnabled, setUfwEnabled] = useState(false);
