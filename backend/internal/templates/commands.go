@@ -71,7 +71,8 @@ var Commands = map[string]*CommandTemplate{
 			{Action: "exec", Command: `sed -i 's/^#\?Port.*/Port {{port}}/' /etc/ssh/sshd_config || echo "Port {{port}}" >> /etc/ssh/sshd_config`, Timeout: 30},
 			{Action: "exec", Command: "ufw allow {{port}}/tcp", Timeout: 30},
 			{Action: "exec", Command: "ufw delete allow 22/tcp 2>/dev/null || true", Timeout: 30},
-			{Action: "service", Name: "sshd", Op: "restart"},
+			{Action: "exec", Command: "systemctl daemon-reload", Timeout: 30},
+			{Action: "exec", Command: "systemctl restart sshd 2>/dev/null || systemctl restart ssh", Timeout: 60},
 		},
 	},
 

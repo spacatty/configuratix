@@ -795,6 +795,9 @@ func changeSSHPort(port int) (string, error) {
 		runCmd("ufw", "delete", "allow", fmt.Sprintf("%d/tcp", oldPort))
 	}
 	logs.WriteString("Updated UFW rules\n")
+	// Daemon reload required for Ubuntu 22.04+
+	runCmd("systemctl", "daemon-reload")
+	logs.WriteString("Reloaded systemd daemon\n")
 	out, err := runCmd("systemctl", "restart", "sshd")
 	if err != nil { out, err = runCmd("systemctl", "restart", "ssh") }
 	logs.WriteString(out)
