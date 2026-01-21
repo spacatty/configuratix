@@ -1063,18 +1063,52 @@ func applyDomain(domain, config string) (string, error) {
 		logs.WriteString(out)
 		
 		// Issue certificate with certbot
+		// Flags explanation:
+		// --non-interactive: Never ask for user input
+		// --agree-tos: Agree to ACME server's Terms of Service
+		// --no-eff-email: Don't share email with EFF
+		// --email: Required email (use noreply placeholder)
+		// --keep-until-expiring: Don't renew if cert exists and not expiring
+		// --cert-name: Use domain as certificate name
 		logs.WriteString("Running certbot...\n")
-		out, err = runCmd("certbot", "certonly", "--nginx", "-d", domain, "--non-interactive", "--agree-tos", "--register-unsafely-without-email")
+		
+		// Try standalone method first (most reliable, stops nginx briefly)
+		out, err = runCmd("systemctl", "stop", "nginx")
 		logs.WriteString(out)
+		
+		out, err = runCmd("certbot", "certonly", 
+			"--standalone",
+			"-d", domain,
+			"--non-interactive",
+			"--agree-tos",
+			"--no-eff-email",
+			"--email", "noreply@configuratix.local",
+			"--keep-until-expiring",
+			"--cert-name", domain,
+		)
+		logs.WriteString(out)
+		
+		// Restart nginx regardless
+		runCmd("systemctl", "start", "nginx")
+		
 		if err != nil {
-			// Try webroot method as fallback
-			logs.WriteString("Nginx plugin failed, trying webroot method...\n")
+			// Try webroot method as fallback (nginx stays running)
+			logs.WriteString("Standalone method failed, trying webroot method...\n")
 			runCmd("mkdir", "-p", "/var/www/html/.well-known/acme-challenge")
-			out, err = runCmd("certbot", "certonly", "--webroot", "-w", "/var/www/html", "-d", domain, "--non-interactive", "--agree-tos", "--register-unsafely-without-email")
+			out, err = runCmd("certbot", "certonly",
+				"--webroot",
+				"-w", "/var/www/html",
+				"-d", domain,
+				"--non-interactive",
+				"--agree-tos",
+				"--no-eff-email",
+				"--email", "noreply@configuratix.local",
+				"--keep-until-expiring",
+				"--cert-name", domain,
+			)
 			logs.WriteString(out)
 			if err != nil {
 				logs.WriteString("Certificate issuance failed. Keeping HTTP-only config.\n")
-				// Keep HTTP-only config, don't apply SSL config
 				return logs.String(), fmt.Errorf("certbot failed: %v", err)
 			}
 		}
