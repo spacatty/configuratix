@@ -73,8 +73,9 @@ func (h *SetupHandler) CreateFirstUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// First user is always superadmin
 	_, err = h.db.Exec(
-		"INSERT INTO users (email, password_hash) VALUES ($1, $2)",
+		"INSERT INTO users (email, password_hash, role) VALUES ($1, $2, 'superadmin')",
 		req.Email,
 		passwordHash,
 	)

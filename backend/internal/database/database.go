@@ -58,6 +58,7 @@ func (db *DB) RunMigrations() error {
 		"001_initial_schema.sql",
 		"002_add_notes_and_token_name.sql",
 		"003_machine_settings.sql",
+		"004_users_projects_roles.sql",
 	}
 
 	// Base paths to try

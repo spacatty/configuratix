@@ -46,7 +46,7 @@ func main() {
 	// Auth routes (public)
 	authHandler := handlers.NewAuthHandler(db)
 	router.HandleFunc("/api/auth/login", authHandler.Login).Methods("POST", "OPTIONS")
-	router.Handle("/api/auth/me", middleware.AuthMiddleware(http.HandlerFunc(authHandler.Me))).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/auth/register", authHandler.Register).Methods("POST", "OPTIONS")
 
 	// Agent enrollment (public - uses enrollment token)
 	agentHandler := handlers.NewAgentHandler(db)
@@ -59,16 +59,54 @@ func main() {
 	agentRouter.HandleFunc("/jobs", agentHandler.GetJobs).Methods("GET", "OPTIONS")
 	agentRouter.HandleFunc("/jobs/update", agentHandler.UpdateJob).Methods("POST", "OPTIONS")
 
-	// Protected API routes
+	// Protected API routes (requires user auth)
 	apiRouter := router.PathPrefix("/api").Subrouter()
 	apiRouter.Use(middleware.AuthMiddleware)
+
+	// Auth (authenticated)
+	apiRouter.HandleFunc("/auth/me", authHandler.Me).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/auth/password", authHandler.ChangePassword).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/auth/profile", authHandler.UpdateProfile).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/auth/2fa/setup", authHandler.Setup2FA).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/auth/2fa/enable", authHandler.Enable2FA).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/auth/2fa/disable", authHandler.Disable2FA).Methods("POST", "OPTIONS")
+
+	// Admin routes
+	adminHandler := handlers.NewAdminHandler(db)
+	apiRouter.HandleFunc("/admin/stats", adminHandler.AdminStats).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/admin/users", adminHandler.ListUsers).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/admin/users", adminHandler.CreateAdmin).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/admin/users/{id}", adminHandler.GetUser).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/admin/users/{id}/role", adminHandler.UpdateUserRole).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/admin/users/{id}/password", adminHandler.ChangeUserPassword).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/admin/users/{id}/2fa", adminHandler.Reset2FA).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/admin/users/{id}", adminHandler.DeleteUser).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/admin/machines/{id}/token", adminHandler.ResetMachineToken).Methods("DELETE", "OPTIONS")
+
+	// Projects
+	projectsHandler := handlers.NewProjectsHandler(db)
+	apiRouter.HandleFunc("/projects", projectsHandler.ListProjects).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/projects", projectsHandler.CreateProject).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/projects/join", projectsHandler.RequestJoin).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/projects/{id}", projectsHandler.GetProject).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/projects/{id}", projectsHandler.UpdateProject).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/projects/{id}", projectsHandler.DeleteProject).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/projects/{id}/sharing", projectsHandler.ToggleSharing).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/projects/{id}/members", projectsHandler.ListMembers).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/projects/{project_id}/members/{member_id}/approve", projectsHandler.ApproveMember).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/projects/{project_id}/members/{member_id}/deny", projectsHandler.DenyMember).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/projects/{project_id}/members/{member_id}", projectsHandler.UpdateMember).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/projects/{project_id}/members/{member_id}", projectsHandler.RemoveMember).Methods("DELETE", "OPTIONS")
 
 	// Machines
 	machinesHandler := handlers.NewMachinesHandler(db)
 	apiRouter.HandleFunc("/machines", machinesHandler.ListMachines).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}", machinesHandler.GetMachine).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}", machinesHandler.UpdateMachine).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/notes", machinesHandler.UpdateMachineNotes).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}", machinesHandler.DeleteMachine).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/access-token", machinesHandler.SetAccessToken).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/access-token/verify", machinesHandler.VerifyAccessToken).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/ssh-port", machinesHandler.ChangeSSHPort).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/root-password", machinesHandler.ChangeRootPassword).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/ufw", machinesHandler.ToggleUFW).Methods("POST", "OPTIONS")
@@ -77,6 +115,8 @@ func main() {
 	apiRouter.HandleFunc("/machines/{id}/fail2ban", machinesHandler.ToggleFail2ban).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/logs", machinesHandler.GetMachineLogs).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/exec", machinesHandler.ExecTerminalCommand).Methods("POST", "OPTIONS")
+
+	// Enrollment Tokens
 	apiRouter.HandleFunc("/enrollment-tokens", machinesHandler.ListEnrollmentTokens).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/enrollment-tokens", machinesHandler.CreateEnrollmentToken).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/enrollment-tokens/{id}", machinesHandler.DeleteEnrollmentToken).Methods("DELETE", "OPTIONS")

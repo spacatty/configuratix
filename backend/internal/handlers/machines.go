@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
+	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
 	"configuratix/backend/internal/models"
 	"configuratix/backend/internal/templates"
@@ -25,15 +27,100 @@ func NewMachinesHandler(db *database.DB) *MachinesHandler {
 	return &MachinesHandler{db: db}
 }
 
-// ListMachines returns all machines with their agent info
+// MachineWithDetails includes agent and owner info with machine
+type MachineWithDetails struct {
+	models.Machine
+	AgentName    *string    `db:"agent_name" json:"agent_name"`
+	AgentVersion *string    `db:"agent_version" json:"agent_version"`
+	LastSeen     *time.Time `db:"last_seen" json:"last_seen"`
+	OwnerEmail   *string    `db:"owner_email" json:"owner_email"`
+	OwnerName    *string    `db:"owner_name" json:"owner_name"`
+	ProjectName  *string    `db:"project_name" json:"project_name"`
+}
+
+// ListMachines returns machines the user can access
 func (h *MachinesHandler) ListMachines(w http.ResponseWriter, r *http.Request) {
-	var machines []MachineWithAgent
-	err := h.db.Select(&machines, `
-		SELECT m.*, a.name as agent_name, a.version as agent_version, a.last_seen
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
+	// Get optional filters
+	search := r.URL.Query().Get("search")
+	projectID := r.URL.Query().Get("project_id")
+
+	var machines []MachineWithDetails
+	var err error
+
+	baseQuery := `
+		SELECT m.*, 
+			a.name as agent_name, 
+			a.version as agent_version, 
+			a.last_seen,
+			u.email as owner_email,
+			COALESCE(u.name, u.email) as owner_name,
+			p.name as project_name
 		FROM machines m
 		LEFT JOIN agents a ON m.agent_id = a.id
-		ORDER BY m.created_at DESC
-	`)
+		LEFT JOIN users u ON m.owner_id = u.id
+		LEFT JOIN projects p ON m.project_id = p.id
+	`
+
+	// Superadmin sees all machines
+	if claims.IsSuperAdmin() {
+		whereClause := "WHERE 1=1"
+		args := []interface{}{}
+		argNum := 1
+
+		if search != "" {
+			whereClause += fmt.Sprintf(` AND (
+				m.title ILIKE $%d OR 
+				m.hostname ILIKE $%d OR 
+				m.ip_address ILIKE $%d
+			)`, argNum, argNum, argNum)
+			args = append(args, "%"+search+"%")
+			argNum++
+		}
+
+		if projectID != "" {
+			pid, _ := uuid.Parse(projectID)
+			whereClause += fmt.Sprintf(" AND m.project_id = $%d", argNum)
+			args = append(args, pid)
+			argNum++
+		}
+
+		err = h.db.Select(&machines, baseQuery+whereClause+" ORDER BY m.created_at DESC", args...)
+	} else {
+		// Regular users see their own machines and machines in projects they have access to
+		whereClause := `WHERE (
+			m.owner_id = $1 
+			OR m.project_id IN (
+				SELECT id FROM projects WHERE owner_id = $1
+				UNION
+				SELECT project_id FROM project_members WHERE user_id = $1 AND status = 'approved'
+			)
+		)`
+		args := []interface{}{userID}
+		argNum := 2
+
+		if search != "" {
+			whereClause += fmt.Sprintf(` AND (
+				m.title ILIKE $%d OR 
+				m.hostname ILIKE $%d OR 
+				m.ip_address ILIKE $%d
+			)`, argNum, argNum, argNum)
+			args = append(args, "%"+search+"%")
+			argNum++
+		}
+
+		if projectID != "" {
+			pid, _ := uuid.Parse(projectID)
+			whereClause += fmt.Sprintf(" AND m.project_id = $%d", argNum)
+			args = append(args, pid)
+			argNum++
+		}
+
+		err = h.db.Select(&machines, baseQuery+whereClause+" ORDER BY m.created_at DESC", args...)
+	}
+
 	if err != nil {
 		log.Printf("Failed to list machines: %v", err)
 		http.Error(w, "Failed to list machines", http.StatusInternalServerError)
@@ -41,37 +128,44 @@ func (h *MachinesHandler) ListMachines(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if machines == nil {
-		machines = []MachineWithAgent{}
+		machines = []MachineWithDetails{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(machines)
 }
 
-// MachineWithAgent includes agent info with machine
-type MachineWithAgent struct {
-	models.Machine
-	AgentName    *string    `db:"agent_name" json:"agent_name"`
-	AgentVersion *string    `db:"agent_version" json:"agent_version"`
-	LastSeen     *time.Time `db:"last_seen" json:"last_seen"`
-}
-
 // GetMachine returns a single machine by ID
 func (h *MachinesHandler) GetMachine(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id, err := uuid.Parse(vars["id"])
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
 		return
 	}
 
-	var machine MachineWithAgent
+	// Check access (machine token verification happens elsewhere if needed)
+	if !h.canAccessMachine(userID, machineID, claims.IsSuperAdmin()) {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	var machine MachineWithDetails
 	err = h.db.Get(&machine, `
-		SELECT m.*, a.name as agent_name, a.version as agent_version, a.last_seen
+		SELECT m.*, 
+			a.name as agent_name, 
+			a.version as agent_version, 
+			a.last_seen,
+			u.email as owner_email,
+			COALESCE(u.name, u.email) as owner_name,
+			p.name as project_name
 		FROM machines m
 		LEFT JOIN agents a ON m.agent_id = a.id
+		LEFT JOIN users u ON m.owner_id = u.id
+		LEFT JOIN projects p ON m.project_id = p.id
 		WHERE m.id = $1
-	`, id)
+	`, machineID)
 	if err != nil {
 		http.Error(w, "Machine not found", http.StatusNotFound)
 		return
@@ -81,12 +175,69 @@ func (h *MachinesHandler) GetMachine(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(machine)
 }
 
-// UpdateMachineNotes updates the notes for a machine
-func (h *MachinesHandler) UpdateMachineNotes(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id, err := uuid.Parse(vars["id"])
+// UpdateMachine updates machine settings (title, project, notes)
+func (h *MachinesHandler) UpdateMachine(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	if !h.canManageMachine(userID, machineID, claims.IsSuperAdmin()) {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		Title     *string    `json:"title"`
+		ProjectID *uuid.UUID `json:"project_id"`
+		NotesMD   *string    `json:"notes_md"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// If linking to a project, verify user can manage that project
+	if req.ProjectID != nil {
+		if !h.canLinkToProject(userID, *req.ProjectID, claims.IsSuperAdmin()) {
+			http.Error(w, "Cannot link to this project", http.StatusForbidden)
+			return
+		}
+	}
+
+	_, err = h.db.Exec(`
+		UPDATE machines SET 
+			title = COALESCE($1, title),
+			project_id = $2,
+			notes_md = COALESCE($3, notes_md),
+			updated_at = NOW()
+		WHERE id = $4
+	`, req.Title, req.ProjectID, req.NotesMD, machineID)
+	if err != nil {
+		http.Error(w, "Failed to update machine", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Machine updated"})
+}
+
+// UpdateMachineNotes updates just the notes for a machine
+func (h *MachinesHandler) UpdateMachineNotes(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	// Check if user can edit notes (owner, project owner/manager, or member with notes permission)
+	if !h.canEditMachineNotes(userID, machineID, claims.IsSuperAdmin()) {
+		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
 
@@ -98,7 +249,7 @@ func (h *MachinesHandler) UpdateMachineNotes(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	_, err = h.db.Exec("UPDATE machines SET notes_md = $1, updated_at = NOW() WHERE id = $2", req.Notes, id)
+	_, err = h.db.Exec("UPDATE machines SET notes_md = $1, updated_at = NOW() WHERE id = $2", req.Notes, machineID)
 	if err != nil {
 		log.Printf("Failed to update machine notes: %v", err)
 		http.Error(w, "Failed to update machine", http.StatusInternalServerError)
@@ -109,21 +260,129 @@ func (h *MachinesHandler) UpdateMachineNotes(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(map[string]string{"message": "Notes updated"})
 }
 
-// DeleteMachine deletes a machine and its associated agent
-func (h *MachinesHandler) DeleteMachine(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id, err := uuid.Parse(vars["id"])
+// SetAccessToken sets a machine access token
+func (h *MachinesHandler) SetAccessToken(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
 		return
 	}
 
+	// Only owner can set token
+	if !h.isMachineOwner(userID, machineID) && !claims.IsSuperAdmin() {
+		http.Error(w, "Only owner can set access token", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		CurrentToken string `json:"current_token"`
+		NewToken     string `json:"new_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.NewToken == "" || len(req.NewToken) < 8 {
+		http.Error(w, "Token must be at least 8 characters", http.StatusBadRequest)
+		return
+	}
+
+	// Check current token if one is set
+	var machine models.Machine
+	err = h.db.Get(&machine, "SELECT * FROM machines WHERE id = $1", machineID)
+	if err != nil {
+		http.Error(w, "Machine not found", http.StatusNotFound)
+		return
+	}
+
+	if machine.AccessTokenSet && machine.AccessTokenHash != nil {
+		// Verify current token
+		if !auth.CheckPassword(req.CurrentToken, *machine.AccessTokenHash) {
+			http.Error(w, "Current token is incorrect", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	// Hash new token
+	newHash, err := auth.HashPassword(req.NewToken)
+	if err != nil {
+		http.Error(w, "Failed to set token", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = h.db.Exec(`
+		UPDATE machines SET access_token_hash = $1, access_token_set = true, updated_at = NOW()
+		WHERE id = $2
+	`, newHash, machineID)
+	if err != nil {
+		http.Error(w, "Failed to set token", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Access token set"})
+}
+
+// VerifyAccessToken verifies machine access token
+func (h *MachinesHandler) VerifyAccessToken(w http.ResponseWriter, r *http.Request) {
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var machine models.Machine
+	err = h.db.Get(&machine, "SELECT * FROM machines WHERE id = $1", machineID)
+	if err != nil {
+		http.Error(w, "Machine not found", http.StatusNotFound)
+		return
+	}
+
+	if !machine.AccessTokenSet || machine.AccessTokenHash == nil {
+		// No token required
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"valid": true})
+		return
+	}
+
+	valid := auth.CheckPassword(req.Token, *machine.AccessTokenHash)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"valid": valid})
+}
+
+// DeleteMachine deletes a machine and its associated agent
+func (h *MachinesHandler) DeleteMachine(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	// Only owner or superadmin can delete
+	if !h.isMachineOwner(userID, machineID) && !claims.IsSuperAdmin() {
+		http.Error(w, "Only owner can delete machine", http.StatusForbidden)
+		return
+	}
+
 	// Get the agent_id first
 	var agentID *uuid.UUID
-	h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1", id)
+	h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1", machineID)
 
-	// Delete the machine (agent will be cascade deleted)
-	_, err = h.db.Exec("DELETE FROM machines WHERE id = $1", id)
+	// Delete the machine
+	_, err = h.db.Exec("DELETE FROM machines WHERE id = $1", machineID)
 	if err != nil {
 		log.Printf("Failed to delete machine: %v", err)
 		http.Error(w, "Failed to delete machine", http.StatusInternalServerError)
@@ -138,12 +397,19 @@ func (h *MachinesHandler) DeleteMachine(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ============================================
+// Enrollment Tokens
+// ============================================
+
 type CreateEnrollmentTokenRequest struct {
 	Name string `json:"name"`
 }
 
 // CreateEnrollmentToken creates a new enrollment token
 func (h *MachinesHandler) CreateEnrollmentToken(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	var req CreateEnrollmentTokenRequest
 	json.NewDecoder(r.Body).Decode(&req)
 
@@ -166,10 +432,10 @@ func (h *MachinesHandler) CreateEnrollmentToken(w http.ResponseWriter, r *http.R
 
 	var enrollmentToken models.EnrollmentToken
 	err := h.db.Get(&enrollmentToken, `
-		INSERT INTO enrollment_tokens (name, token, expires_at)
-		VALUES ($1, $2, $3)
+		INSERT INTO enrollment_tokens (name, token, expires_at, owner_id)
+		VALUES ($1, $2, $3, $4)
 		RETURNING id, name, token, expires_at, created_at
-	`, name, token, expiresAt)
+	`, name, token, expiresAt, userID)
 	if err != nil {
 		log.Printf("Failed to create enrollment token: %v", err)
 		http.Error(w, "Failed to create enrollment token", http.StatusInternalServerError)
@@ -180,15 +446,30 @@ func (h *MachinesHandler) CreateEnrollmentToken(w http.ResponseWriter, r *http.R
 	json.NewEncoder(w).Encode(enrollmentToken)
 }
 
-// ListEnrollmentTokens returns all active enrollment tokens
+// ListEnrollmentTokens returns active enrollment tokens for the user
 func (h *MachinesHandler) ListEnrollmentTokens(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	var tokens []models.EnrollmentToken
-	err := h.db.Select(&tokens, `
-		SELECT id, name, expires_at, used_at, created_at
-		FROM enrollment_tokens
-		WHERE expires_at > NOW()
-		ORDER BY created_at DESC
-	`)
+	var err error
+
+	if claims.IsSuperAdmin() {
+		err = h.db.Select(&tokens, `
+			SELECT id, name, expires_at, used_at, created_at, owner_id
+			FROM enrollment_tokens
+			WHERE expires_at > NOW()
+			ORDER BY created_at DESC
+		`)
+	} else {
+		err = h.db.Select(&tokens, `
+			SELECT id, name, expires_at, used_at, created_at, owner_id
+			FROM enrollment_tokens
+			WHERE expires_at > NOW() AND owner_id = $1
+			ORDER BY created_at DESC
+		`, userID)
+	}
+
 	if err != nil {
 		log.Printf("Failed to list enrollment tokens: %v", err)
 		http.Error(w, "Failed to list enrollment tokens", http.StatusInternalServerError)
@@ -205,14 +486,28 @@ func (h *MachinesHandler) ListEnrollmentTokens(w http.ResponseWriter, r *http.Re
 
 // DeleteEnrollmentToken deletes an enrollment token
 func (h *MachinesHandler) DeleteEnrollmentToken(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id, err := uuid.Parse(vars["id"])
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+	tokenID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid token ID", http.StatusBadRequest)
 		return
 	}
 
-	_, err = h.db.Exec("DELETE FROM enrollment_tokens WHERE id = $1", id)
+	// Check ownership (superadmin can delete any)
+	var ownerID uuid.UUID
+	err = h.db.Get(&ownerID, "SELECT owner_id FROM enrollment_tokens WHERE id = $1", tokenID)
+	if err != nil {
+		http.Error(w, "Token not found", http.StatusNotFound)
+		return
+	}
+
+	if ownerID != userID && !claims.IsSuperAdmin() {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	_, err = h.db.Exec("DELETE FROM enrollment_tokens WHERE id = $1", tokenID)
 	if err != nil {
 		log.Printf("Failed to delete enrollment token: %v", err)
 		http.Error(w, "Failed to delete enrollment token", http.StatusInternalServerError)
@@ -222,8 +517,20 @@ func (h *MachinesHandler) DeleteEnrollmentToken(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ============================================
+// Machine Commands (SSH, UFW, Fail2ban, etc.)
+// ============================================
+
 // executeTemplate is a helper to create a job from a template
-func (h *MachinesHandler) executeTemplate(w http.ResponseWriter, machineID uuid.UUID, templateID string, vars map[string]string) {
+func (h *MachinesHandler) executeTemplate(w http.ResponseWriter, claims *auth.Claims, machineID uuid.UUID, templateID string, vars map[string]string) {
+	userID, _ := uuid.Parse(claims.UserID)
+
+	// Check machine access
+	if !h.canManageMachine(userID, machineID, claims.IsSuperAdmin()) {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
 	// Get command template
 	cmd := templates.GetCommand(templateID)
 	if cmd == nil {
@@ -260,8 +567,8 @@ func (h *MachinesHandler) executeTemplate(w http.ResponseWriter, machineID uuid.
 
 // ChangeSSHPort creates a job to change the SSH port
 func (h *MachinesHandler) ChangeSSHPort(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	machineID, err := uuid.Parse(vars["id"])
+	claims := r.Context().Value("claims").(*auth.Claims)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
 		return
@@ -280,15 +587,15 @@ func (h *MachinesHandler) ChangeSSHPort(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	h.executeTemplate(w, machineID, "change_ssh_port", map[string]string{
+	h.executeTemplate(w, claims, machineID, "change_ssh_port", map[string]string{
 		"port": fmt.Sprintf("%d", req.Port),
 	})
 }
 
 // ChangeRootPassword creates a job to change the root password
 func (h *MachinesHandler) ChangeRootPassword(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	machineID, err := uuid.Parse(vars["id"])
+	claims := r.Context().Value("claims").(*auth.Claims)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
 		return
@@ -310,15 +617,15 @@ func (h *MachinesHandler) ChangeRootPassword(w http.ResponseWriter, r *http.Requ
 	// Mark password as set
 	h.db.Exec("UPDATE machines SET root_password_set = true WHERE id = $1", machineID)
 
-	h.executeTemplate(w, machineID, "change_root_password", map[string]string{
+	h.executeTemplate(w, claims, machineID, "change_root_password", map[string]string{
 		"password": req.Password,
 	})
 }
 
 // ToggleUFW creates a job to enable/disable UFW
 func (h *MachinesHandler) ToggleUFW(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	machineID, err := uuid.Parse(vars["id"])
+	claims := r.Context().Value("claims").(*auth.Claims)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
 		return
@@ -332,15 +639,15 @@ func (h *MachinesHandler) ToggleUFW(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.executeTemplate(w, machineID, "toggle_ufw", map[string]string{
+	h.executeTemplate(w, claims, machineID, "toggle_ufw", map[string]string{
 		"enabled": fmt.Sprintf("%t", req.Enabled),
 	})
 }
 
 // ToggleFail2ban creates a job to enable/disable fail2ban
 func (h *MachinesHandler) ToggleFail2ban(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	machineID, err := uuid.Parse(vars["id"])
+	claims := r.Context().Value("claims").(*auth.Claims)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
 		return
@@ -364,7 +671,7 @@ func (h *MachinesHandler) ToggleFail2ban(w http.ResponseWriter, r *http.Request)
 	// Store config in machine
 	h.db.Exec("UPDATE machines SET fail2ban_config = $1 WHERE id = $2", config, machineID)
 
-	h.executeTemplate(w, machineID, "toggle_fail2ban", map[string]string{
+	h.executeTemplate(w, claims, machineID, "toggle_fail2ban", map[string]string{
 		"enabled": fmt.Sprintf("%t", req.Enabled),
 		"config":  config,
 	})
@@ -372,8 +679,8 @@ func (h *MachinesHandler) ToggleFail2ban(w http.ResponseWriter, r *http.Request)
 
 // AddUFWRule creates a job to add a UFW rule
 func (h *MachinesHandler) AddUFWRule(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	machineID, err := uuid.Parse(vars["id"])
+	claims := r.Context().Value("claims").(*auth.Claims)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
 		return
@@ -393,7 +700,7 @@ func (h *MachinesHandler) AddUFWRule(w http.ResponseWriter, r *http.Request) {
 		protocol = "tcp"
 	}
 
-	h.executeTemplate(w, machineID, "ufw_allow_port", map[string]string{
+	h.executeTemplate(w, claims, machineID, "ufw_allow_port", map[string]string{
 		"port":     req.Port,
 		"protocol": protocol,
 	})
@@ -401,8 +708,8 @@ func (h *MachinesHandler) AddUFWRule(w http.ResponseWriter, r *http.Request) {
 
 // RemoveUFWRule creates a job to remove a UFW rule
 func (h *MachinesHandler) RemoveUFWRule(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	machineID, err := uuid.Parse(vars["id"])
+	claims := r.Context().Value("claims").(*auth.Claims)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
 		return
@@ -422,18 +729,24 @@ func (h *MachinesHandler) RemoveUFWRule(w http.ResponseWriter, r *http.Request) 
 		protocol = "tcp"
 	}
 
-	h.executeTemplate(w, machineID, "ufw_delete_port", map[string]string{
+	h.executeTemplate(w, claims, machineID, "ufw_delete_port", map[string]string{
 		"port":     req.Port,
 		"protocol": protocol,
 	})
 }
 
-// GetMachineLogs creates a job to fetch logs and returns them
+// GetMachineLogs creates a job to fetch logs
 func (h *MachinesHandler) GetMachineLogs(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	machineID, err := uuid.Parse(vars["id"])
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	if !h.canAccessMachine(userID, machineID, claims.IsSuperAdmin()) {
+		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
 
@@ -470,7 +783,6 @@ func (h *MachinesHandler) GetMachineLogs(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Create a synchronous job to get logs
 	command := fmt.Sprintf("tail -n %s %s 2>/dev/null || echo 'Log file not found or empty'", lines, logPath)
 
 	payload, _ := json.Marshal(map[string]interface{}{
@@ -515,10 +827,16 @@ func (h *MachinesHandler) GetMachineLogs(w http.ResponseWriter, r *http.Request)
 
 // ExecTerminalCommand creates a job to execute a terminal command
 func (h *MachinesHandler) ExecTerminalCommand(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	machineID, err := uuid.Parse(vars["id"])
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	if !h.canManageMachine(userID, machineID, claims.IsSuperAdmin()) {
+		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
 
@@ -533,6 +851,15 @@ func (h *MachinesHandler) ExecTerminalCommand(w http.ResponseWriter, r *http.Req
 	if req.Command == "" {
 		http.Error(w, "Command is required", http.StatusBadRequest)
 		return
+	}
+
+	// Basic command sanitization - block dangerous patterns
+	dangerous := []string{"rm -rf /", "mkfs", "dd if=", ":(){:|:&};:"}
+	for _, d := range dangerous {
+		if strings.Contains(req.Command, d) {
+			http.Error(w, "Command blocked for safety", http.StatusForbidden)
+			return
+		}
 	}
 
 	// Get agent_id for this machine
@@ -563,7 +890,7 @@ func (h *MachinesHandler) ExecTerminalCommand(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Wait for job to complete (poll for up to 60 seconds)
+	// Wait for job to complete
 	for i := 0; i < 120; i++ {
 		time.Sleep(500 * time.Millisecond)
 		err = h.db.Get(&job, "SELECT * FROM jobs WHERE id = $1", job.ID)
@@ -591,3 +918,93 @@ func (h *MachinesHandler) ExecTerminalCommand(w http.ResponseWriter, r *http.Req
 	})
 }
 
+// ============================================
+// Permission Helper Functions
+// ============================================
+
+func (h *MachinesHandler) canAccessMachine(userID, machineID uuid.UUID, isSuperAdmin bool) bool {
+	if isSuperAdmin {
+		return true
+	}
+
+	var count int
+	h.db.Get(&count, `
+		SELECT COUNT(*) FROM machines m
+		WHERE m.id = $1 AND (
+			m.owner_id = $2
+			OR m.project_id IN (
+				SELECT id FROM projects WHERE owner_id = $2
+				UNION
+				SELECT project_id FROM project_members WHERE user_id = $2 AND status = 'approved'
+			)
+		)
+	`, machineID, userID)
+	return count > 0
+}
+
+func (h *MachinesHandler) canManageMachine(userID, machineID uuid.UUID, isSuperAdmin bool) bool {
+	if isSuperAdmin {
+		return true
+	}
+
+	// Owner can always manage
+	if h.isMachineOwner(userID, machineID) {
+		return true
+	}
+
+	// Project owner or manager can manage
+	var count int
+	h.db.Get(&count, `
+		SELECT COUNT(*) FROM machines m
+		WHERE m.id = $1 AND m.project_id IN (
+			SELECT id FROM projects WHERE owner_id = $2
+			UNION
+			SELECT project_id FROM project_members 
+			WHERE user_id = $2 AND status = 'approved' AND role = 'manager'
+		)
+	`, machineID, userID)
+	return count > 0
+}
+
+func (h *MachinesHandler) canEditMachineNotes(userID, machineID uuid.UUID, isSuperAdmin bool) bool {
+	// Manager permissions cover notes editing
+	if h.canManageMachine(userID, machineID, isSuperAdmin) {
+		return true
+	}
+
+	// Check if member with can_view_notes permission (which also implies edit for now)
+	var count int
+	h.db.Get(&count, `
+		SELECT COUNT(*) FROM machines m
+		JOIN project_members pm ON m.project_id = pm.project_id
+		WHERE m.id = $1 AND pm.user_id = $2 AND pm.status = 'approved' AND pm.can_view_notes = true
+	`, machineID, userID)
+	return count > 0
+}
+
+func (h *MachinesHandler) isMachineOwner(userID, machineID uuid.UUID) bool {
+	var ownerID uuid.UUID
+	err := h.db.Get(&ownerID, "SELECT owner_id FROM machines WHERE id = $1", machineID)
+	return err == nil && ownerID == userID
+}
+
+func (h *MachinesHandler) canLinkToProject(userID, projectID uuid.UUID, isSuperAdmin bool) bool {
+	if isSuperAdmin {
+		return true
+	}
+
+	// Project owner can link
+	var ownerID uuid.UUID
+	err := h.db.Get(&ownerID, "SELECT owner_id FROM projects WHERE id = $1", projectID)
+	if err == nil && ownerID == userID {
+		return true
+	}
+
+	// Manager can also link
+	var role string
+	err = h.db.Get(&role, `
+		SELECT role FROM project_members 
+		WHERE project_id = $1 AND user_id = $2 AND status = 'approved'
+	`, projectID, userID)
+	return err == nil && role == "manager"
+}

@@ -24,6 +24,7 @@ var jwtSecret = getJWTSecret()
 type Claims struct {
 	UserID string `json:"user_id"`
 	Email  string `json:"email"`
+	Role   string `json:"role"`
 	jwt.RegisteredClaims
 }
 
@@ -40,10 +41,15 @@ func CheckPassword(password, hash string) bool {
 	return err == nil
 }
 
-func GenerateToken(userID, email string) (string, error) {
+// GenerateToken creates a JWT token with user info and role
+func GenerateToken(userID, email, role string) (string, error) {
+	if role == "" {
+		role = "user"
+	}
 	claims := Claims{
 		UserID: userID,
 		Email:  email,
+		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -82,3 +88,12 @@ func HashToken(token string) (string, error) {
 	return HashPassword(token) // Reuse bcrypt for token hashing
 }
 
+// IsSuperAdmin checks if claims have superadmin role
+func (c *Claims) IsSuperAdmin() bool {
+	return c.Role == "superadmin"
+}
+
+// IsAdmin checks if claims have admin or superadmin role
+func (c *Claims) IsAdmin() bool {
+	return c.Role == "admin" || c.Role == "superadmin"
+}

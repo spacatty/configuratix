@@ -1,90 +1,328 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { ColumnDef } from "@tanstack/react-table";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, Machine, EnrollmentToken } from "@/lib/api";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DataTable } from "@/components/ui/data-table";
+import { api, Machine, EnrollmentToken, ProjectWithStats } from "@/lib/api";
+import { toast } from "sonner";
+import { 
+  Copy, 
+  Plus, 
+  Server, 
+  Activity, 
+  Trash2, 
+  ExternalLink,
+  Shield,
+  HardDrive,
+  Cpu,
+  MoreHorizontal,
+  FolderOpen
+} from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 export default function MachinesPage() {
+  const router = useRouter();
   const [machines, setMachines] = useState<Machine[]>([]);
+  const [projects, setProjects] = useState<ProjectWithStats[]>([]);
   const [tokens, setTokens] = useState<EnrollmentToken[]>([]);
-  const [newToken, setNewToken] = useState<EnrollmentToken | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [showTokenDialog, setShowTokenDialog] = useState(false);
+  const [showCreateTokenDialog, setShowCreateTokenDialog] = useState(false);
   const [tokenName, setTokenName] = useState("");
+  const [createdToken, setCreatedToken] = useState<EnrollmentToken | null>(null);
+  const [selectedProject, setSelectedProject] = useState<string>("all");
+
+  useEffect(() => {
+    loadData();
+  }, [selectedProject]);
 
   const loadData = async () => {
     try {
-      const [machinesData, tokensData] = await Promise.all([
-        api.listMachines(),
+      const [machinesData, tokensData, projectsData] = await Promise.all([
+        api.listMachines(undefined, selectedProject === "all" ? undefined : selectedProject),
         api.listEnrollmentTokens(),
+        api.listProjects(),
       ]);
       setMachines(machinesData);
       setTokens(tokensData);
+      setProjects(projectsData);
     } catch (err) {
       console.error("Failed to load data:", err);
+      toast.error("Failed to load machines");
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
   const handleCreateToken = async () => {
     try {
       const token = await api.createEnrollmentToken(tokenName || undefined);
-      setNewToken(token);
-      setShowCreateDialog(false);
-      setShowTokenDialog(true);
+      setCreatedToken(token);
       setTokenName("");
       loadData();
+      toast.success("Enrollment token created");
     } catch (err) {
       console.error("Failed to create token:", err);
+      toast.error("Failed to create token");
     }
   };
 
-  const handleDeleteMachine = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this machine?")) return;
+  const handleDeleteToken = async (id: string) => {
     try {
-      await api.deleteMachine(id);
+      await api.deleteEnrollmentToken(id);
       loadData();
+      toast.success("Token deleted");
     } catch (err) {
-      console.error("Failed to delete machine:", err);
+      console.error("Failed to delete token:", err);
+      toast.error("Failed to delete token");
     }
   };
 
-  const getInstallCommand = (token: string) => {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
-    return `curl -sSL ${backendUrl}/install.sh | sudo bash -s -- ${token}`;
-  };
-
-  const formatDate = (date: string | null) => {
-    if (!date) return "Never";
-    return new Date(date).toLocaleString();
+  const copyToClipboard = async (text: string) => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-999999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+      }
+      toast.success("Copied to clipboard");
+    } catch (err) {
+      toast.error("Failed to copy");
+    }
   };
 
   const getStatusBadge = (machine: Machine) => {
     if (!machine.last_seen) {
-      return <Badge variant="secondary">Never connected</Badge>;
+      return <Badge variant="secondary" className="text-xs">Never connected</Badge>;
     }
     const lastSeen = new Date(machine.last_seen);
     const now = new Date();
     const diffMinutes = (now.getTime() - lastSeen.getTime()) / 1000 / 60;
     
     if (diffMinutes < 5) {
-      return <Badge className="bg-green-500/20 text-green-400 border-green-500/30">Online</Badge>;
+      return <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">Online</Badge>;
     } else if (diffMinutes < 60) {
-      return <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">Idle</Badge>;
+      return <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 text-xs">Idle</Badge>;
     }
-    return <Badge variant="destructive">Offline</Badge>;
+    return <Badge variant="destructive" className="text-xs">Offline</Badge>;
   };
+
+  const formatBytes = (bytes: number) => {
+    if (!bytes || bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+  };
+
+  const columns: ColumnDef<Machine>[] = [
+    {
+      accessorKey: "title",
+      header: "Machine",
+      cell: ({ row }) => {
+        const machine = row.original;
+        const displayName = machine.title || machine.hostname || "Unknown";
+        return (
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
+              <Server className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <a 
+                href={`/machines/${machine.id}`}
+                className="font-medium hover:text-primary transition-colors cursor-pointer"
+              >
+                {displayName}
+              </a>
+              <div className="text-xs text-muted-foreground">
+                {machine.ip_address || "No IP"}
+              </div>
+            </div>
+          </div>
+        );
+      },
+      filterFn: (row, id, filterValue) => {
+        const machine = row.original;
+        const search = filterValue.toLowerCase();
+        return (
+          (machine.title?.toLowerCase().includes(search) || false) ||
+          (machine.hostname?.toLowerCase().includes(search) || false) ||
+          (machine.ip_address?.toLowerCase().includes(search) || false)
+        );
+      },
+    },
+    {
+      accessorKey: "status",
+      header: "Status",
+      cell: ({ row }) => getStatusBadge(row.original),
+    },
+    {
+      accessorKey: "project_name",
+      header: "Project",
+      cell: ({ row }) => {
+        const project = row.original.project_name;
+        return project ? (
+          <Badge variant="outline" className="text-xs">
+            <FolderOpen className="h-3 w-3 mr-1" />
+            {project}
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground text-xs">—</span>
+        );
+      },
+    },
+    {
+      accessorKey: "cpu_percent",
+      header: "CPU",
+      cell: ({ row }) => {
+        const cpu = row.original.cpu_percent || 0;
+        return (
+          <div className="flex items-center gap-2">
+            <Cpu className="h-4 w-4 text-muted-foreground" />
+            <div className="w-16 h-2 bg-muted rounded-full overflow-hidden">
+              <div 
+                className={`h-full ${cpu > 80 ? 'bg-red-500' : cpu > 50 ? 'bg-yellow-500' : 'bg-green-500'}`}
+                style={{ width: `${Math.min(cpu, 100)}%` }}
+              />
+            </div>
+            <span className="text-xs text-muted-foreground w-10">{cpu.toFixed(0)}%</span>
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: "memory_used",
+      header: "Memory",
+      cell: ({ row }) => {
+        const used = row.original.memory_used || 0;
+        const total = row.original.memory_total || 0;
+        const percent = total > 0 ? (used / total) * 100 : 0;
+        return (
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-muted-foreground" />
+            <div className="w-16 h-2 bg-muted rounded-full overflow-hidden">
+              <div 
+                className={`h-full ${percent > 80 ? 'bg-red-500' : percent > 50 ? 'bg-yellow-500' : 'bg-green-500'}`}
+                style={{ width: `${Math.min(percent, 100)}%` }}
+              />
+            </div>
+            <span className="text-xs text-muted-foreground w-20">{formatBytes(used)}</span>
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: "disk_used",
+      header: "Disk",
+      cell: ({ row }) => {
+        const used = row.original.disk_used || 0;
+        const total = row.original.disk_total || 0;
+        const percent = total > 0 ? (used / total) * 100 : 0;
+        return (
+          <div className="flex items-center gap-2">
+            <HardDrive className="h-4 w-4 text-muted-foreground" />
+            <div className="w-16 h-2 bg-muted rounded-full overflow-hidden">
+              <div 
+                className={`h-full ${percent > 80 ? 'bg-red-500' : percent > 50 ? 'bg-yellow-500' : 'bg-green-500'}`}
+                style={{ width: `${Math.min(percent, 100)}%` }}
+              />
+            </div>
+            <span className="text-xs text-muted-foreground w-20">{formatBytes(used)}</span>
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: "security",
+      header: "Security",
+      cell: ({ row }) => {
+        const machine = row.original;
+        return (
+          <div className="flex items-center gap-1">
+            {machine.ufw_enabled && (
+              <Badge variant="outline" className="text-xs bg-green-500/10 text-green-500 border-green-500/30">
+                <Shield className="h-3 w-3 mr-1" />
+                UFW
+              </Badge>
+            )}
+            {machine.fail2ban_enabled && (
+              <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-500 border-blue-500/30">
+                F2B
+              </Badge>
+            )}
+            {machine.access_token_set && (
+              <Badge variant="outline" className="text-xs bg-purple-500/10 text-purple-500 border-purple-500/30">
+                🔒
+              </Badge>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      id: "actions",
+      cell: ({ row }) => {
+        const machine = row.original;
+        return (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="h-8 w-8 p-0">
+                <span className="sr-only">Open menu</span>
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Actions</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => router.push(`/machines/${machine.id}`)}>
+                <ExternalLink className="mr-2 h-4 w-4" />
+                View Details
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => copyToClipboard(machine.ip_address || "")}>
+                <Copy className="mr-2 h-4 w-4" />
+                Copy IP
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem 
+                className="text-destructive"
+                onClick={async () => {
+                  if (confirm("Delete this machine?")) {
+                    await api.deleteMachine(machine.id);
+                    loadData();
+                    toast.success("Machine deleted");
+                  }
+                }}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        );
+      },
+    },
+  ];
 
   if (loading) {
     return (
@@ -94,43 +332,65 @@ export default function MachinesPage() {
     );
   }
 
+  const installCommand = createdToken 
+    ? `curl -sSL ${window.location.origin}/install.sh | sudo bash -s -- ${createdToken.token}`
+    : "";
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Machines</h1>
           <p className="text-muted-foreground mt-1">
-            Manage your proxy server agents
+            Manage your server fleet. {machines.length} machine(s) registered.
           </p>
         </div>
-        <Button onClick={() => setShowCreateDialog(true)} className="bg-primary hover:bg-primary/90 neon-glow">
-          Create Enrollment Token
-        </Button>
+        <div className="flex items-center gap-3">
+          <Select value={selectedProject} onValueChange={setSelectedProject}>
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder="Filter by project" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Projects</SelectItem>
+              {projects.map((project) => (
+                <SelectItem key={project.id} value={project.id}>
+                  {project.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button onClick={() => setShowCreateTokenDialog(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Machine
+          </Button>
+        </div>
       </div>
 
-      {/* Enrollment Tokens */}
-      {tokens.length > 0 && (
+      {/* Active Tokens */}
+      {tokens.filter(t => !t.used_at).length > 0 && (
         <Card className="border-border/50 bg-card/50">
           <CardHeader>
             <CardTitle className="text-lg">Active Enrollment Tokens</CardTitle>
-            <CardDescription>Tokens that can be used to enroll new agents</CardDescription>
+            <CardDescription>
+              Tokens waiting to be used for agent installation.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              {tokens.map((token) => (
+              {tokens.filter(t => !t.used_at).map((token) => (
                 <div key={token.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
                   <div>
-                    <p className="text-sm font-medium">{token.name || "Unnamed Token"}</p>
-                    <p className="text-xs text-muted-foreground">
-                      Expires: {formatDate(token.expires_at)}
-                    </p>
+                    <div className="font-medium text-sm">{token.name || "Unnamed Token"}</div>
+                    <div className="text-xs text-muted-foreground">
+                      Expires: {new Date(token.expires_at).toLocaleString()}
+                    </div>
                   </div>
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => api.deleteEnrollmentToken(token.id).then(loadData)}
+                    onClick={() => handleDeleteToken(token.id)}
                   >
-                    Revoke
+                    <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
               ))}
@@ -139,150 +399,94 @@ export default function MachinesPage() {
         </Card>
       )}
 
-      {/* Machines List */}
-      {machines.length === 0 ? (
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader>
-            <CardTitle>No machines enrolled</CardTitle>
-            <CardDescription>
-              Create an enrollment token and run the install command on your server to get started.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {machines.map((machine) => (
-            <Card key={machine.id} className="border-border/50 bg-card/50">
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle 
-                      className="text-lg cursor-pointer hover:text-primary transition-colors"
-                      onClick={() => window.location.href = `/machines/${machine.id}`}
-                    >
-                      {machine.hostname || "Unknown"}
-                    </CardTitle>
-                    <CardDescription>{machine.ip_address || "No IP"}</CardDescription>
-                  </div>
-                  {getStatusBadge(machine)}
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">OS:</span>
-                    <span>{machine.ubuntu_version || "Unknown"}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Agent:</span>
-                    <span>{machine.agent_version || "Unknown"}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Last seen:</span>
-                    <span>{formatDate(machine.last_seen)}</span>
-                  </div>
-                </div>
-                <div className="flex gap-2 mt-4">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    className="flex-1"
-                    onClick={() => window.location.href = `/machines/${machine.id}`}
-                  >
-                    View Details
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-destructive hover:text-destructive"
-                    onClick={() => handleDeleteMachine(machine.id)}
-                  >
-                    Delete
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+      {/* Machines Table */}
+      <Card className="border-border/50 bg-card/50">
+        <CardHeader>
+          <CardTitle className="text-lg">Server Fleet</CardTitle>
+          <CardDescription>
+            All registered machines with real-time status.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DataTable 
+            columns={columns} 
+            data={machines}
+            searchKey="title"
+            searchPlaceholder="Search machines by name, hostname, or IP..."
+          />
+        </CardContent>
+      </Card>
 
       {/* Create Token Dialog */}
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent>
+      <Dialog open={showCreateTokenDialog} onOpenChange={(open) => {
+        setShowCreateTokenDialog(open);
+        if (!open) setCreatedToken(null);
+      }}>
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Create Enrollment Token</DialogTitle>
+            <DialogTitle>
+              {createdToken ? "Installation Command" : "Create Enrollment Token"}
+            </DialogTitle>
             <DialogDescription>
-              Create a new token to enroll an agent. The token will expire in 24 hours.
+              {createdToken
+                ? "Run this command on your server to install the agent:"
+                : "Create a token to register a new machine with the agent."}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="token-name">Token Name</Label>
-              <Input
-                id="token-name"
-                placeholder="e.g., Production Server 1"
-                value={tokenName}
-                onChange={(e) => setTokenName(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                A friendly name to identify this token
-              </p>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleCreateToken}>
-              Create Token
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
-      {/* Token Created Dialog */}
-      <Dialog open={showTokenDialog} onOpenChange={setShowTokenDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Enrollment Token Created</DialogTitle>
-            <DialogDescription>
-              Use this command on your Ubuntu server to install the agent.
-              The token expires in 24 hours.
-            </DialogDescription>
-          </DialogHeader>
-          {newToken && (
+          {createdToken ? (
             <div className="space-y-4">
-              <div className="p-3 rounded-lg bg-muted font-mono text-sm break-all">
-                {getInstallCommand(newToken.token || "")}
+              <div className="relative">
+                <div className="bg-black text-green-400 p-4 rounded-lg font-mono text-sm overflow-x-auto">
+                  {installCommand}
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="absolute top-2 right-2"
+                  onClick={() => copyToClipboard(installCommand)}
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
               </div>
-              <Button
-                className="w-full"
-                onClick={async () => {
-                  const text = getInstallCommand(newToken.token || "");
-                  try {
-                    await navigator.clipboard.writeText(text);
-                    alert("Copied to clipboard!");
-                  } catch {
-                    // Fallback for HTTP sites (clipboard API requires HTTPS)
-                    const textarea = document.createElement("textarea");
-                    textarea.value = text;
-                    textarea.style.position = "fixed";
-                    textarea.style.opacity = "0";
-                    document.body.appendChild(textarea);
-                    textarea.select();
-                    document.execCommand("copy");
-                    document.body.removeChild(textarea);
-                    alert("Copied to clipboard!");
-                  }
-                }}
-              >
-                Copy to Clipboard
-              </Button>
-              <p className="text-xs text-muted-foreground text-center">
-                This token will only be shown once. Make sure to copy it now.
-              </p>
+              <div className="text-sm text-muted-foreground">
+                <p>This token will expire on {new Date(createdToken.expires_at).toLocaleString()}.</p>
+                <p className="mt-2">Requirements: Ubuntu 22.04 or 24.04, root access.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="token-name">Token Name (optional)</Label>
+                <Input
+                  id="token-name"
+                  placeholder="e.g., Production Server 1"
+                  value={tokenName}
+                  onChange={(e) => setTokenName(e.target.value)}
+                />
+              </div>
             </div>
           )}
+
+          <DialogFooter>
+            {createdToken ? (
+              <Button onClick={() => {
+                setShowCreateTokenDialog(false);
+                setCreatedToken(null);
+              }}>
+                Done
+              </Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setShowCreateTokenDialog(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={handleCreateToken}>
+                  Create Token
+                </Button>
+              </>
+            )}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
