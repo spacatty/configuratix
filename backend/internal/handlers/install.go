@@ -1022,15 +1022,86 @@ func deployLanding(cfg *Config, client *http.Client, landingID, targetPath, inde
 func applyDomain(domain, config string) (string, error) {
 	var logs strings.Builder
 	logs.WriteString(fmt.Sprintf("Applying config for %s...\n", domain))
+	
 	path := fmt.Sprintf("/etc/nginx/conf.d/configuratix/%s.conf", domain)
-	if err := os.WriteFile(path, []byte(config), 0644); err != nil { return logs.String(), err }
+	certPath := fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", domain)
+	
+	// Check if config references SSL
+	hasSSL := strings.Contains(config, "listen 443 ssl")
+	needsCert := hasSSL && !fileExists(certPath)
+	
+	if needsCert {
+		logs.WriteString("SSL enabled but certificate not found. Issuing certificate first...\n")
+		
+		// Create HTTP-only config first for ACME challenge
+		httpConfig := fmt.Sprintf(` + "`" + `server {
+    listen 80;
+    server_name %s;
+    
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+    
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+` + "`" + `, domain)
+		
+		if err := os.WriteFile(path, []byte(httpConfig), 0644); err != nil { 
+			return logs.String(), err 
+		}
+		
+		// Reload nginx for ACME challenge
+		out, err := runCmd("nginx", "-t")
+		logs.WriteString(out)
+		if err != nil { 
+			os.Remove(path)
+			return logs.String(), fmt.Errorf("nginx config test failed") 
+		}
+		out, _ = runCmd("systemctl", "reload", "nginx")
+		logs.WriteString(out)
+		
+		// Issue certificate with certbot
+		logs.WriteString("Running certbot...\n")
+		out, err = runCmd("certbot", "certonly", "--nginx", "-d", domain, "--non-interactive", "--agree-tos", "--register-unsafely-without-email")
+		logs.WriteString(out)
+		if err != nil {
+			// Try webroot method as fallback
+			logs.WriteString("Nginx plugin failed, trying webroot method...\n")
+			runCmd("mkdir", "-p", "/var/www/html/.well-known/acme-challenge")
+			out, err = runCmd("certbot", "certonly", "--webroot", "-w", "/var/www/html", "-d", domain, "--non-interactive", "--agree-tos", "--register-unsafely-without-email")
+			logs.WriteString(out)
+			if err != nil {
+				logs.WriteString("Certificate issuance failed. Keeping HTTP-only config.\n")
+				// Keep HTTP-only config, don't apply SSL config
+				return logs.String(), fmt.Errorf("certbot failed: %v", err)
+			}
+		}
+		logs.WriteString("Certificate issued successfully!\n")
+	}
+	
+	// Now write the full config (with SSL if certs exist)
+	if err := os.WriteFile(path, []byte(config), 0644); err != nil { 
+		return logs.String(), err 
+	}
+	
 	out, err := runCmd("nginx", "-t")
 	logs.WriteString(out)
-	if err != nil { os.Remove(path); return logs.String(), fmt.Errorf("nginx config test failed") }
+	if err != nil { 
+		os.Remove(path)
+		return logs.String(), fmt.Errorf("nginx config test failed") 
+	}
+	
 	out, err = runCmd("systemctl", "reload", "nginx")
 	logs.WriteString(out)
 	logs.WriteString(fmt.Sprintf("Config applied for %s\n", domain))
 	return logs.String(), err
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func removeDomain(domain string) (string, error) {
