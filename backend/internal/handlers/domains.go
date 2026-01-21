@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
@@ -96,11 +97,19 @@ func NewDomainsHandler(db *database.DB) *DomainsHandler {
 }
 
 type DomainWithConfig struct {
-	models.Domain
-	MachineName   *string    `db:"machine_name" json:"machine_name"`
-	MachineIP     *string    `db:"machine_ip" json:"machine_ip"`
-	ConfigID      *uuid.UUID `db:"config_id" json:"config_id"`
-	ConfigName    *string    `db:"config_name" json:"config_name"`
+	ID                uuid.UUID  `db:"id" json:"id"`
+	FQDN              string     `db:"fqdn" json:"fqdn"`
+	OwnerID           *uuid.UUID `db:"owner_id" json:"owner_id"`
+	AssignedMachineID *uuid.UUID `db:"assigned_machine_id" json:"assigned_machine_id"`
+	Status            string     `db:"status" json:"status"`
+	NotesMD           *string    `db:"notes_md" json:"notes_md"`
+	LastCheckAt       *time.Time `db:"last_check_at" json:"last_check_at"`
+	CreatedAt         time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt         time.Time  `db:"updated_at" json:"updated_at"`
+	MachineName       *string    `db:"machine_name" json:"machine_name"`
+	MachineIP         *string    `db:"machine_ip" json:"machine_ip"`
+	ConfigID          *uuid.UUID `db:"config_id" json:"config_id"`
+	ConfigName        *string    `db:"config_name" json:"config_name"`
 }
 
 // ListDomains returns all domains with their machine and config info
