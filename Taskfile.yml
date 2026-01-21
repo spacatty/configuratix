@@ -1,0 +1,122 @@
+version: '3'
+
+# Task automatically loads .env file if present
+dotenv: ['.env']
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  dev:
+    desc: Start development environment (backend + frontend)
+    cmds:
+      - task: db:check
+      - task: dev:run
+
+  dev:run:
+    desc: Run backend and frontend in parallel
+    deps: [dev:backend, dev:frontend]
+
+  dev:backend:
+    desc: Start backend in development mode
+    dir: backend
+    cmds:
+      - echo "Starting backend on port $BACKEND_PORT..."
+      - go run cmd/server/main.go
+
+  dev:frontend:
+    desc: Start frontend in development mode
+    dir: frontend
+    cmds:
+      - echo "Starting frontend on port 3000..."
+      - pnpm dev
+
+  db:check:
+    desc: Check database connection
+    dir: backend
+    cmds:
+      - go run cmd/dbcheck/main.go
+
+  prod:backend:
+    desc: Build and run backend in production mode
+    dir: backend
+    cmds:
+      - echo "Building backend..."
+      - go build -o bin/server.exe cmd/server/main.go
+      - echo "Starting backend on port $BACKEND_PORT..."
+      - bin/server.exe
+
+  prod:frontend:
+    desc: Build and run frontend in production mode
+    dir: frontend
+    cmds:
+      - echo "Building frontend..."
+      - pnpm build
+      - echo "Starting frontend in production mode..."
+      - pnpm start
+
+  prod:
+    desc: Start production environment (backend + frontend)
+    cmds:
+      - task: db:check
+      - task: prod:backend
+      - task: prod:frontend
+
+  build:
+    desc: Build both backend and frontend
+    cmds:
+      - task: build:backend
+      - task: build:frontend
+
+  build:backend:
+    desc: Build backend binary
+    dir: backend
+    cmds:
+      - echo "Building backend..."
+      - go build -o bin/server.exe cmd/server/main.go
+      - echo Backend built successfully at backend/bin/server.exe
+
+  build:frontend:
+    desc: Build frontend for production
+    dir: frontend
+    cmds:
+      - echo "Building frontend..."
+      - pnpm build
+      - echo "Frontend built successfully"
+
+  db:migrate:
+    desc: Run database migrations
+    dir: backend
+    cmds:
+      - task: db:check
+      - echo "Running migrations..."
+      - go run cmd/server/main.go
+
+  setup:
+    desc: Initial setup - install dependencies
+    cmds:
+      - task: setup:backend
+      - task: setup:frontend
+
+  setup:backend:
+    desc: Install backend dependencies
+    dir: backend
+    cmds:
+      - echo "Installing backend dependencies..."
+      - go mod download
+      - go mod tidy
+
+  setup:frontend:
+    desc: Install frontend dependencies
+    dir: frontend
+    cmds:
+      - echo "Installing frontend dependencies..."
+      - pnpm install
+
+  clean:
+    desc: Clean build artifacts (Windows PowerShell)
+    cmds:
+      - powershell -Command "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue backend\bin, frontend\.next, frontend\dist"
+      - echo Clean complete

@@ -1,0 +1,288 @@
+package handlers
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"log"
+	"net/http"
+	"time"
+
+	"configuratix/backend/internal/auth"
+	"configuratix/backend/internal/database"
+	"configuratix/backend/internal/models"
+
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+)
+
+type AgentHandler struct {
+	db *database.DB
+}
+
+func NewAgentHandler(db *database.DB) *AgentHandler {
+	return &AgentHandler{db: db}
+}
+
+type EnrollRequest struct {
+	Token    string `json:"token"`
+	Hostname string `json:"hostname"`
+	IP       string `json:"ip"`
+	OS       string `json:"os"`
+}
+
+type EnrollResponse struct {
+	AgentID  uuid.UUID `json:"agent_id"`
+	APIKey   string    `json:"api_key"`
+}
+
+// Enroll handles agent enrollment
+func (h *AgentHandler) Enroll(w http.ResponseWriter, r *http.Request) {
+	var req EnrollRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Token == "" {
+		http.Error(w, "Token is required", http.StatusBadRequest)
+		return
+	}
+
+	// Find and validate enrollment token
+	var enrollmentToken models.EnrollmentToken
+	err := h.db.Get(&enrollmentToken, `
+		SELECT * FROM enrollment_tokens 
+		WHERE token = $1 AND expires_at > NOW() AND used_at IS NULL
+	`, req.Token)
+	if err != nil {
+		http.Error(w, "Invalid or expired enrollment token", http.StatusUnauthorized)
+		return
+	}
+
+	// Generate API key for the agent
+	apiKeyBytes := make([]byte, 32)
+	if _, err := rand.Read(apiKeyBytes); err != nil {
+		log.Printf("Failed to generate API key: %v", err)
+		http.Error(w, "Failed to enroll agent", http.StatusInternalServerError)
+		return
+	}
+	apiKey := base64.URLEncoding.EncodeToString(apiKeyBytes)
+
+	// Hash the API key for storage
+	apiKeyHash, err := auth.HashPassword(apiKey)
+	if err != nil {
+		log.Printf("Failed to hash API key: %v", err)
+		http.Error(w, "Failed to enroll agent", http.StatusInternalServerError)
+		return
+	}
+
+	// Hash the token for storage
+	tokenHash, err := auth.HashPassword(req.Token)
+	if err != nil {
+		log.Printf("Failed to hash token: %v", err)
+		http.Error(w, "Failed to enroll agent", http.StatusInternalServerError)
+		return
+	}
+
+	// Start transaction
+	tx, err := h.db.Beginx()
+	if err != nil {
+		log.Printf("Failed to start transaction: %v", err)
+		http.Error(w, "Failed to enroll agent", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	// Create agent
+	var agent models.Agent
+	err = tx.Get(&agent, `
+		INSERT INTO agents (name, token_hash, api_key_hash, last_seen)
+		VALUES ($1, $2, $3, NOW())
+		RETURNING *
+	`, req.Hostname, tokenHash, apiKeyHash)
+	if err != nil {
+		log.Printf("Failed to create agent: %v", err)
+		http.Error(w, "Failed to enroll agent", http.StatusInternalServerError)
+		return
+	}
+
+	// Create machine
+	_, err = tx.Exec(`
+		INSERT INTO machines (agent_id, hostname, ip_address, ubuntu_version)
+		VALUES ($1, $2, $3, $4)
+	`, agent.ID, req.Hostname, req.IP, req.OS)
+	if err != nil {
+		log.Printf("Failed to create machine: %v", err)
+		http.Error(w, "Failed to enroll agent", http.StatusInternalServerError)
+		return
+	}
+
+	// Mark enrollment token as used
+	_, err = tx.Exec("UPDATE enrollment_tokens SET used_at = NOW() WHERE id = $1", enrollmentToken.ID)
+	if err != nil {
+		log.Printf("Failed to mark token as used: %v", err)
+		http.Error(w, "Failed to enroll agent", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("Failed to commit transaction: %v", err)
+		http.Error(w, "Failed to enroll agent", http.StatusInternalServerError)
+		return
+	}
+
+	response := EnrollResponse{
+		AgentID: agent.ID,
+		APIKey:  apiKey,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(response)
+}
+
+// Heartbeat handles agent heartbeat
+func (h *AgentHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
+	agentID, ok := r.Context().Value("agent_id").(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		Version string `json:"version"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	_, err := h.db.Exec(`
+		UPDATE agents SET last_seen = NOW(), version = COALESCE($1, version)
+		WHERE id = $2
+	`, req.Version, agentID)
+	if err != nil {
+		log.Printf("Failed to update heartbeat: %v", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// GetJobs returns pending jobs for an agent
+func (h *AgentHandler) GetJobs(w http.ResponseWriter, r *http.Request) {
+	agentID, ok := r.Context().Value("agent_id").(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var jobs []models.Job
+	err := h.db.Select(&jobs, `
+		SELECT * FROM jobs 
+		WHERE agent_id = $1 AND status = 'pending'
+		ORDER BY created_at ASC
+		LIMIT 10
+	`, agentID)
+	if err != nil {
+		log.Printf("Failed to get jobs: %v", err)
+		http.Error(w, "Failed to get jobs", http.StatusInternalServerError)
+		return
+	}
+
+	if jobs == nil {
+		jobs = []models.Job{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(jobs)
+}
+
+// UpdateJob updates job status
+func (h *AgentHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
+	agentID, ok := r.Context().Value("agent_id").(uuid.UUID)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		JobID  uuid.UUID `json:"job_id"`
+		Status string    `json:"status"`
+		Logs   string    `json:"logs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var finishedAt *time.Time
+	if req.Status == "completed" || req.Status == "failed" {
+		now := time.Now()
+		finishedAt = &now
+	}
+
+	var startedAt *time.Time
+	if req.Status == "running" {
+		now := time.Now()
+		startedAt = &now
+	}
+
+	_, err := h.db.Exec(`
+		UPDATE jobs 
+		SET status = $1, logs = COALESCE(logs || E'\n' || $2, $2), 
+			started_at = COALESCE(started_at, $3),
+			finished_at = $4,
+			updated_at = NOW()
+		WHERE id = $5 AND agent_id = $6
+	`, req.Status, req.Logs, startedAt, finishedAt, req.JobID, agentID)
+	if err != nil {
+		log.Printf("Failed to update job: %v", err)
+		http.Error(w, "Failed to update job", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// AgentAuthMiddleware validates agent API key
+func AgentAuthMiddleware(db *database.DB) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			apiKey := r.Header.Get("X-API-Key")
+			if apiKey == "" {
+				http.Error(w, "Missing API key", http.StatusUnauthorized)
+				return
+			}
+
+			// Find agent by checking API key hash
+			var agents []models.Agent
+			err := db.Select(&agents, "SELECT * FROM agents WHERE api_key_hash IS NOT NULL")
+			if err != nil {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			var matchedAgent *models.Agent
+			for _, agent := range agents {
+				if agent.APIKeyHash != nil {
+					if err := bcrypt.CompareHashAndPassword([]byte(*agent.APIKeyHash), []byte(apiKey)); err == nil {
+						matchedAgent = &agent
+						break
+					}
+				}
+			}
+
+			if matchedAgent == nil {
+				http.Error(w, "Invalid API key", http.StatusUnauthorized)
+				return
+			}
+
+			// Add agent ID to context
+			ctx := r.Context()
+			ctx = context.WithValue(ctx, "agent_id", matchedAgent.ID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
