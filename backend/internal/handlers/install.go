@@ -834,7 +834,7 @@ func bootstrap() (string, error) {
 	nginxConf, _ := os.ReadFile("/etc/nginx/nginx.conf")
 	if !strings.Contains(string(nginxConf), "conf.d/configuratix") {
 		logs.WriteString("Adding configuratix include to nginx.conf...\n")
-		runCmd("sed", "-i", `/include \/etc\/nginx\/conf.d\/\*.conf;/a\        include /etc/nginx/conf.d/configuratix/*.conf;`, "/etc/nginx/nginx.conf")
+		runCmd("sed", "-i", "/include \\/etc\\/nginx\\/conf.d\\/\\*.conf;/a\\        include /etc/nginx/conf.d/configuratix/*.conf;", "/etc/nginx/nginx.conf")
 	}
 	
 	runCmd("systemctl", "enable", "nginx")
