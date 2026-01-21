@@ -312,6 +312,18 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
     }
   };
 
+  const handleRemoveUFWRule = async (port: string, protocol: string) => {
+    if (!machine) return;
+    if (!confirm(`Are you sure you want to remove the rule for port ${port}/${protocol}?`)) return;
+    try {
+      await api.removeUFWRule(machine.id, port, protocol);
+      toast.success("UFW rule removal job created");
+    } catch (err) {
+      console.error("Failed to remove UFW rule:", err);
+      toast.error("Failed to remove UFW rule");
+    }
+  };
+
   const handleSaveFail2banConfig = async () => {
     if (!machine) return;
     try {
@@ -503,7 +515,7 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
                   </div>
                   <div>
                     <p className="text-muted-foreground">IP Address</p>
-                    <p className="font-medium">{machine.ip_address || "Unknown"}</p>
+                    <p className="font-medium font-mono">{machine.ip_address || "Unknown"}</p>
                   </div>
                   <div>
                     <p className="text-muted-foreground">OS Version</p>
@@ -511,20 +523,15 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
                   </div>
                   <div>
                     <p className="text-muted-foreground">Agent Version</p>
-                    <p className="font-medium">{machine.agent_version || "Unknown"}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">SSH Port</p>
-                    <div className="flex items-center gap-2">
-                      <p className="font-medium font-mono">{machine.ssh_port || 22}</p>
-                      <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setShowSSHPortDialog(true)}>
-                        Change
-                      </Button>
-                    </div>
+                    <p className="font-medium font-mono">{machine.agent_version || "Unknown"}</p>
                   </div>
                   <div>
                     <p className="text-muted-foreground">Last Seen</p>
                     <p className="font-medium">{formatDate(machine.last_seen)}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Owner</p>
+                    <p className="font-medium">{machine.owner_name || machine.owner_email || "Unassigned"}</p>
                   </div>
                 </div>
               </CardContent>
@@ -533,18 +540,18 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
             {/* System Stats */}
             <Card className="border-border/50 bg-card/50">
               <CardHeader>
-                <CardTitle>System Stats</CardTitle>
-                <CardDescription>Real-time resource utilization</CardDescription>
+                <CardTitle>System Resources</CardTitle>
+                <CardDescription>Real-time hardware utilization</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
                   <div className="flex justify-between text-sm mb-1">
-                    <span className="text-muted-foreground">CPU</span>
-                    <span>{machine.cpu_percent?.toFixed(1) || 0}%</span>
+                    <span className="text-muted-foreground">CPU Usage</span>
+                    <span className="font-mono">{machine.cpu_percent?.toFixed(1) || 0}%</span>
                   </div>
-                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                  <div className="h-2.5 bg-muted rounded-full overflow-hidden">
                     <div 
-                      className="h-full bg-primary transition-all duration-500" 
+                      className={`h-full transition-all duration-500 ${(machine.cpu_percent || 0) > 80 ? 'bg-red-500' : (machine.cpu_percent || 0) > 50 ? 'bg-yellow-500' : 'bg-green-500'}`}
                       style={{ width: `${machine.cpu_percent || 0}%` }}
                     />
                   </div>
@@ -552,11 +559,11 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
                 <div>
                   <div className="flex justify-between text-sm mb-1">
                     <span className="text-muted-foreground">Memory</span>
-                    <span>{formatBytes(machine.memory_used || 0)} / {formatBytes(machine.memory_total || 0)}</span>
+                    <span className="font-mono">{formatBytes(machine.memory_used || 0)} / {formatBytes(machine.memory_total || 0)}</span>
                   </div>
-                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                  <div className="h-2.5 bg-muted rounded-full overflow-hidden">
                     <div 
-                      className="h-full bg-primary transition-all duration-500" 
+                      className={`h-full transition-all duration-500 ${machine.memory_total > 0 && (machine.memory_used / machine.memory_total) > 0.8 ? 'bg-red-500' : machine.memory_total > 0 && (machine.memory_used / machine.memory_total) > 0.5 ? 'bg-yellow-500' : 'bg-green-500'}`}
                       style={{ width: machine.memory_total > 0 ? `${(machine.memory_used / machine.memory_total) * 100}%` : "0%" }}
                     />
                   </div>
@@ -564,14 +571,59 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
                 <div>
                   <div className="flex justify-between text-sm mb-1">
                     <span className="text-muted-foreground">Disk</span>
-                    <span>{formatBytes(machine.disk_used || 0)} / {formatBytes(machine.disk_total || 0)}</span>
+                    <span className="font-mono">{formatBytes(machine.disk_used || 0)} / {formatBytes(machine.disk_total || 0)}</span>
                   </div>
-                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                  <div className="h-2.5 bg-muted rounded-full overflow-hidden">
                     <div 
-                      className="h-full bg-primary transition-all duration-500" 
+                      className={`h-full transition-all duration-500 ${machine.disk_total > 0 && (machine.disk_used / machine.disk_total) > 0.9 ? 'bg-red-500' : machine.disk_total > 0 && (machine.disk_used / machine.disk_total) > 0.7 ? 'bg-yellow-500' : 'bg-green-500'}`}
                       style={{ width: machine.disk_total > 0 ? `${(machine.disk_used / machine.disk_total) * 100}%` : "0%" }}
                     />
                   </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Quick Status Cards */}
+          <div className="grid gap-4 md:grid-cols-4">
+            <Card className="border-border/50 bg-card/50">
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-3">
+                  <div className={`h-3 w-3 rounded-full ${machine.last_seen && new Date(machine.last_seen).getTime() > Date.now() - 60000 ? 'bg-green-500' : 'bg-red-500'}`} />
+                  <div>
+                    <p className="text-xs text-muted-foreground">Status</p>
+                    <p className="font-medium text-sm">{machine.last_seen && new Date(machine.last_seen).getTime() > Date.now() - 60000 ? 'Online' : 'Offline'}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="border-border/50 bg-card/50">
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-3">
+                  <div className={`h-3 w-3 rounded-full ${ufwEnabled ? 'bg-green-500' : 'bg-yellow-500'}`} />
+                  <div>
+                    <p className="text-xs text-muted-foreground">Firewall</p>
+                    <p className="font-medium text-sm">{ufwEnabled ? 'Active' : 'Inactive'}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="border-border/50 bg-card/50">
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-3">
+                  <div className={`h-3 w-3 rounded-full ${fail2banEnabled ? 'bg-green-500' : 'bg-yellow-500'}`} />
+                  <div>
+                    <p className="text-xs text-muted-foreground">Fail2ban</p>
+                    <p className="font-medium text-sm">{fail2banEnabled ? 'Active' : 'Inactive'}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="border-border/50 bg-card/50">
+              <CardContent className="pt-4">
+                <div>
+                  <p className="text-xs text-muted-foreground">SSH Port</p>
+                  <p className="font-medium text-sm font-mono">{machine.ssh_port || 22}</p>
                 </div>
               </CardContent>
             </Card>
@@ -584,10 +636,23 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
             {/* Security Settings */}
             <Card className="border-border/50 bg-card/50">
               <CardHeader>
-                <CardTitle>Security</CardTitle>
-                <CardDescription>SSH, firewall, and intrusion prevention</CardDescription>
+                <CardTitle>Authentication</CardTitle>
+                <CardDescription>SSH access and password management</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                {/* SSH Port */}
+                <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                  <div>
+                    <p className="font-medium text-sm">SSH Port</p>
+                    <p className="text-xs text-muted-foreground">
+                      Currently: <span className="font-mono">{machine.ssh_port || 22}</span>
+                    </p>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => setShowSSHPortDialog(true)}>
+                    Change
+                  </Button>
+                </div>
+
                 {/* Root Password */}
                 <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
                   <div>
@@ -628,12 +693,12 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
               <CardHeader className="flex flex-row items-center justify-between">
                 <div>
                   <CardTitle>Firewall (UFW)</CardTitle>
-                  <CardDescription>Manage allowed ports</CardDescription>
+                  <CardDescription>Manage port access rules</CardDescription>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-muted-foreground">
-                      {ufwEnabled ? "Enabled" : "Disabled"}
+                      {ufwEnabled ? "Active" : "Inactive"}
                     </span>
                     <Switch 
                       checked={ufwEnabled} 
@@ -642,39 +707,67 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
                     />
                   </div>
                   <Button size="sm" onClick={() => setShowAddPortDialog(true)} disabled={!ufwEnabled}>
-                    Add Port
+                    Add Rule
                   </Button>
                 </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
+                  {/* SSH Port Rule */}
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50 group">
                     <div className="flex items-center gap-3">
-                      <Badge variant="outline">TCP</Badge>
-                      <span className="font-mono">{machine.ssh_port || 22}</span>
+                      <Badge variant="outline" className="w-12 justify-center">TCP</Badge>
+                      <span className="font-mono font-medium">{machine.ssh_port || 22}</span>
                       <span className="text-xs text-muted-foreground">(SSH)</span>
                     </div>
-                    <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
+                      <span className="text-xs text-muted-foreground">Protected</span>
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
+                  
+                  {/* HTTP */}
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50 group">
                     <div className="flex items-center gap-3">
-                      <Badge variant="outline">TCP</Badge>
-                      <span className="font-mono">80</span>
+                      <Badge variant="outline" className="w-12 justify-center">TCP</Badge>
+                      <span className="font-mono font-medium">80</span>
                       <span className="text-xs text-muted-foreground">(HTTP)</span>
                     </div>
-                    <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
+                      <Button 
+                        size="sm" 
+                        variant="ghost" 
+                        className="h-6 px-2 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
+                        onClick={() => handleRemoveUFWRule("80", "tcp")}
+                      >
+                        Delete
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
+                  
+                  {/* HTTPS */}
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50 group">
                     <div className="flex items-center gap-3">
-                      <Badge variant="outline">TCP</Badge>
-                      <span className="font-mono">443</span>
+                      <Badge variant="outline" className="w-12 justify-center">TCP</Badge>
+                      <span className="font-mono font-medium">443</span>
                       <span className="text-xs text-muted-foreground">(HTTPS)</span>
                     </div>
-                    <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
+                      <Button 
+                        size="sm" 
+                        variant="ghost" 
+                        className="h-6 px-2 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
+                        onClick={() => handleRemoveUFWRule("443", "tcp")}
+                      >
+                        Delete
+                      </Button>
+                    </div>
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground text-center mt-4">
-                  Default ports shown. Custom rules are managed via agent jobs.
+                  Hover over rules to see actions. SSH port is protected from deletion.
                 </p>
               </CardContent>
             </Card>
