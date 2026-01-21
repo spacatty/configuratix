@@ -141,10 +141,9 @@ export default function ProjectsPage() {
     try {
       const updated = await api.toggleProjectSharing(project.id, !project.sharing_enabled);
       if (updated.sharing_enabled && updated.invite_token) {
-        const inviteUrl = `${window.location.origin}/join?token=${updated.invite_token}`;
-        const copied = await copyToClipboard(inviteUrl);
+        const copied = await copyToClipboard(updated.invite_token);
         if (copied) {
-          toast.success("Sharing enabled! Invite link copied to clipboard.");
+          toast.success("Sharing enabled! Invite token copied to clipboard.");
         } else {
           toast.success("Sharing enabled! Token: " + updated.invite_token);
         }
@@ -158,11 +157,10 @@ export default function ProjectsPage() {
     }
   };
 
-  const copyInviteLink = async (token: string) => {
-    const inviteUrl = `${window.location.origin}/join?token=${token}`;
-    const copied = await copyToClipboard(inviteUrl);
+  const copyInviteToken = async (token: string) => {
+    const copied = await copyToClipboard(token);
     if (copied) {
-      toast.success("Invite link copied");
+      toast.success("Invite token copied");
     } else {
       toast.error("Failed to copy. Token: " + token);
     }
@@ -263,9 +261,9 @@ export default function ProjectsPage() {
                 View Details
               </DropdownMenuItem>
               {project.sharing_enabled && project.invite_token && (
-                <DropdownMenuItem onClick={() => copyInviteLink(project.invite_token!)}>
+                <DropdownMenuItem onClick={() => copyInviteToken(project.invite_token!)}>
                   <Copy className="mr-2 h-4 w-4" />
-                  Copy Invite Link
+                  Copy Invite Token
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem onClick={() => toggleSharing(project)}>

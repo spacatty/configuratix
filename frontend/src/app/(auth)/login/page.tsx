@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,30 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [requires2FA, setRequires2FA] = useState(false);
+
+  // Check if already authenticated
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = localStorage.getItem("auth_token");
+      if (token) {
+        try {
+          await api.getMe();
+          // Already authenticated, check for pending invite
+          const pendingToken = localStorage.getItem("pending_invite_token");
+          if (pendingToken) {
+            localStorage.removeItem("pending_invite_token");
+            router.push(`/join?token=${pendingToken}`);
+          } else {
+            router.push("/machines");
+          }
+        } catch {
+          // Token invalid
+          localStorage.removeItem("auth_token");
+        }
+      }
+    };
+    checkAuth();
+  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,7 +60,14 @@ export default function LoginPage() {
         return;
       }
       
-      router.push("/dashboard");
+      // Check for pending invite token
+      const pendingToken = localStorage.getItem("pending_invite_token");
+      if (pendingToken) {
+        localStorage.removeItem("pending_invite_token");
+        router.push(`/join?token=${pendingToken}`);
+      } else {
+        router.push("/machines");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {

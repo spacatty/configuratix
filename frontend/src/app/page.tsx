@@ -13,6 +13,19 @@ export default function Home() {
   useEffect(() => {
     const checkStatus = async () => {
       try {
+        // Check if already authenticated
+        const token = localStorage.getItem("auth_token");
+        if (token) {
+          try {
+            await api.getMe();
+            router.push("/machines");
+            return;
+          } catch {
+            // Token invalid, continue to login flow
+            localStorage.removeItem("auth_token");
+          }
+        }
+
         const status = await api.checkSetup();
         if (status.needs_setup) {
           router.push("/setup");
