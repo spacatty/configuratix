@@ -15,23 +15,24 @@ type Step struct {
 	Mode    string `json:"mode,omitempty"`    // file permissions
 	Op      string `json:"op,omitempty"`      // write, append, delete, backup / service action
 	Name    string `json:"name,omitempty"`    // service name
+	Log     string `json:"log,omitempty"`     // "out" = log command output (default), or custom command to execute and log
 }
 
 // CommandTemplate defines a reusable command
 type CommandTemplate struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Category    string            `json:"category"`
-	Variables   []VariableDef     `json:"variables"`
-	Steps       []Step            `json:"steps"`
-	OnError     string            `json:"on_error"` // stop, continue, rollback
+	ID          string        `json:"id"`
+	Name        string        `json:"name"`
+	Description string        `json:"description"`
+	Category    string        `json:"category"`
+	Variables   []VariableDef `json:"variables"`
+	Steps       []Step        `json:"steps"`
+	OnError     string        `json:"on_error"` // stop, continue, rollback
 }
 
 // VariableDef describes a template variable
 type VariableDef struct {
 	Name        string `json:"name"`
-	Type        string `json:"type"`        // string, int, bool, text
+	Type        string `json:"type"` // string, int, bool, text
 	Required    bool   `json:"required"`
 	Default     string `json:"default,omitempty"`
 	Description string `json:"description"`
@@ -68,11 +69,11 @@ var Commands = map[string]*CommandTemplate{
 		OnError: "rollback",
 		Steps: []Step{
 			{Action: "file", Op: "backup", Path: "/etc/ssh/sshd_config"},
-			{Action: "exec", Command: `sed -i 's/^#\?Port.*/Port {{port}}/' /etc/ssh/sshd_config || echo "Port {{port}}" >> /etc/ssh/sshd_config`, Timeout: 30},
-			{Action: "exec", Command: "ufw allow {{port}}/tcp", Timeout: 30},
+			{Action: "exec", Command: `sed -i 's/^#\?Port.*/Port {{port}}/' /etc/ssh/sshd_config || echo "Port {{port}}" >> /etc/ssh/sshd_config`, Timeout: 30, Log: "grep '^Port' /etc/ssh/sshd_config"},
+			{Action: "exec", Command: "ufw allow {{port}}/tcp", Timeout: 30, Log: "ufw status | grep {{port}}"},
 			{Action: "exec", Command: "ufw delete allow 22/tcp 2>/dev/null || true", Timeout: 30},
 			{Action: "exec", Command: "systemctl daemon-reload", Timeout: 30},
-			{Action: "exec", Command: "systemctl restart sshd 2>/dev/null || systemctl restart ssh", Timeout: 60},
+			{Action: "exec", Command: "systemctl restart sshd 2>/dev/null || systemctl restart ssh", Timeout: 60, Log: "systemctl is-active sshd || systemctl is-active ssh"},
 		},
 	},
 
@@ -100,7 +101,7 @@ var Commands = map[string]*CommandTemplate{
 		},
 		OnError: "stop",
 		Steps: []Step{
-			{Action: "exec", Command: `if [ "{{enabled}}" = "true" ]; then ufw --force enable; else ufw disable; fi`, Timeout: 30},
+			{Action: "exec", Command: `if [ "{{enabled}}" = "true" ]; then ufw --force enable; else ufw disable; fi`, Timeout: 30, Log: "ufw status"},
 		},
 	},
 
@@ -115,7 +116,7 @@ var Commands = map[string]*CommandTemplate{
 		},
 		OnError: "stop",
 		Steps: []Step{
-			{Action: "exec", Command: `if [ "{{protocol}}" = "both" ]; then ufw allow {{port}}/tcp && ufw allow {{port}}/udp; else ufw allow {{port}}/{{protocol}}; fi`, Timeout: 30},
+			{Action: "exec", Command: `if [ "{{protocol}}" = "both" ]; then ufw allow {{port}}/tcp && ufw allow {{port}}/udp; else ufw allow {{port}}/{{protocol}}; fi`, Timeout: 30, Log: "ufw status | grep {{port}}"},
 		},
 	},
 
@@ -130,7 +131,7 @@ var Commands = map[string]*CommandTemplate{
 		},
 		OnError: "continue",
 		Steps: []Step{
-			{Action: "exec", Command: `if [ "{{protocol}}" = "both" ]; then ufw delete allow {{port}}/tcp; ufw delete allow {{port}}/udp; else ufw delete allow {{port}}/{{protocol}}; fi`, Timeout: 30},
+			{Action: "exec", Command: `if [ "{{protocol}}" = "both" ]; then ufw delete allow {{port}}/tcp; ufw delete allow {{port}}/udp; else ufw delete allow {{port}}/{{protocol}}; fi`, Timeout: 30, Log: "ufw status"},
 		},
 	},
 
@@ -387,10 +388,10 @@ if [ "$SSL_ENABLED" = "true" ] && [ ! -f "$CERT_PATH" ]; then
 fi
 `, Timeout: 120},
 			// Write nginx config
-			{Action: "file", Op: "write", Path: "/etc/nginx/conf.d/configuratix/{{domain}}.conf", Content: "{{nginx_config}}", Mode: "0644"},
+			{Action: "file", Op: "write", Path: "/etc/nginx/conf.d/configuratix/{{domain}}.conf", Content: "{{nginx_config}}", Mode: "0644", Log: "cat /etc/nginx/conf.d/configuratix/{{domain}}.conf"},
 			// Test and reload nginx
 			{Action: "exec", Command: "nginx -t", Timeout: 30},
-			{Action: "service", Name: "nginx", Op: "reload"},
+			{Action: "service", Name: "nginx", Op: "reload", Log: "ls -la /etc/nginx/conf.d/configuratix/"},
 		},
 	},
 
@@ -404,7 +405,7 @@ fi
 		},
 		OnError: "continue",
 		Steps: []Step{
-			{Action: "exec", Command: "rm -f /etc/nginx/conf.d/configuratix/{{domain}}.conf", Timeout: 10},
+			{Action: "exec", Command: "rm -f /etc/nginx/conf.d/configuratix/{{domain}}.conf", Timeout: 10, Log: "ls -la /etc/nginx/conf.d/configuratix/"},
 			{Action: "service", Name: "nginx", Op: "reload"},
 		},
 	},
@@ -432,4 +433,3 @@ func ListCommandsByCategory() map[string][]*CommandTemplate {
 	}
 	return result
 }
-

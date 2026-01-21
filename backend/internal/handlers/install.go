@@ -528,6 +528,9 @@ type Step struct {
 	
 	// For service
 	Name    string ` + "`" + `json:"name"` + "`" + `
+	
+	// For logging
+	Log     string ` + "`" + `json:"log"` + "`" + `     // "out" = log command output (default), or custom command to execute and log
 }
 
 // RunPayload is the unified job type for complex operations
@@ -569,6 +572,16 @@ func executeRun(payload RunPayload) (string, error) {
 		
 		logs.WriteString(stepLog)
 		
+		// Handle custom logging: if Log is set and not "out", execute the log command
+		if step.Log != "" && step.Log != "out" {
+			logs.WriteString("\n--- Log output ---\n")
+			logOutput, logErr := execWithTimeout(step.Log, 30)
+			logs.WriteString(logOutput)
+			if logErr != nil {
+				logs.WriteString(fmt.Sprintf("(log command failed: %v)\n", logErr))
+			}
+		}
+		
 		if err != nil {
 			logs.WriteString(fmt.Sprintf("ERROR: %v\n", err))
 			
@@ -597,6 +610,7 @@ func substituteVars(step Step, vars map[string]string) Step {
 		step.Content = strings.ReplaceAll(step.Content, placeholder, v)
 		step.URL = strings.ReplaceAll(step.URL, placeholder, v)
 		step.Name = strings.ReplaceAll(step.Name, placeholder, v)
+		step.Log = strings.ReplaceAll(step.Log, placeholder, v)
 	}
 	return step
 }
