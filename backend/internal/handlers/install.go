@@ -114,6 +114,12 @@ mkdir -p /etc/configuratix
 mkdir -p /opt/configuratix/bin
 mkdir -p /etc/nginx/conf.d/configuratix
 
+# Add configuratix include to nginx.conf if not already present
+if ! grep -q "conf.d/configuratix" /etc/nginx/nginx.conf; then
+    echo "Adding configuratix include to nginx.conf..."
+    sed -i '/include \/etc\/nginx\/conf.d\/\*.conf;/a\        include /etc/nginx/conf.d/configuratix/*.conf;' /etc/nginx/nginx.conf
+fi
+
 # Enable nginx (if not already)
 systemctl enable nginx 2>/dev/null || true
 systemctl start nginx 2>/dev/null || true
@@ -823,6 +829,14 @@ func bootstrap() (string, error) {
 	out, _ := runCmd("apt-get", "install", "-y", "nginx", "certbot", "python3-certbot-nginx", "fail2ban", "ufw", "unzip")
 	logs.WriteString(out)
 	os.MkdirAll("/etc/nginx/conf.d/configuratix", 0755)
+	
+	// Add configuratix include to nginx.conf if not already present
+	nginxConf, _ := os.ReadFile("/etc/nginx/nginx.conf")
+	if !strings.Contains(string(nginxConf), "conf.d/configuratix") {
+		logs.WriteString("Adding configuratix include to nginx.conf...\n")
+		runCmd("sed", "-i", `/include \/etc\/nginx\/conf.d\/\*.conf;/a\        include /etc/nginx/conf.d/configuratix/*.conf;`, "/etc/nginx/nginx.conf")
+	}
+	
 	runCmd("systemctl", "enable", "nginx")
 	runCmd("systemctl", "start", "nginx")
 	runCmd("systemctl", "enable", "fail2ban")
