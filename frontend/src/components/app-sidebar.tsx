@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Sidebar,
@@ -12,6 +13,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubItem,
+  SidebarMenuSubButton,
 } from "@/components/ui/sidebar";
 import {
   DropdownMenu,
@@ -20,9 +24,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { api, User } from "@/lib/api";
+import { api, User, Project } from "@/lib/api";
 import { 
   LayoutDashboard, 
   Server, 
@@ -36,114 +45,14 @@ import {
   Shield,
   UserCircle,
   LogOut,
-  ChevronUp
+  ChevronUp,
+  ChevronRight,
+  KeyRound
 } from "lucide-react";
 
 interface AppSidebarProps {
   user: User | null;
 }
-
-const getNavigation = (role: string) => {
-  const nav = [
-    {
-      label: "Overview",
-      items: [
-        {
-          title: "Dashboard",
-          url: "/dashboard",
-          icon: <LayoutDashboard className="h-4 w-4" />,
-        },
-      ],
-    },
-    {
-      label: "Workspace",
-      items: [
-        {
-          title: "Projects",
-          url: "/projects",
-          icon: <FolderKanban className="h-4 w-4" />,
-        },
-        {
-          title: "Machines",
-          url: "/machines",
-          icon: <Server className="h-4 w-4" />,
-        },
-        {
-          title: "Domains",
-          url: "/domains",
-          icon: <Globe className="h-4 w-4" />,
-        },
-      ],
-    },
-    {
-      label: "Tools",
-      items: [
-        {
-          title: "Commands",
-          url: "/commands",
-          icon: <Terminal className="h-4 w-4" />,
-        },
-        {
-          title: "Nginx Configs",
-          url: "/configs/nginx",
-          icon: <FileCode className="h-4 w-4" />,
-        },
-        {
-          title: "Landings",
-          url: "/landings",
-          icon: <FileArchive className="h-4 w-4" />,
-        },
-      ],
-    },
-    {
-      label: "Account",
-      items: [
-        {
-          title: "Profile",
-          url: "/profile",
-          icon: <UserCircle className="h-4 w-4" />,
-        },
-        {
-          title: "Settings",
-          url: "/settings",
-          icon: <Settings className="h-4 w-4" />,
-        },
-      ],
-    },
-  ];
-
-  // Add admin section for superadmin
-  if (role === "superadmin") {
-    nav.push({
-      label: "Admin",
-      items: [
-        {
-          title: "Users",
-          url: "/admin/users",
-          icon: <Users className="h-4 w-4" />,
-        },
-        {
-          title: "All Data",
-          url: "/admin/overview",
-          icon: <Shield className="h-4 w-4" />,
-        },
-      ],
-    });
-  } else if (role === "admin") {
-    nav.push({
-      label: "Admin",
-      items: [
-        {
-          title: "Users",
-          url: "/admin/users",
-          icon: <Users className="h-4 w-4" />,
-        },
-      ],
-    });
-  }
-
-  return nav;
-};
 
 const getRoleBadge = (role: string) => {
   switch (role) {
@@ -159,6 +68,15 @@ const getRoleBadge = (role: string) => {
 export function AppSidebar({ user }: AppSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsOpen, setProjectsOpen] = useState(true);
+  const [machinesOpen, setMachinesOpen] = useState(true);
+
+  useEffect(() => {
+    if (user) {
+      api.listProjects().then(setProjects).catch(() => {});
+    }
+  }, [user]);
 
   const handleLogout = () => {
     api.logout();
@@ -172,7 +90,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
     return email.slice(0, 2).toUpperCase();
   };
 
-  const navigation = getNavigation(user?.role || "user");
+  const isActive = (url: string) => pathname === url || pathname.startsWith(url + "/");
 
   return (
     <Sidebar className="border-r border-sidebar-border">
@@ -185,31 +103,207 @@ export function AppSidebar({ user }: AppSidebarProps) {
         </div>
       </SidebarHeader>
       <SidebarContent>
-        {navigation.map((group) => (
-          <SidebarGroup key={group.label}>
+        {/* Overview */}
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Overview
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/dashboard")}>
+                  <a href="/dashboard" className="flex items-center gap-3">
+                    <LayoutDashboard className="h-4 w-4" />
+                    <span>Dashboard</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        {/* Workspace */}
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Workspace
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {/* Projects - Collapsible with subitems */}
+              <Collapsible open={projectsOpen} onOpenChange={setProjectsOpen}>
+                <SidebarMenuItem>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton isActive={isActive("/projects")}>
+                      <FolderKanban className="h-4 w-4" />
+                      <span className="flex-1">Projects</span>
+                      <ChevronRight className={`h-4 w-4 transition-transform ${projectsOpen ? "rotate-90" : ""}`} />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild isActive={pathname === "/projects"}>
+                          <a href="/projects">All Projects</a>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
+                      {projects.slice(0, 5).map((project) => (
+                        <SidebarMenuSubItem key={project.id}>
+                          <SidebarMenuSubButton asChild isActive={pathname === `/projects/${project.id}`}>
+                            <a href={`/projects/${project.id}`} className="truncate">
+                              {project.name}
+                            </a>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
+                      {projects.length > 5 && (
+                        <SidebarMenuSubItem>
+                          <SidebarMenuSubButton asChild>
+                            <a href="/projects" className="text-muted-foreground">
+                              +{projects.length - 5} more...
+                            </a>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      )}
+                    </SidebarMenuSub>
+                  </CollapsibleContent>
+                </SidebarMenuItem>
+              </Collapsible>
+
+              {/* Machines - Collapsible with Enrollment Tokens */}
+              <Collapsible open={machinesOpen} onOpenChange={setMachinesOpen} defaultOpen>
+                <SidebarMenuItem>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton isActive={isActive("/machines")}>
+                      <Server className="h-4 w-4" />
+                      <span className="flex-1">Machines</span>
+                      <ChevronRight className={`h-4 w-4 transition-transform ${machinesOpen ? "rotate-90" : ""}`} />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild isActive={pathname === "/machines"}>
+                          <a href="/machines">All Machines</a>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild isActive={pathname === "/machines/tokens"}>
+                          <a href="/machines/tokens" className="flex items-center gap-2">
+                            <KeyRound className="h-3 w-3" />
+                            Enrollment Tokens
+                          </a>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
+                    </SidebarMenuSub>
+                  </CollapsibleContent>
+                </SidebarMenuItem>
+              </Collapsible>
+
+              {/* Domains */}
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/domains")}>
+                  <a href="/domains" className="flex items-center gap-3">
+                    <Globe className="h-4 w-4" />
+                    <span>Domains</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        {/* Tools */}
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Tools
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/commands")}>
+                  <a href="/commands" className="flex items-center gap-3">
+                    <Terminal className="h-4 w-4" />
+                    <span>Commands</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/configs/nginx")}>
+                  <a href="/configs/nginx" className="flex items-center gap-3">
+                    <FileCode className="h-4 w-4" />
+                    <span>Nginx Configs</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/landings")}>
+                  <a href="/landings" className="flex items-center gap-3">
+                    <FileArchive className="h-4 w-4" />
+                    <span>Landings</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        {/* Account */}
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Account
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/profile")}>
+                  <a href="/profile" className="flex items-center gap-3">
+                    <UserCircle className="h-4 w-4" />
+                    <span>Profile</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/settings")}>
+                  <a href="/settings" className="flex items-center gap-3">
+                    <Settings className="h-4 w-4" />
+                    <span>Settings</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        {/* Admin */}
+        {(user?.role === "superadmin" || user?.role === "admin") && (
+          <SidebarGroup>
             <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              {group.label}
+              Admin
             </SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {group.items.map((item) => (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton
-                      asChild
-                      isActive={pathname === item.url || pathname.startsWith(item.url + "/")}
-                      className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
-                    >
-                      <a href={item.url} className="flex items-center gap-3">
-                        {item.icon}
-                        <span>{item.title}</span>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={isActive("/admin/users")}>
+                    <a href="/admin/users" className="flex items-center gap-3">
+                      <Users className="h-4 w-4" />
+                      <span>Users</span>
+                    </a>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                {user?.role === "superadmin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={isActive("/admin/overview")}>
+                      <a href="/admin/overview" className="flex items-center gap-3">
+                        <Shield className="h-4 w-4" />
+                        <span>All Data</span>
                       </a>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                ))}
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-        ))}
+        )}
       </SidebarContent>
       <SidebarFooter className="border-t border-sidebar-border p-4">
         <DropdownMenu>

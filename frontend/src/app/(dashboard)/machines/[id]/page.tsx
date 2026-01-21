@@ -439,6 +439,7 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
   const [showFail2banDialog, setShowFail2banDialog] = useState(false);
   const [showConfirmUFWDialog, setShowConfirmUFWDialog] = useState(false);
   const [showConfirmFail2banDialog, setShowConfirmFail2banDialog] = useState(false);
+  const [showNotesDialog, setShowNotesDialog] = useState(false);
   const [pendingToggleValue, setPendingToggleValue] = useState(false);
 
   // Form states
@@ -805,10 +806,10 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
-          <TabsTrigger value="logs">Logs</TabsTrigger>
-          <TabsTrigger value="jobs">Jobs</TabsTrigger>
           <TabsTrigger value="terminal">Terminal</TabsTrigger>
-          <TabsTrigger value="notes">Notes</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
+          <TabsTrigger value="configs">Configs</TabsTrigger>
+          <TabsTrigger value="jobs">Jobs</TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
@@ -940,6 +941,28 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
               </CardContent>
             </Card>
           </div>
+
+          {/* Notes Section in Overview */}
+          <Card className="border-border/50 bg-card/50">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle>Notes</CardTitle>
+                <CardDescription>Markdown notes about this machine</CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setShowNotesDialog(true)}>
+                Edit Notes
+              </Button>
+            </CardHeader>
+            <CardContent>
+              <div className="min-h-[100px] p-4 border rounded-md bg-muted/30 prose prose-invert prose-sm max-w-none">
+                {localNotes ? (
+                  <ReactMarkdown>{localNotes}</ReactMarkdown>
+                ) : (
+                  <p className="text-muted-foreground italic">No notes yet. Click Edit Notes to add.</p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Security Tab */}
@@ -1126,54 +1149,47 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
           </Card>
         </TabsContent>
 
+        {/* Configs Tab */}
+        <TabsContent value="configs" className="space-y-4 mt-6">
+          <Card className="border-border/50 bg-card/50">
+            <CardHeader>
+              <CardTitle>Server Configurations</CardTitle>
+              <CardDescription>View and edit configuration files on this machine</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 md:grid-cols-3">
+                <Card className="border-border/50 bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors">
+                  <CardContent className="p-4 text-center">
+                    <div className="text-2xl mb-2">🔧</div>
+                    <div className="font-medium">NGINX</div>
+                    <div className="text-xs text-muted-foreground">Web server configs</div>
+                  </CardContent>
+                </Card>
+                <Card className="border-border/50 bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors">
+                  <CardContent className="p-4 text-center">
+                    <div className="text-2xl mb-2">🐘</div>
+                    <div className="font-medium">PHP</div>
+                    <div className="text-xs text-muted-foreground">PHP-FPM settings</div>
+                  </CardContent>
+                </Card>
+                <Card className="border-border/50 bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors">
+                  <CardContent className="p-4 text-center">
+                    <div className="text-2xl mb-2">🔐</div>
+                    <div className="font-medium">SSH</div>
+                    <div className="text-xs text-muted-foreground">sshd_config</div>
+                  </CardContent>
+                </Card>
+              </div>
+              <p className="text-sm text-muted-foreground mt-4 text-center">
+                Config editor coming soon. Use the Terminal tab to edit files directly for now.
+              </p>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         {/* Jobs Tab */}
         <TabsContent value="jobs" className="space-y-4 mt-6">
           <MachineJobsTab machineId={machine.id} agentId={machine.agent_id} />
-        </TabsContent>
-
-        {/* Notes Tab */}
-        <TabsContent value="notes" className="space-y-4 mt-6">
-          <Card className="border-border/50 bg-card/50">
-            <CardHeader>
-              <CardTitle>Notes</CardTitle>
-              <CardDescription>Markdown notes about this machine</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Tabs value={notesTab} onValueChange={setNotesTab} className="w-full">
-                <TabsList className="grid w-full grid-cols-2">
-                  <TabsTrigger value="preview">Preview</TabsTrigger>
-                  <TabsTrigger value="edit">
-                    Edit {notesDirty && <span className="ml-1 text-orange-400">•</span>}
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="preview" className="mt-4">
-                  <div className="min-h-[200px] p-4 border rounded-md bg-muted/30 prose prose-invert prose-sm max-w-none">
-                    {localNotes ? (
-                      <ReactMarkdown>{localNotes}</ReactMarkdown>
-                    ) : (
-                      <p className="text-muted-foreground italic">No notes yet. Click Edit to add notes.</p>
-                    )}
-                  </div>
-                </TabsContent>
-                <TabsContent value="edit" className="mt-4">
-                  <Textarea
-                    className="min-h-[200px] font-mono text-sm"
-                    placeholder="# Server Notes&#10;&#10;**Hosting:** DigitalOcean&#10;**Expiry:** 2025-12-31&#10;&#10;## Info&#10;- Monthly billing&#10;- Contact: admin@example.com"
-                    value={localNotes}
-                    onChange={(e) => handleNotesChange(e.target.value)}
-                  />
-                  <div className="flex items-center gap-2 mt-4">
-                    <Button onClick={handleSaveNotes} disabled={saving || !notesDirty}>
-                      {saving ? "Saving..." : "Save Notes"}
-                    </Button>
-                    {notesDirty && (
-                      <span className="text-sm text-orange-400">Unsaved changes</span>
-                    )}
-                  </div>
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
         </TabsContent>
       </Tabs>
 
@@ -1395,6 +1411,47 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
               onClick={handleConfirmFail2banToggle}
             >
               {pendingToggleValue ? "Enable Fail2ban" : "Disable Fail2ban"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Notes Edit Dialog */}
+      <Dialog open={showNotesDialog} onOpenChange={setShowNotesDialog}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Edit Machine Notes</DialogTitle>
+            <DialogDescription>
+              Use markdown to document server info, expiry dates, etc.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Edit</Label>
+              <Textarea
+                className="min-h-[300px] font-mono text-sm resize-none"
+                placeholder="# Server Notes&#10;&#10;**Hosting:** DigitalOcean&#10;**Expiry:** 2025-12-31"
+                value={localNotes}
+                onChange={(e) => handleNotesChange(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Preview</Label>
+              <div className="min-h-[300px] p-4 border rounded-md bg-muted/30 prose prose-invert prose-sm max-w-none overflow-auto">
+                {localNotes ? (
+                  <ReactMarkdown>{localNotes}</ReactMarkdown>
+                ) : (
+                  <p className="text-muted-foreground italic">No notes yet...</p>
+                )}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowNotesDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => { handleSaveNotes(); setShowNotesDialog(false); }} disabled={saving || !notesDirty}>
+              {saving ? "Saving..." : "Save Notes"}
             </Button>
           </DialogFooter>
         </DialogContent>

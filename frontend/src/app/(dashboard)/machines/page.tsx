@@ -39,7 +39,6 @@ export default function MachinesPage() {
   const router = useRouter();
   const [machines, setMachines] = useState<Machine[]>([]);
   const [projects, setProjects] = useState<ProjectWithStats[]>([]);
-  const [tokens, setTokens] = useState<EnrollmentToken[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateTokenDialog, setShowCreateTokenDialog] = useState(false);
   const [tokenName, setTokenName] = useState("");
@@ -52,13 +51,11 @@ export default function MachinesPage() {
 
   const loadData = async () => {
     try {
-      const [machinesData, tokensData, projectsData] = await Promise.all([
+      const [machinesData, projectsData] = await Promise.all([
         api.listMachines(undefined, selectedProject === "all" ? undefined : selectedProject),
-        api.listEnrollmentTokens(),
         api.listProjects(),
       ]);
       setMachines(machinesData);
-      setTokens(tokensData);
       setProjects(projectsData);
     } catch (err) {
       console.error("Failed to load data:", err);
@@ -78,17 +75,6 @@ export default function MachinesPage() {
     } catch (err) {
       console.error("Failed to create token:", err);
       toast.error("Failed to create token");
-    }
-  };
-
-  const handleDeleteToken = async (id: string) => {
-    try {
-      await api.deleteEnrollmentToken(id);
-      loadData();
-      toast.success("Token deleted");
-    } catch (err) {
-      console.error("Failed to delete token:", err);
-      toast.error("Failed to delete token");
     }
   };
 
@@ -338,7 +324,7 @@ export default function MachinesPage() {
     : "";
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col h-full space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Machines</h1>
@@ -367,48 +353,9 @@ export default function MachinesPage() {
         </div>
       </div>
 
-      {/* Active Tokens */}
-      {tokens.filter(t => !t.used_at).length > 0 && (
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader>
-            <CardTitle className="text-lg">Active Enrollment Tokens</CardTitle>
-            <CardDescription>
-              Tokens waiting to be used for agent installation.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {tokens.filter(t => !t.used_at).map((token) => (
-                <div key={token.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-                  <div>
-                    <div className="font-medium text-sm">{token.name || "Unnamed Token"}</div>
-                    <div className="text-xs text-muted-foreground">
-                      Expires: {new Date(token.expires_at).toLocaleString()}
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleDeleteToken(token.id)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
       {/* Machines Table */}
-      <Card className="border-border/50 bg-card/50">
-        <CardHeader>
-          <CardTitle className="text-lg">Server Fleet</CardTitle>
-          <CardDescription>
-            All registered machines with real-time status.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <Card className="border-border/50 bg-card/50 flex-1 flex flex-col overflow-hidden">
+        <CardContent className="flex-1 overflow-auto p-6">
           <DataTable 
             columns={columns} 
             data={machines}

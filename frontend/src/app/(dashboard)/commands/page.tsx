@@ -17,7 +17,6 @@ import {
   Terminal,
   Cog,
   Shield,
-  Server,
   FileCode,
   Zap
 } from "lucide-react";
@@ -228,10 +227,8 @@ export default function CommandsPage() {
     );
   }
 
-  const categories = [...new Set(commands.map(c => c.category))];
-
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col h-full space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Commands</h1>
@@ -241,49 +238,9 @@ export default function CommandsPage() {
         </div>
       </div>
 
-      {/* Category Stats */}
-      <div className="grid gap-4 md:grid-cols-4">
-        {categories.map(category => (
-          <Card key={category} className="border-border/50 bg-card/50">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium capitalize">{category}</CardTitle>
-              {getCategoryIcon(category)}
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {commands.filter(c => c.category === category).length}
-              </div>
-              <p className="text-xs text-muted-foreground">commands</p>
-            </CardContent>
-          </Card>
-        ))}
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Online Machines</CardTitle>
-            <Server className="h-4 w-4 text-green-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-500">
-              {machines.filter(m => {
-                if (!m.last_seen) return false;
-                const diff = (Date.now() - new Date(m.last_seen).getTime()) / 1000 / 60;
-                return diff < 5;
-              }).length}
-            </div>
-            <p className="text-xs text-muted-foreground">ready for commands</p>
-          </CardContent>
-        </Card>
-      </div>
-
       {/* Commands Table */}
-      <Card className="border-border/50 bg-card/50">
-        <CardHeader>
-          <CardTitle className="text-lg">Command Templates</CardTitle>
-          <CardDescription>
-            Predefined commands that can be executed on any connected machine.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <Card className="border-border/50 bg-card/50 flex-1 flex flex-col overflow-hidden">
+        <CardContent className="p-6">
           <DataTable 
             columns={columns} 
             data={commands}

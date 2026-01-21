@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DataTable } from "@/components/ui/data-table";
@@ -38,6 +39,8 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showJoinDialog, setShowJoinDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState<ProjectWithStats | null>(null);
   const [projectName, setProjectName] = useState("");
   const [inviteToken, setInviteToken] = useState("");
   const [creating, setCreating] = useState(false);
@@ -99,13 +102,17 @@ export default function ProjectsPage() {
     }
   };
 
-  const handleDeleteProject = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this project? Machines will be unlinked but not deleted.")) {
-      return;
-    }
+  const openDeleteDialog = (project: ProjectWithStats) => {
+    setProjectToDelete(project);
+    setShowDeleteDialog(true);
+  };
 
+  const handleDeleteProject = async () => {
+    if (!projectToDelete) return;
     try {
-      await api.deleteProject(id);
+      await api.deleteProject(projectToDelete.id);
+      setShowDeleteDialog(false);
+      setProjectToDelete(null);
       loadProjects();
       toast.success("Project deleted");
     } catch (err) {
@@ -273,7 +280,7 @@ export default function ProjectsPage() {
               <DropdownMenuSeparator />
               <DropdownMenuItem 
                 className="text-destructive"
-                onClick={() => handleDeleteProject(project.id)}
+                onClick={() => openDeleteDialog(project)}
               >
                 <Trash2 className="mr-2 h-4 w-4" />
                 Delete
@@ -427,6 +434,25 @@ export default function ProjectsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Project</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete &quot;{projectToDelete?.name}&quot;? 
+              Machines will be unlinked but not deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteProject} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

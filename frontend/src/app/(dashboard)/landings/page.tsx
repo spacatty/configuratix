@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -39,6 +40,8 @@ export default function LandingsPage() {
   const [landingName, setLandingName] = useState("");
   const [landingType, setLandingType] = useState<string>("html");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [landingToDelete, setLandingToDelete] = useState<Landing | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -88,14 +91,18 @@ export default function LandingsPage() {
     }
   };
 
-  const handleDelete = async (landing: Landing) => {
-    if (!confirm(`Are you sure you want to delete "${landing.name}"?`)) {
-      return;
-    }
+  const openDeleteDialog = (landing: Landing) => {
+    setLandingToDelete(landing);
+    setShowDeleteDialog(true);
+  };
 
+  const handleDelete = async () => {
+    if (!landingToDelete) return;
     try {
-      await api.deleteLanding(landing.id);
+      await api.deleteLanding(landingToDelete.id);
       toast.success("Landing page deleted");
+      setShowDeleteDialog(false);
+      setLandingToDelete(null);
       loadLandings();
     } catch (err) {
       console.error("Failed to delete landing:", err);
@@ -195,7 +202,7 @@ export default function LandingsPage() {
               <DropdownMenuSeparator />
               <DropdownMenuItem 
                 className="text-destructive"
-                onClick={() => handleDelete(landing)}
+                onClick={() => openDeleteDialog(landing)}
               >
                 <Trash2 className="mr-2 h-4 w-4" />
                 Delete
@@ -364,6 +371,25 @@ export default function LandingsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Landing Page</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete &quot;{landingToDelete?.name}&quot;? 
+              This will also remove it from any nginx configurations using it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
