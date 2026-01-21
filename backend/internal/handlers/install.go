@@ -329,7 +329,7 @@ func runAgent() {
 			var jobs []struct { 
 				ID string ` + "`" + `json:"id"` + "`" + `
 				Type string ` + "`" + `json:"type"` + "`" + `
-				Payload json.RawMessage ` + "`" + `json:"payload_json"` + "`" + `
+				Payload json.RawMessage ` + "`" + `json:"payload"` + "`" + `
 			}
 			json.NewDecoder(resp.Body).Decode(&jobs)
 			resp.Body.Close()
