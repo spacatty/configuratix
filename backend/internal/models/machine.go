@@ -30,6 +30,10 @@ type Machine struct {
 	Fail2banConfig  *string `db:"fail2ban_config" json:"fail2ban_config"`
 	RootPasswordSet bool    `db:"root_password_set" json:"root_password_set"`
 
+	// PHP
+	PHPInstalled bool    `db:"php_installed" json:"php_installed"`
+	PHPVersion   *string `db:"php_version" json:"php_version"`
+
 	// Stats (from agent heartbeat)
 	CPUPercent  float64 `db:"cpu_percent" json:"cpu_percent"`
 	MemoryUsed  int64   `db:"memory_used" json:"memory_used"`

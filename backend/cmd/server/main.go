@@ -150,6 +150,19 @@ func main() {
 	apiRouter.HandleFunc("/commands/{id}", commandsHandler.GetCommand).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/commands/execute", commandsHandler.ExecuteCommand).Methods("POST", "OPTIONS")
 
+	// Landings
+	landingsHandler := handlers.NewLandingsHandler(db)
+	apiRouter.HandleFunc("/landings", landingsHandler.ListLandings).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/landings", landingsHandler.UploadLanding).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/landings/{id}", landingsHandler.GetLanding).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/landings/{id}", landingsHandler.UpdateLanding).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/landings/{id}", landingsHandler.DeleteLanding).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/landings/{id}/download", landingsHandler.DownloadLanding).Methods("GET", "OPTIONS")
+	// Landing preview (static file serving - public with token)
+	router.PathPrefix("/api/landings/preview/{token}/").Handler(
+		http.StripPrefix("/api/landings/preview/", http.HandlerFunc(landingsHandler.ServePreview)),
+	)
+
 	// Start domain health check scheduler
 	checkInterval := 1 // Default: 1 hour
 	if intervalStr := os.Getenv("CHECK_INTERVAL_HOURS"); intervalStr != "" {

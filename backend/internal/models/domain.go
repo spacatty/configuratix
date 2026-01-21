@@ -9,6 +9,7 @@ import (
 type Domain struct {
 	ID                uuid.UUID  `db:"id" json:"id"`
 	FQDN              string     `db:"fqdn" json:"fqdn"`
+	OwnerID           *uuid.UUID `db:"owner_id" json:"owner_id"`
 	AssignedMachineID *uuid.UUID `db:"assigned_machine_id" json:"assigned_machine_id"`
 	Status            string     `db:"status" json:"status"` // idle, linked, healthy, unhealthy
 	NotesMD           *string    `db:"notes_md" json:"notes_md"`

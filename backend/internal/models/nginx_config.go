@@ -8,13 +8,14 @@ import (
 )
 
 type NginxConfig struct {
-	ID            uuid.UUID       `db:"id" json:"id"`
-	Name          string          `db:"name" json:"name"`
-	Mode          string          `db:"mode" json:"mode"` // auto, manual
+	ID             uuid.UUID       `db:"id" json:"id"`
+	Name           string          `db:"name" json:"name"`
+	OwnerID        *uuid.UUID      `db:"owner_id" json:"owner_id"`
+	Mode           string          `db:"mode" json:"mode"` // auto, manual
 	StructuredJSON json.RawMessage `db:"structured_json" json:"structured_json"`
-	RawText       *string         `db:"raw_text" json:"raw_text"`
-	CreatedAt     time.Time       `db:"created_at" json:"created_at"`
-	UpdatedAt     time.Time       `db:"updated_at" json:"updated_at"`
+	RawText        *string         `db:"raw_text" json:"raw_text"`
+	CreatedAt      time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt      time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 // NginxConfigStructured represents the structured form data
@@ -25,11 +26,14 @@ type NginxConfigStructured struct {
 }
 
 type LocationConfig struct {
-	Path     string `json:"path"`
-	Type     string `json:"type"` // proxy, static
-	ProxyURL string `json:"proxy_url,omitempty"`
-	Root     string `json:"root,omitempty"`
-	Index    string `json:"index,omitempty"`
+	Path       string `json:"path"`
+	Type       string `json:"type"`        // proxy, static
+	StaticType string `json:"static_type"` // local, landing (only for static type)
+	ProxyURL   string `json:"proxy_url,omitempty"`
+	Root       string `json:"root,omitempty"`
+	Index      string `json:"index,omitempty"`
+	LandingID  string `json:"landing_id,omitempty"` // UUID of landing page
+	UsePHP     bool   `json:"use_php"`              // Enable PHP-FPM for this location
 }
 
 type CORSConfig struct {

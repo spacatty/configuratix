@@ -281,6 +281,79 @@ var Commands = map[string]*CommandTemplate{
 			{Action: "exec", Command: "{{command}}", Timeout: 300},
 		},
 	},
+
+	"install_php": {
+		ID:          "install_php",
+		Name:        "Install PHP-FPM",
+		Description: "Install PHP-FPM with common extensions for web hosting",
+		Category:    "php",
+		Variables:   []VariableDef{},
+		OnError:     "stop",
+		Steps: []Step{
+			{Action: "exec", Command: "apt-get update", Timeout: 120},
+			{Action: "exec", Command: "apt-get install -y php-fpm php-cli php-common php-curl php-gd php-json php-mbstring php-mysql php-xml php-zip", Timeout: 300},
+			{Action: "exec", Command: "PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION.\".\".PHP_MINOR_VERSION;') && systemctl enable php${PHP_VERSION}-fpm && systemctl start php${PHP_VERSION}-fpm", Timeout: 60},
+		},
+	},
+
+	"check_php_status": {
+		ID:          "check_php_status",
+		Name:        "Check PHP Status",
+		Description: "Check if PHP-FPM is installed and running",
+		Category:    "php",
+		Variables:   []VariableDef{},
+		OnError:     "continue",
+		Steps: []Step{
+			{Action: "exec", Command: "php -v || echo 'PHP not installed'", Timeout: 10},
+			{Action: "exec", Command: "PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION.\".\".PHP_MINOR_VERSION;' 2>/dev/null) && systemctl status php${PHP_VERSION}-fpm --no-pager || echo 'PHP-FPM not running'", Timeout: 30},
+		},
+	},
+
+	"get_php_logs": {
+		ID:          "get_php_logs",
+		Name:        "Get PHP-FPM Logs",
+		Description: "Retrieve recent PHP-FPM logs",
+		Category:    "php",
+		Variables: []VariableDef{
+			{Name: "lines", Type: "int", Required: false, Default: "100", Description: "Number of lines to retrieve"},
+		},
+		OnError: "continue",
+		Steps: []Step{
+			{Action: "exec", Command: "PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION.\".\".PHP_MINOR_VERSION;' 2>/dev/null) && journalctl -u php${PHP_VERSION}-fpm --no-pager -n {{lines}} || tail -n {{lines}} /var/log/php*-fpm.log 2>/dev/null || echo 'No PHP logs found'", Timeout: 30},
+		},
+	},
+
+	"restart_php": {
+		ID:          "restart_php",
+		Name:        "Restart PHP-FPM",
+		Description: "Restart the PHP-FPM service",
+		Category:    "php",
+		Variables:   []VariableDef{},
+		OnError:     "stop",
+		Steps: []Step{
+			{Action: "exec", Command: "PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION.\".\".PHP_MINOR_VERSION;') && systemctl restart php${PHP_VERSION}-fpm", Timeout: 60},
+		},
+	},
+
+	"deploy_landing": {
+		ID:          "deploy_landing",
+		Name:        "Deploy Landing Page",
+		Description: "Download and extract a landing page archive to the target directory",
+		Category:    "landings",
+		Variables: []VariableDef{
+			{Name: "url", Type: "string", Required: true, Description: "URL to download the landing zip"},
+			{Name: "target_path", Type: "string", Required: true, Description: "Target directory path"},
+		},
+		OnError: "rollback",
+		Steps: []Step{
+			{Action: "exec", Command: "mkdir -p {{target_path}}", Timeout: 10},
+			{Action: "exec", Command: "rm -rf {{target_path}}/* 2>/dev/null || true", Timeout: 30},
+			{Action: "fetch", URL: "{{url}}", Path: "/tmp/landing_download.zip"},
+			{Action: "exec", Command: "unzip -o /tmp/landing_download.zip -d {{target_path}}", Timeout: 60},
+			{Action: "exec", Command: "rm /tmp/landing_download.zip", Timeout: 10},
+			{Action: "exec", Command: "chown -R www-data:www-data {{target_path}}", Timeout: 30},
+		},
+	},
 }
 
 // GetCommand returns a command template by ID

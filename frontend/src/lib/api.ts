@@ -167,6 +167,20 @@ export interface EnrollmentToken {
   created_at: string;
 }
 
+export interface Landing {
+  id: string;
+  name: string;
+  owner_id: string;
+  type: string; // html, php
+  file_name: string;
+  file_size: number;
+  preview_path?: string;
+  created_at: string;
+  updated_at: string;
+  owner_email?: string;
+  owner_name?: string;
+}
+
 export interface Domain {
   id: string;
   fqdn: string;
@@ -200,10 +214,13 @@ export interface NginxConfigStructured {
 
 export interface LocationConfig {
   path: string;
-  type: string;
+  type: string;        // proxy, static
+  static_type?: string; // local, landing (for static type)
   proxy_url?: string;
   root?: string;
   index?: string;
+  landing_id?: string;  // UUID of landing page
+  use_php?: boolean;    // Enable PHP-FPM for this location
 }
 
 export interface CORSConfig {
@@ -670,6 +687,55 @@ class ApiClient {
         variables,
       }),
     });
+  }
+
+  // Landings
+  async listLandings(): Promise<Landing[]> {
+    return this.request<Landing[]>("/api/landings");
+  }
+
+  async getLanding(id: string): Promise<Landing> {
+    return this.request<Landing>(`/api/landings/${id}`);
+  }
+
+  async uploadLanding(name: string, type: string, file: File): Promise<Landing> {
+    const formData = new FormData();
+    formData.append("name", name);
+    formData.append("type", type);
+    formData.append("file", file);
+
+    const headers: Record<string, string> = {};
+    if (this.token) {
+      headers["Authorization"] = `Bearer ${this.token}`;
+    }
+
+    const response = await fetch(`${this.baseUrl}/api/landings`, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText || "Upload failed");
+    }
+
+    return response.json();
+  }
+
+  async updateLanding(id: string, data: { name?: string; type?: string }): Promise<void> {
+    await this.request(`/api/landings/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteLanding(id: string): Promise<void> {
+    await this.request(`/api/landings/${id}`, { method: "DELETE" });
+  }
+
+  getLandingDownloadUrl(id: string): string {
+    return `${this.baseUrl}/api/landings/${id}/download`;
   }
 }
 

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 
+	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
 	"configuratix/backend/internal/models"
 
@@ -22,11 +23,24 @@ func NewNginxConfigsHandler(db *database.DB) *NginxConfigsHandler {
 
 // ListNginxConfigs returns all nginx configs
 func (h *NginxConfigsHandler) ListNginxConfigs(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	var configs []models.NginxConfig
-	err := h.db.Select(&configs, `
-		SELECT * FROM nginx_configs
-		ORDER BY created_at DESC
-	`)
+	var err error
+
+	if claims.IsSuperAdmin() {
+		err = h.db.Select(&configs, `
+			SELECT * FROM nginx_configs
+			ORDER BY created_at DESC
+		`)
+	} else {
+		err = h.db.Select(&configs, `
+			SELECT * FROM nginx_configs
+			WHERE owner_id = $1 OR owner_id IS NULL
+			ORDER BY created_at DESC
+		`, userID)
+	}
 	if err != nil {
 		log.Printf("Failed to list nginx configs: %v", err)
 		http.Error(w, "Failed to list nginx configs", http.StatusInternalServerError)
@@ -70,6 +84,9 @@ type CreateNginxConfigRequest struct {
 
 // CreateNginxConfig creates a new nginx config
 func (h *NginxConfigsHandler) CreateNginxConfig(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	var req CreateNginxConfigRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -97,10 +114,10 @@ func (h *NginxConfigsHandler) CreateNginxConfig(w http.ResponseWriter, r *http.R
 
 	var config models.NginxConfig
 	err = h.db.Get(&config, `
-		INSERT INTO nginx_configs (name, mode, structured_json, raw_text)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO nginx_configs (name, owner_id, mode, structured_json, raw_text)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING *
-	`, req.Name, req.Mode, structuredJSON, req.RawText)
+	`, req.Name, userID, req.Mode, structuredJSON, req.RawText)
 	if err != nil {
 		log.Printf("Failed to create nginx config: %v", err)
 		http.Error(w, "Failed to create nginx config", http.StatusInternalServerError)

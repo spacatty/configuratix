@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 
+	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
 	"configuratix/backend/internal/models"
 
@@ -16,11 +17,14 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string) 
 	var structured struct {
 		SSLMode   string `json:"ssl_mode"`
 		Locations []struct {
-			Path     string `json:"path"`
-			Type     string `json:"type"`
-			ProxyURL string `json:"proxy_url"`
-			Root     string `json:"root"`
-			Index    string `json:"index"`
+			Path       string `json:"path"`
+			Type       string `json:"type"`
+			StaticType string `json:"static_type"`
+			ProxyURL   string `json:"proxy_url"`
+			Root       string `json:"root"`
+			Index      string `json:"index"`
+			LandingID  string `json:"landing_id"`
+			UsePHP     bool   `json:"use_php"`
 		} `json:"locations"`
 		CORS struct {
 			Enabled  bool `json:"enabled"`
@@ -62,7 +66,19 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string) 
 			if loc.Index != "" {
 				config += "        index " + loc.Index + ";\n"
 			}
-			config += "        try_files $uri $uri/ =404;\n"
+
+			// PHP-FPM configuration
+			if loc.UsePHP {
+				config += "\n"
+				config += "        location ~ \\.php$ {\n"
+				config += "            include snippets/fastcgi-php.conf;\n"
+				config += "            fastcgi_pass unix:/run/php/php-fpm.sock;\n"
+				config += "            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n"
+				config += "            include fastcgi_params;\n"
+				config += "        }\n"
+			} else {
+				config += "        try_files $uri $uri/ =404;\n"
+			}
 		}
 		config += "    }\n\n"
 	}
@@ -89,19 +105,40 @@ type DomainWithConfig struct {
 
 // ListDomains returns all domains with their machine and config info
 func (h *DomainsHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	var domains []DomainWithConfig
-	err := h.db.Select(&domains, `
-		SELECT d.*, 
-			m.hostname as machine_name, 
-			m.ip_address as machine_ip,
-			dcl.nginx_config_id as config_id,
-			nc.name as config_name
-		FROM domains d
-		LEFT JOIN machines m ON d.assigned_machine_id = m.id
-		LEFT JOIN domain_config_links dcl ON d.id = dcl.domain_id
-		LEFT JOIN nginx_configs nc ON dcl.nginx_config_id = nc.id
-		ORDER BY d.created_at DESC
-	`)
+	var err error
+
+	if claims.IsSuperAdmin() {
+		err = h.db.Select(&domains, `
+			SELECT d.*, 
+				m.hostname as machine_name, 
+				m.ip_address as machine_ip,
+				dcl.nginx_config_id as config_id,
+				nc.name as config_name
+			FROM domains d
+			LEFT JOIN machines m ON d.assigned_machine_id = m.id
+			LEFT JOIN domain_config_links dcl ON d.id = dcl.domain_id
+			LEFT JOIN nginx_configs nc ON dcl.nginx_config_id = nc.id
+			ORDER BY d.created_at DESC
+		`)
+	} else {
+		err = h.db.Select(&domains, `
+			SELECT d.*, 
+				m.hostname as machine_name, 
+				m.ip_address as machine_ip,
+				dcl.nginx_config_id as config_id,
+				nc.name as config_name
+			FROM domains d
+			LEFT JOIN machines m ON d.assigned_machine_id = m.id
+			LEFT JOIN domain_config_links dcl ON d.id = dcl.domain_id
+			LEFT JOIN nginx_configs nc ON dcl.nginx_config_id = nc.id
+			WHERE d.owner_id = $1 OR d.owner_id IS NULL
+			ORDER BY d.created_at DESC
+		`, userID)
+	}
 	if err != nil {
 		log.Printf("Failed to list domains: %v", err)
 		http.Error(w, "Failed to list domains", http.StatusInternalServerError)
@@ -153,6 +190,9 @@ type CreateDomainRequest struct {
 
 // CreateDomain creates a new domain
 func (h *DomainsHandler) CreateDomain(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	var req CreateDomainRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -166,10 +206,10 @@ func (h *DomainsHandler) CreateDomain(w http.ResponseWriter, r *http.Request) {
 
 	var domain models.Domain
 	err := h.db.Get(&domain, `
-		INSERT INTO domains (fqdn, status)
-		VALUES ($1, 'idle')
+		INSERT INTO domains (fqdn, owner_id, status)
+		VALUES ($1, $2, 'idle')
 		RETURNING *
-	`, req.FQDN)
+	`, req.FQDN, userID)
 	if err != nil {
 		log.Printf("Failed to create domain: %v", err)
 		http.Error(w, "Failed to create domain (may already exist)", http.StatusInternalServerError)

@@ -59,6 +59,7 @@ func (db *DB) RunMigrations() error {
 		"002_add_notes_and_token_name.sql",
 		"003_machine_settings.sql",
 		"004_users_projects_roles.sql",
+		"005_landings.sql",
 	}
 
 	// Base paths to try
