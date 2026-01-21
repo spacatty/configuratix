@@ -366,6 +366,7 @@ var Commands = map[string]*CommandTemplate{
 			{Name: "domain", Type: "string", Required: true, Description: "Domain name"},
 			{Name: "nginx_config", Type: "text", Required: true, Description: "Nginx configuration content"},
 			{Name: "ssl_enabled", Type: "bool", Required: false, Default: "true", Description: "Whether SSL is enabled"},
+			{Name: "ssl_email", Type: "string", Required: false, Default: "admin@example.com", Description: "Email for SSL certificate"},
 		},
 		OnError: "stop",
 		Steps: []Step{
@@ -375,6 +376,7 @@ var Commands = map[string]*CommandTemplate{
 			{Action: "exec", Command: `
 DOMAIN="{{domain}}"
 SSL_ENABLED="{{ssl_enabled}}"
+SSL_EMAIL="{{ssl_email}}"
 CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
 
 if [ "$SSL_ENABLED" = "true" ] && [ ! -f "$CERT_PATH" ]; then
@@ -382,7 +384,7 @@ if [ "$SSL_ENABLED" = "true" ] && [ ! -f "$CERT_PATH" ]; then
     systemctl stop nginx 2>/dev/null || true
     certbot certonly --standalone -d "$DOMAIN" \
         --non-interactive --agree-tos --no-eff-email \
-        --email noreply@configuratix.local \
+        --email "$SSL_EMAIL" \
         --cert-name "$DOMAIN"
     systemctl start nginx
 fi

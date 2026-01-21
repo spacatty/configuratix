@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, use, useRef, useCallback } from "react";
+import React, { useState, useEffect, use, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,11 +14,6 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, Machine, UFWRule, Job } from "@/lib/api";
 import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
@@ -302,21 +297,19 @@ function MachineJobsTab({ machineId, agentId }: { machineId: string; agentId: st
                 </TableRow>
               ) : (
                 paginatedJobs.map((job) => (
-                  <Collapsible key={job.id} open={expandedJobs.has(job.id)}>
+                  <React.Fragment key={job.id}>
                     <TableRow 
                       className="cursor-pointer hover:bg-muted/50"
                       onClick={() => toggleExpanded(job.id)}
                     >
                       <TableCell>
-                        <CollapsibleTrigger asChild>
-                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
-                            {expandedJobs.has(job.id) ? (
-                              <ChevronDown className="h-4 w-4" />
-                            ) : (
-                              <ChevronRight className="h-4 w-4" />
-                            )}
-                          </Button>
-                        </CollapsibleTrigger>
+                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                          {expandedJobs.has(job.id) ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" />
+                          )}
+                        </Button>
                       </TableCell>
                       <TableCell className="font-medium">{job.type}</TableCell>
                       <TableCell>{getStatusBadge(job.status)}</TableCell>
@@ -327,7 +320,7 @@ function MachineJobsTab({ machineId, agentId }: { machineId: string; agentId: st
                         {formatDuration(job.started_at, job.finished_at)}
                       </TableCell>
                     </TableRow>
-                    <CollapsibleContent asChild>
+                    {expandedJobs.has(job.id) && (
                       <TableRow className="bg-muted/30">
                         <TableCell colSpan={5} className="p-0">
                           <div className="p-4 space-y-3">
@@ -357,8 +350,8 @@ function MachineJobsTab({ machineId, agentId }: { machineId: string; agentId: st
                           </div>
                         </TableCell>
                       </TableRow>
-                    </CollapsibleContent>
-                  </Collapsible>
+                    )}
+                  </React.Fragment>
                 ))
               )}
             </TableBody>

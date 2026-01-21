@@ -27,6 +27,7 @@ export default function NginxConfigsPage() {
   const [formName, setFormName] = useState("");
   const [formMode, setFormMode] = useState("auto");
   const [formSslMode, setFormSslMode] = useState("allow_http");
+  const [formSslEmail, setFormSslEmail] = useState("");
   const [formCorsEnabled, setFormCorsEnabled] = useState(true);
   const [formCorsAllowAll, setFormCorsAllowAll] = useState(true);
   const [formLocations, setFormLocations] = useState<LocationConfig[]>([
@@ -60,6 +61,7 @@ export default function NginxConfigsPage() {
     setFormName("");
     setFormMode("auto");
     setFormSslMode("allow_http");
+    setFormSslEmail("");
     setFormCorsEnabled(true);
     setFormCorsAllowAll(true);
     setFormLocations([{ path: "/", type: "proxy", proxy_url: "" }]);
@@ -72,6 +74,7 @@ export default function NginxConfigsPage() {
     try {
       const structured: NginxConfigStructured = {
         ssl_mode: formSslMode,
+        ssl_email: formSslEmail || undefined,
         locations: formLocations,
         cors: {
           enabled: formCorsEnabled,
@@ -101,6 +104,7 @@ export default function NginxConfigsPage() {
     try {
       const structured: NginxConfigStructured = {
         ssl_mode: formSslMode,
+        ssl_email: formSslEmail || undefined,
         locations: formLocations,
         cors: {
           enabled: formCorsEnabled,
@@ -144,6 +148,7 @@ export default function NginxConfigsPage() {
     if (config.structured_json) {
       const structured = config.structured_json as NginxConfigStructured;
       setFormSslMode(structured.ssl_mode || "allow_http");
+      setFormSslEmail(structured.ssl_email || "");
       setFormCorsEnabled(structured.cors?.enabled ?? true);
       setFormCorsAllowAll(structured.cors?.allow_all ?? true);
       setFormLocations(structured.locations || [{ path: "/", type: "proxy", proxy_url: "" }]);
@@ -310,6 +315,21 @@ export default function NginxConfigsPage() {
                     </SelectContent>
                   </Select>
                 </div>
+
+                {formSslMode !== "disabled" && (
+                  <div className="space-y-2">
+                    <Label>SSL Certificate Email</Label>
+                    <Input
+                      type="email"
+                      placeholder="admin@yourdomain.com"
+                      value={formSslEmail}
+                      onChange={(e) => setFormSslEmail(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Required for Let&apos;s Encrypt certificate issuance
+                    </p>
+                  </div>
+                )}
 
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
@@ -527,6 +547,21 @@ export default function NginxConfigsPage() {
                     </SelectContent>
                   </Select>
                 </div>
+
+                {formSslMode !== "disabled" && (
+                  <div className="space-y-2">
+                    <Label>SSL Certificate Email</Label>
+                    <Input
+                      type="email"
+                      placeholder="admin@yourdomain.com"
+                      value={formSslEmail}
+                      onChange={(e) => setFormSslEmail(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Required for Let&apos;s Encrypt certificate issuance
+                    </p>
+                  </div>
+                )}
 
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">

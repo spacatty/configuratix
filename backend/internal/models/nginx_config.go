@@ -21,6 +21,7 @@ type NginxConfig struct {
 // NginxConfigStructured represents the structured form data
 type NginxConfigStructured struct {
 	SSLMode   string             `json:"ssl_mode"`   // disabled, allow_http, redirect_https
+	SSLEmail  string             `json:"ssl_email,omitempty"` // Email for SSL certificate issuance
 	Locations []LocationConfig   `json:"locations"`
 	CORS      *CORSConfig        `json:"cors"`
 }

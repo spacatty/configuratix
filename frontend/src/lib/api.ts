@@ -220,6 +220,7 @@ export interface NginxConfig {
 
 export interface NginxConfigStructured {
   ssl_mode: string;
+  ssl_email?: string; // Email for SSL certificate issuance
   locations: LocationConfig[];
   cors: CORSConfig | null;
 }

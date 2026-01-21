@@ -343,14 +343,19 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 		var newAgentID uuid.UUID
 		tx.Get(&newAgentID, "SELECT agent_id FROM machines WHERE id = $1", req.MachineID)
 		if newAgentID != uuid.Nil {
-			// Determine if SSL is enabled
+			// Determine if SSL is enabled and get SSL email
 			sslEnabled := "true"
+			sslEmail := "admin@example.com"
 			var structured struct {
-				SSLMode string `json:"ssl_mode"`
+				SSLMode  string `json:"ssl_mode"`
+				SSLEmail string `json:"ssl_email"`
 			}
 			json.Unmarshal(configJSON, &structured)
 			if structured.SSLMode == "disabled" {
 				sslEnabled = "false"
+			}
+			if structured.SSLEmail != "" {
+				sslEmail = structured.SSLEmail
 			}
 
 			// Use template-based job
@@ -360,6 +365,7 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 					"domain":       domainFQDN,
 					"nginx_config": nginxConfig,
 					"ssl_enabled":  sslEnabled,
+					"ssl_email":    sslEmail,
 				})
 				tx.Exec(`
 					INSERT INTO jobs (agent_id, type, payload_json, status)
