@@ -52,6 +52,13 @@ export interface UserWithDetails extends User {
   project_count: number;
 }
 
+export interface UFWRule {
+  port: string;
+  protocol: string;
+  action: string;
+  from: string;
+}
+
 export interface Machine {
   id: string;
   agent_id: string | null;
@@ -74,6 +81,7 @@ export interface Machine {
   // Settings
   ssh_port: number;
   ufw_enabled: boolean;
+  ufw_rules: UFWRule[] | null;
   fail2ban_enabled: boolean;
   fail2ban_config: string | null;
   root_password_set: boolean;

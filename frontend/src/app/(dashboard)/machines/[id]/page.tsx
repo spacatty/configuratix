@@ -713,61 +713,56 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
-                  {/* SSH Port Rule */}
-                  <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50 group">
-                    <div className="flex items-center gap-3">
-                      <Badge variant="outline" className="w-12 justify-center">TCP</Badge>
-                      <span className="font-mono font-medium">{machine.ssh_port || 22}</span>
-                      <span className="text-xs text-muted-foreground">(SSH)</span>
+                  {/* Display actual UFW rules from agent */}
+                  {machine.ufw_rules && machine.ufw_rules.length > 0 ? (
+                    machine.ufw_rules.map((rule, idx) => {
+                      const isSSHPort = rule.port === String(machine.ssh_port || 22);
+                      const portLabel = rule.port === "80" ? "HTTP" : 
+                                       rule.port === "443" ? "HTTPS" : 
+                                       isSSHPort ? "SSH" : null;
+                      return (
+                        <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-muted/50 group">
+                          <div className="flex items-center gap-3">
+                            <Badge variant="outline" className="w-12 justify-center uppercase">
+                              {rule.protocol}
+                            </Badge>
+                            <span className="font-mono font-medium">{rule.port}</span>
+                            {portLabel && (
+                              <span className="text-xs text-muted-foreground">({portLabel})</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge className={
+                              rule.action === "ALLOW" 
+                                ? "bg-green-500/20 text-green-400 border-green-500/30"
+                                : "bg-red-500/20 text-red-400 border-red-500/30"
+                            }>
+                              {rule.action}
+                            </Badge>
+                            {isSSHPort ? (
+                              <span className="text-xs text-muted-foreground">Protected</span>
+                            ) : (
+                              <Button 
+                                size="sm" 
+                                variant="ghost" 
+                                className="h-6 px-2 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
+                                onClick={() => handleRemoveUFWRule(rule.port, rule.protocol)}
+                              >
+                                Delete
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-center text-muted-foreground py-4">
+                      No firewall rules detected. Agent may need to report rules.
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
-                      <span className="text-xs text-muted-foreground">Protected</span>
-                    </div>
-                  </div>
-                  
-                  {/* HTTP */}
-                  <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50 group">
-                    <div className="flex items-center gap-3">
-                      <Badge variant="outline" className="w-12 justify-center">TCP</Badge>
-                      <span className="font-mono font-medium">80</span>
-                      <span className="text-xs text-muted-foreground">(HTTP)</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
-                      <Button 
-                        size="sm" 
-                        variant="ghost" 
-                        className="h-6 px-2 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
-                        onClick={() => handleRemoveUFWRule("80", "tcp")}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  </div>
-                  
-                  {/* HTTPS */}
-                  <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50 group">
-                    <div className="flex items-center gap-3">
-                      <Badge variant="outline" className="w-12 justify-center">TCP</Badge>
-                      <span className="font-mono font-medium">443</span>
-                      <span className="text-xs text-muted-foreground">(HTTPS)</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
-                      <Button 
-                        size="sm" 
-                        variant="ghost" 
-                        className="h-6 px-2 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
-                        onClick={() => handleRemoveUFWRule("443", "tcp")}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  </div>
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground text-center mt-4">
-                  Hover over rules to see actions. SSH port is protected from deletion.
+                  Rules sync every 5 seconds from agent. SSH port is protected from deletion.
                 </p>
               </CardContent>
             </Card>

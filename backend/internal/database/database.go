@@ -60,6 +60,7 @@ func (db *DB) RunMigrations() error {
 		"003_machine_settings.sql",
 		"004_users_projects_roles.sql",
 		"005_landings.sql",
+		"006_ufw_rules.sql",
 	}
 
 	// Base paths to try

@@ -193,15 +193,23 @@ type Config struct {
 }
 
 type Stats struct {
-	Version     string  ` + "`" + `json:"version"` + "`" + `
-	CPUPercent  float64 ` + "`" + `json:"cpu_percent"` + "`" + `
-	MemoryUsed  int64   ` + "`" + `json:"memory_used"` + "`" + `
-	MemoryTotal int64   ` + "`" + `json:"memory_total"` + "`" + `
-	DiskUsed    int64   ` + "`" + `json:"disk_used"` + "`" + `
-	DiskTotal   int64   ` + "`" + `json:"disk_total"` + "`" + `
-	SSHPort     int     ` + "`" + `json:"ssh_port"` + "`" + `
-	UFWEnabled  bool    ` + "`" + `json:"ufw_enabled"` + "`" + `
-	Fail2ban    bool    ` + "`" + `json:"fail2ban_enabled"` + "`" + `
+	Version     string     ` + "`" + `json:"version"` + "`" + `
+	CPUPercent  float64    ` + "`" + `json:"cpu_percent"` + "`" + `
+	MemoryUsed  int64      ` + "`" + `json:"memory_used"` + "`" + `
+	MemoryTotal int64      ` + "`" + `json:"memory_total"` + "`" + `
+	DiskUsed    int64      ` + "`" + `json:"disk_used"` + "`" + `
+	DiskTotal   int64      ` + "`" + `json:"disk_total"` + "`" + `
+	SSHPort     int        ` + "`" + `json:"ssh_port"` + "`" + `
+	UFWEnabled  bool       ` + "`" + `json:"ufw_enabled"` + "`" + `
+	UFWRules    []UFWRule  ` + "`" + `json:"ufw_rules"` + "`" + `
+	Fail2ban    bool       ` + "`" + `json:"fail2ban_enabled"` + "`" + `
+}
+
+type UFWRule struct {
+	Port     string ` + "`" + `json:"port"` + "`" + `
+	Protocol string ` + "`" + `json:"protocol"` + "`" + `
+	Action   string ` + "`" + `json:"action"` + "`" + `
+	From     string ` + "`" + `json:"from"` + "`" + `
 }
 
 func loadConfig() (*Config, error) {
@@ -304,9 +312,11 @@ func getStats() Stats {
 	// SSH Port
 	stats.SSHPort = getSSHPort()
 	
-	// UFW status
+	// UFW status and rules
 	if out, err := exec.Command("ufw", "status").Output(); err == nil {
-		stats.UFWEnabled = strings.Contains(string(out), "Status: active")
+		outStr := string(out)
+		stats.UFWEnabled = strings.Contains(outStr, "Status: active")
+		stats.UFWRules = parseUFWRules(outStr)
 	}
 	
 	// Fail2ban status
@@ -315,6 +325,59 @@ func getStats() Stats {
 	}
 	
 	return stats
+}
+
+func parseUFWRules(output string) []UFWRule {
+	var rules []UFWRule
+	lines := strings.Split(output, "\n")
+	inRules := false
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" { continue }
+		
+		// Skip header lines until we find the dashed separator
+		if strings.HasPrefix(line, "--") {
+			inRules = true
+			continue
+		}
+		if !inRules { continue }
+		
+		// Parse rule line: "80/tcp                     ALLOW       Anywhere"
+		// or: "22/tcp (v6)                ALLOW       Anywhere (v6)"
+		parts := strings.Fields(line)
+		if len(parts) < 3 { continue }
+		
+		portProto := parts[0]
+		action := parts[1]
+		from := "Anywhere"
+		if len(parts) >= 3 {
+			from = strings.Join(parts[2:], " ")
+		}
+		
+		// Skip IPv6 duplicates for cleaner display
+		if strings.Contains(portProto, "(v6)") { continue }
+		
+		// Parse port/protocol
+		portProto = strings.TrimSuffix(portProto, "(v6)")
+		portProto = strings.TrimSpace(portProto)
+		
+		port := portProto
+		protocol := "tcp"
+		if strings.Contains(portProto, "/") {
+			pp := strings.Split(portProto, "/")
+			port = pp[0]
+			if len(pp) > 1 { protocol = pp[1] }
+		}
+		
+		rules = append(rules, UFWRule{
+			Port:     port,
+			Protocol: protocol,
+			Action:   action,
+			From:     from,
+		})
+	}
+	return rules
 }
 
 func getCPUCount() int {

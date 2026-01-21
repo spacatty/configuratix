@@ -143,17 +143,26 @@ func (h *AgentHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// UFWRule represents a single UFW firewall rule
+type UFWRule struct {
+	Port     string `json:"port"`
+	Protocol string `json:"protocol"`
+	Action   string `json:"action"`
+	From     string `json:"from"`
+}
+
 // HeartbeatRequest includes system stats from agent
 type HeartbeatRequest struct {
-	Version     string  `json:"version"`
-	CPUPercent  float64 `json:"cpu_percent"`
-	MemoryUsed  int64   `json:"memory_used"`
-	MemoryTotal int64   `json:"memory_total"`
-	DiskUsed    int64   `json:"disk_used"`
-	DiskTotal   int64   `json:"disk_total"`
-	SSHPort     int     `json:"ssh_port"`
-	UFWEnabled  bool    `json:"ufw_enabled"`
-	Fail2ban    bool    `json:"fail2ban_enabled"`
+	Version     string    `json:"version"`
+	CPUPercent  float64   `json:"cpu_percent"`
+	MemoryUsed  int64     `json:"memory_used"`
+	MemoryTotal int64     `json:"memory_total"`
+	DiskUsed    int64     `json:"disk_used"`
+	DiskTotal   int64     `json:"disk_total"`
+	SSHPort     int       `json:"ssh_port"`
+	UFWEnabled  bool      `json:"ufw_enabled"`
+	UFWRules    []UFWRule `json:"ufw_rules"`
+	Fail2ban    bool      `json:"fail2ban_enabled"`
 }
 
 // Heartbeat handles agent heartbeat
@@ -176,6 +185,9 @@ func (h *AgentHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to update agent heartbeat: %v", err)
 	}
 
+	// Serialize UFW rules to JSON
+	ufwRulesJSON, _ := json.Marshal(req.UFWRules)
+
 	// Update machine stats
 	_, err = h.db.Exec(`
 		UPDATE machines SET 
@@ -187,10 +199,11 @@ func (h *AgentHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 			ssh_port = CASE WHEN $6 > 0 THEN $6 ELSE ssh_port END,
 			ufw_enabled = $7,
 			fail2ban_enabled = $8,
+			ufw_rules_json = $9,
 			updated_at = NOW()
-		WHERE agent_id = $9
+		WHERE agent_id = $10
 	`, req.CPUPercent, req.MemoryUsed, req.MemoryTotal, req.DiskUsed, req.DiskTotal,
-		req.SSHPort, req.UFWEnabled, req.Fail2ban, agentID)
+		req.SSHPort, req.UFWEnabled, req.Fail2ban, ufwRulesJSON, agentID)
 	if err != nil {
 		log.Printf("Failed to update machine stats: %v", err)
 	}

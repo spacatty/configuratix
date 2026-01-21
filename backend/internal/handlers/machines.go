@@ -42,13 +42,14 @@ type MachineWithDetails struct {
 	NotesMD         *string    `db:"notes_md" json:"notes_md"`
 	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt       time.Time  `db:"updated_at" json:"updated_at"`
-	AccessTokenHash *string    `db:"access_token_hash" json:"-"` // Hidden from API
-	AccessTokenSet  bool       `db:"access_token_set" json:"access_token_set"`
-	SSHPort         int        `db:"ssh_port" json:"ssh_port"`
-	UFWEnabled      bool       `db:"ufw_enabled" json:"ufw_enabled"`
-	Fail2banEnabled bool       `db:"fail2ban_enabled" json:"fail2ban_enabled"`
-	Fail2banConfig  *string    `db:"fail2ban_config" json:"fail2ban_config"`
-	RootPasswordSet bool       `db:"root_password_set" json:"root_password_set"`
+	AccessTokenHash *string         `db:"access_token_hash" json:"-"` // Hidden from API
+	AccessTokenSet  bool            `db:"access_token_set" json:"access_token_set"`
+	SSHPort         int             `db:"ssh_port" json:"ssh_port"`
+	UFWEnabled      bool            `db:"ufw_enabled" json:"ufw_enabled"`
+	UFWRulesJSON    json.RawMessage `db:"ufw_rules_json" json:"ufw_rules"`
+	Fail2banEnabled bool            `db:"fail2ban_enabled" json:"fail2ban_enabled"`
+	Fail2banConfig  *string         `db:"fail2ban_config" json:"fail2ban_config"`
+	RootPasswordSet bool            `db:"root_password_set" json:"root_password_set"`
 	PHPInstalled    bool       `db:"php_installed" json:"php_installed"`
 	PHPVersion      *string    `db:"php_version" json:"php_version"`
 	CPUPercent      float64    `db:"cpu_percent" json:"cpu_percent"`
