@@ -270,6 +270,7 @@ func (h *LandingsHandler) ServePreview(w http.ResponseWriter, r *http.Request) {
 	urlPath := strings.TrimPrefix(r.URL.Path, "/api/landings/preview/")
 	parts := strings.SplitN(urlPath, "/", 2)
 	if len(parts) == 0 || parts[0] == "" {
+		log.Printf("Preview: missing token in URL: %s", r.URL.Path)
 		http.Error(w, "Missing preview token", http.StatusBadRequest)
 		return
 	}
@@ -280,22 +281,34 @@ func (h *LandingsHandler) ServePreview(w http.ResponseWriter, r *http.Request) {
 		filePath = parts[1]
 	}
 
-	// Validate token format
+	// Validate token format (32 hex chars)
 	if len(token) != 32 || !isAlphanumeric(token) {
+		log.Printf("Preview: invalid token format: %s (len=%d)", token, len(token))
 		http.Error(w, "Invalid preview token", http.StatusBadRequest)
 		return
 	}
 
-	// Build full path
-	previewDir := filepath.Join(PreviewBaseDir, token)
+	// Build full path - use absolute path from working directory
+	previewDir, _ := filepath.Abs(filepath.Join(PreviewBaseDir, token))
 	if filePath == "" {
 		filePath = "index.html"
 	}
 	fullPath := filepath.Join(previewDir, filePath)
 
+	log.Printf("Preview: token=%s, file=%s, fullPath=%s", token, filePath, fullPath)
+
 	// Security: Prevent path traversal
-	if !strings.HasPrefix(fullPath, filepath.Clean(previewDir)+string(os.PathSeparator)) && fullPath != filepath.Clean(previewDir) {
+	cleanPreviewDir := filepath.Clean(previewDir)
+	if !strings.HasPrefix(fullPath, cleanPreviewDir) {
+		log.Printf("Preview: path traversal attempt: %s not in %s", fullPath, cleanPreviewDir)
 		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	// Check if directory exists first
+	if _, err := os.Stat(previewDir); os.IsNotExist(err) {
+		log.Printf("Preview: directory does not exist: %s", previewDir)
+		http.Error(w, "Preview not found - landing may have been deleted", http.StatusNotFound)
 		return
 	}
 
@@ -307,15 +320,20 @@ func (h *LandingsHandler) ServePreview(w http.ResponseWriter, r *http.Request) {
 			indexPath := filepath.Join(fullPath, "index.html")
 			if _, err := os.Stat(indexPath); err == nil {
 				fullPath = indexPath
+				info, _ = os.Stat(fullPath)
 			} else {
+				log.Printf("Preview: file not found: %s", fullPath)
 				http.Error(w, "File not found", http.StatusNotFound)
 				return
 			}
 		} else {
+			log.Printf("Preview: stat error: %v", err)
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
-	} else if info.IsDir() {
+	}
+	
+	if info != nil && info.IsDir() {
 		fullPath = filepath.Join(fullPath, "index.html")
 		if _, err := os.Stat(fullPath); err != nil {
 			http.Error(w, "File not found", http.StatusNotFound)

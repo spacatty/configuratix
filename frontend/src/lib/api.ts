@@ -273,6 +273,10 @@ class ApiClient {
     }
   }
 
+  getApiUrl(): string {
+    return this.baseUrl;
+  }
+
   getToken(): string | null {
     return this.token;
   }
