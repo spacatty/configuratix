@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 
+	"configuratix/backend/internal/audit"
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
 	"configuratix/backend/internal/models"
@@ -158,6 +159,12 @@ func (h *AdminHandler) CreateAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Audit log
+	audit.Log(audit.EventUserCreated, claims.UserID, user.ID.String(), map[string]interface{}{
+		"email": req.Email,
+		"role":  req.Role,
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(user)
@@ -204,11 +211,21 @@ func (h *AdminHandler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get current role for audit
+	var oldRole string
+	h.db.Get(&oldRole, "SELECT role FROM users WHERE id = $1", userID)
+
 	_, err = h.db.Exec("UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2", req.Role, userID)
 	if err != nil {
 		http.Error(w, "Failed to update role", http.StatusInternalServerError)
 		return
 	}
+
+	// Audit log
+	audit.Log(audit.EventRoleChange, claims.UserID, userID.String(), map[string]interface{}{
+		"old_role": oldRole,
+		"new_role": req.Role,
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "Role updated"})
@@ -270,6 +287,11 @@ func (h *AdminHandler) ChangeUserPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Audit log - don't log the actual password!
+	audit.Log(audit.EventAdminPasswordChange, claims.UserID, userID.String(), map[string]interface{}{
+		"target_role": targetRole,
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "Password updated"})
 }
@@ -311,6 +333,11 @@ func (h *AdminHandler) Reset2FA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Audit log
+	audit.Log(audit.Event2FAReset, claims.UserID, userID.String(), map[string]interface{}{
+		"target_role": targetRole,
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "2FA reset successfully"})
 }
@@ -330,6 +357,10 @@ func (h *AdminHandler) ResetMachineToken(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Get machine owner for audit
+	var ownerID *uuid.UUID
+	h.db.Get(&ownerID, "SELECT owner_id FROM machines WHERE id = $1", machineID)
+
 	// Clear the machine's access token
 	_, err = h.db.Exec(`
 		UPDATE machines SET access_token_hash = NULL, access_token_set = false, updated_at = NOW()
@@ -339,6 +370,15 @@ func (h *AdminHandler) ResetMachineToken(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Failed to reset token", http.StatusInternalServerError)
 		return
 	}
+
+	// Audit log
+	targetOwner := ""
+	if ownerID != nil {
+		targetOwner = ownerID.String()
+	}
+	audit.Log(audit.EventMachineTokenReset, claims.UserID, machineID.String(), map[string]interface{}{
+		"machine_owner": targetOwner,
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "Machine access token reset"})
@@ -385,11 +425,21 @@ func (h *AdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get email for audit before deletion
+	var targetEmail string
+	h.db.Get(&targetEmail, "SELECT email FROM users WHERE id = $1", userID)
+
 	_, err = h.db.Exec("DELETE FROM users WHERE id = $1", userID)
 	if err != nil {
 		http.Error(w, "Failed to delete user", http.StatusInternalServerError)
 		return
 	}
+
+	// Audit log
+	audit.Log(audit.EventUserDeleted, claims.UserID, userID.String(), map[string]interface{}{
+		"target_email": targetEmail,
+		"target_role":  targetRole,
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }

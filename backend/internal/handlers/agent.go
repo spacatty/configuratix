@@ -277,6 +277,8 @@ func (h *AgentHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // AgentAuthMiddleware validates agent API key
+// Note: API keys are stored as bcrypt hashes, so we need to iterate through agents
+// For production with many agents, consider adding a key prefix/identifier
 func AgentAuthMiddleware(db *database.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -286,25 +288,40 @@ func AgentAuthMiddleware(db *database.DB) func(http.Handler) http.Handler {
 				return
 			}
 
+			// Security: Limit key length to prevent DoS
+			if len(apiKey) > 256 {
+				http.Error(w, "Invalid API key", http.StatusUnauthorized)
+				return
+			}
+
 			// Find agent by checking API key hash
+			// Only get active agents (seen in last 30 days) to reduce iteration
 			var agents []models.Agent
-			err := db.Select(&agents, "SELECT * FROM agents WHERE api_key_hash IS NOT NULL")
+			err := db.Select(&agents, `
+				SELECT id, api_key_hash FROM agents 
+				WHERE api_key_hash IS NOT NULL 
+				AND (last_seen IS NULL OR last_seen > NOW() - INTERVAL '30 days')
+			`)
 			if err != nil {
+				log.Printf("Agent auth DB error: %v", err)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
 
 			var matchedAgent *models.Agent
-			for _, agent := range agents {
+			for i := range agents {
+				agent := &agents[i]
 				if agent.APIKeyHash != nil {
 					if err := bcrypt.CompareHashAndPassword([]byte(*agent.APIKeyHash), []byte(apiKey)); err == nil {
-						matchedAgent = &agent
+						matchedAgent = agent
 						break
 					}
 				}
 			}
 
 			if matchedAgent == nil {
+				// Log failed attempts (rate limit this in production)
+				log.Printf("Invalid agent API key attempt")
 				http.Error(w, "Invalid API key", http.StatusUnauthorized)
 				return
 			}
