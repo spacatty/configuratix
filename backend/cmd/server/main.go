@@ -163,6 +163,13 @@ func main() {
 		http.StripPrefix("/api/landings/preview/", http.HandlerFunc(landingsHandler.ServePreview)),
 	)
 
+	// Terminal WebSocket
+	terminalHandler := handlers.NewTerminalHandler(db)
+	apiRouter.HandleFunc("/machines/{id}/terminal", terminalHandler.UserTerminalConnect).Methods("GET")
+	apiRouter.HandleFunc("/machines/{id}/terminal/status", terminalHandler.GetTerminalStatus).Methods("GET", "OPTIONS")
+	// Agent terminal WebSocket (uses agent auth)
+	agentRouter.HandleFunc("/terminal", terminalHandler.AgentTerminalConnect).Methods("GET")
+
 	// Start domain health check scheduler
 	checkInterval := 1 // Default: 1 hour
 	if intervalStr := os.Getenv("CHECK_INTERVAL_HOURS"); intervalStr != "" {
