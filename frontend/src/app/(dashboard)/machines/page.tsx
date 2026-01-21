@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DataTable } from "@/components/ui/data-table";
-import { api, Machine, EnrollmentToken, ProjectWithStats } from "@/lib/api";
+import { api, Machine, EnrollmentToken, ProjectWithStats, BACKEND_URL } from "@/lib/api";
 import { toast } from "sonner";
 import { 
   Copy, 
@@ -332,8 +332,9 @@ export default function MachinesPage() {
     );
   }
 
+  // Use backend URL for install script (backend serves it on port 8080)
   const installCommand = createdToken 
-    ? `curl -sSL ${window.location.origin}/install.sh | sudo bash -s -- ${createdToken.token}`
+    ? `curl -sSL ${BACKEND_URL}/install.sh | sudo bash -s -- ${createdToken.token}`
     : "";
 
   return (

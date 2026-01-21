@@ -1,4 +1,8 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+// Backend API URL - used for all API calls and agent install script
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+
+// Backend URL without /api suffix - for install script and direct backend access
+export const BACKEND_URL = API_URL.replace(/\/api\/?$/, "");
 
 export interface LoginRequest {
   email: string;
