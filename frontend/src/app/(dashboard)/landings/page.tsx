@@ -180,7 +180,7 @@ export default function LandingsPage() {
               <DropdownMenuLabel>Actions</DropdownMenuLabel>
               {landing.preview_path && (
                 <DropdownMenuItem 
-                  onClick={() => window.open(landing.preview_path, "_blank")}
+                  onClick={() => window.open(api.getApiUrl() + landing.preview_path, "_blank")}
                 >
                   <Eye className="mr-2 h-4 w-4" />
                   Preview
