@@ -75,6 +75,8 @@ func main() {
 	apiRouter.HandleFunc("/machines/{id}/ufw/rules", machinesHandler.AddUFWRule).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/ufw/rules", machinesHandler.RemoveUFWRule).Methods("DELETE", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/fail2ban", machinesHandler.ToggleFail2ban).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/logs", machinesHandler.GetMachineLogs).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/exec", machinesHandler.ExecTerminalCommand).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/enrollment-tokens", machinesHandler.ListEnrollmentTokens).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/enrollment-tokens", machinesHandler.CreateEnrollmentToken).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/enrollment-tokens/{id}", machinesHandler.DeleteEnrollmentToken).Methods("DELETE", "OPTIONS")

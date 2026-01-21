@@ -403,6 +403,22 @@ class ApiClient {
       }),
     });
   }
+
+  // Logs
+  async getMachineLogs(machineId: string, logType: string, lines?: number): Promise<{ logs: string }> {
+    const params = new URLSearchParams();
+    params.set("type", logType);
+    if (lines) params.set("lines", lines.toString());
+    return this.request<{ logs: string }>(`/api/machines/${machineId}/logs?${params}`);
+  }
+
+  // Terminal
+  async execTerminalCommand(machineId: string, command: string): Promise<{ output: string; exit_code: number }> {
+    return this.request<{ output: string; exit_code: number }>(`/api/machines/${machineId}/exec`, {
+      method: "POST",
+      body: JSON.stringify({ command }),
+    });
+  }
 }
 
 export const api = new ApiClient(API_URL);

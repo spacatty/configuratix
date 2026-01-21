@@ -428,3 +428,166 @@ func (h *MachinesHandler) RemoveUFWRule(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// GetMachineLogs creates a job to fetch logs and returns them
+func (h *MachinesHandler) GetMachineLogs(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	machineID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	logType := r.URL.Query().Get("type")
+	if logType == "" {
+		logType = "syslog"
+	}
+
+	lines := r.URL.Query().Get("lines")
+	if lines == "" {
+		lines = "100"
+	}
+
+	// Get agent_id for this machine
+	var agentID uuid.UUID
+	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
+	if err != nil {
+		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
+		return
+	}
+
+	// Map log types to file paths
+	logPaths := map[string]string{
+		"nginx_access": "/var/log/nginx/access.log",
+		"nginx_error":  "/var/log/nginx/error.log",
+		"syslog":       "/var/log/syslog",
+		"auth":         "/var/log/auth.log",
+		"fail2ban":     "/var/log/fail2ban.log",
+	}
+
+	logPath, ok := logPaths[logType]
+	if !ok {
+		http.Error(w, "Invalid log type", http.StatusBadRequest)
+		return
+	}
+
+	// Create a synchronous job to get logs
+	command := fmt.Sprintf("tail -n %s %s 2>/dev/null || echo 'Log file not found or empty'", lines, logPath)
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"steps": []map[string]interface{}{
+			{"action": "exec", "command": command, "timeout": 30},
+		},
+		"on_error": "stop",
+	})
+
+	var job models.Job
+	err = h.db.Get(&job, `
+		INSERT INTO jobs (agent_id, type, payload_json, status)
+		VALUES ($1, 'run', $2, 'pending')
+		RETURNING *
+	`, agentID, payload)
+	if err != nil {
+		log.Printf("Failed to create job: %v", err)
+		http.Error(w, "Failed to create job", http.StatusInternalServerError)
+		return
+	}
+
+	// Wait for job to complete (poll for up to 30 seconds)
+	for i := 0; i < 60; i++ {
+		time.Sleep(500 * time.Millisecond)
+		err = h.db.Get(&job, "SELECT * FROM jobs WHERE id = $1", job.ID)
+		if err != nil {
+			break
+		}
+		if job.Status == "completed" || job.Status == "failed" {
+			break
+		}
+	}
+
+	logs := ""
+	if job.Logs != nil {
+		logs = *job.Logs
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"logs": logs})
+}
+
+// ExecTerminalCommand creates a job to execute a terminal command
+func (h *MachinesHandler) ExecTerminalCommand(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	machineID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Command string `json:"command"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Command == "" {
+		http.Error(w, "Command is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get agent_id for this machine
+	var agentID uuid.UUID
+	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
+	if err != nil {
+		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
+		return
+	}
+
+	// Create job
+	payload, _ := json.Marshal(map[string]interface{}{
+		"steps": []map[string]interface{}{
+			{"action": "exec", "command": req.Command, "timeout": 60},
+		},
+		"on_error": "stop",
+	})
+
+	var job models.Job
+	err = h.db.Get(&job, `
+		INSERT INTO jobs (agent_id, type, payload_json, status)
+		VALUES ($1, 'run', $2, 'pending')
+		RETURNING *
+	`, agentID, payload)
+	if err != nil {
+		log.Printf("Failed to create job: %v", err)
+		http.Error(w, "Failed to create job", http.StatusInternalServerError)
+		return
+	}
+
+	// Wait for job to complete (poll for up to 60 seconds)
+	for i := 0; i < 120; i++ {
+		time.Sleep(500 * time.Millisecond)
+		err = h.db.Get(&job, "SELECT * FROM jobs WHERE id = $1", job.ID)
+		if err != nil {
+			break
+		}
+		if job.Status == "completed" || job.Status == "failed" {
+			break
+		}
+	}
+
+	output := ""
+	exitCode := 0
+	if job.Logs != nil {
+		output = *job.Logs
+	}
+	if job.Status == "failed" {
+		exitCode = 1
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"output":    output,
+		"exit_code": exitCode,
+	})
+}
+

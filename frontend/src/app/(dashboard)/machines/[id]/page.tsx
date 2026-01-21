@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, use } from "react";
+import { useState, useEffect, use, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,8 +11,10 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, Machine } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
+import { toast } from "sonner";
 
 const DEFAULT_FAIL2BAN_CONFIG = `[sshd]
 enabled = true
@@ -24,20 +26,41 @@ bantime = 3600
 findtime = 600
 `;
 
+const LOG_TYPES = [
+  { value: "nginx_access", label: "Nginx Access" },
+  { value: "nginx_error", label: "Nginx Error" },
+  { value: "syslog", label: "System Log" },
+  { value: "auth", label: "Auth Log" },
+  { value: "fail2ban", label: "Fail2ban" },
+];
+
 export default function MachineDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
   const [machine, setMachine] = useState<Machine | null>(null);
-  const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState("overview");
+
+  // Local state for edits (to prevent refresh issues)
+  const [localNotes, setLocalNotes] = useState("");
+  const [notesDirty, setNotesDirty] = useState(false);
   const [notesTab, setNotesTab] = useState<string>("preview");
+
+  // Optimistic UI states
+  const [ufwEnabled, setUfwEnabled] = useState(false);
+  const [fail2banEnabled, setFail2banEnabled] = useState(false);
+  const [pendingUFW, setPendingUFW] = useState(false);
+  const [pendingFail2ban, setPendingFail2ban] = useState(false);
 
   // Dialogs
   const [showAddPortDialog, setShowAddPortDialog] = useState(false);
   const [showSSHPortDialog, setShowSSHPortDialog] = useState(false);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
   const [showFail2banDialog, setShowFail2banDialog] = useState(false);
+  const [showConfirmUFWDialog, setShowConfirmUFWDialog] = useState(false);
+  const [showConfirmFail2banDialog, setShowConfirmFail2banDialog] = useState(false);
+  const [pendingToggleValue, setPendingToggleValue] = useState(false);
 
   // Form states
   const [newPort, setNewPort] = useState("");
@@ -47,38 +70,128 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
   const [confirmPassword, setConfirmPassword] = useState("");
   const [fail2banConfig, setFail2banConfig] = useState(DEFAULT_FAIL2BAN_CONFIG);
 
+  // Logs state
+  const [selectedLogType, setSelectedLogType] = useState("nginx_access");
+  const [logLines, setLogLines] = useState(100);
+  const [logs, setLogs] = useState("");
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logSearch, setLogSearch] = useState("");
+  const [autoRefreshLogs, setAutoRefreshLogs] = useState(false);
+  const logsRef = useRef<HTMLPreElement>(null);
+
+  // Terminal state
+  const [terminalCommand, setTerminalCommand] = useState("");
+  const [terminalHistory, setTerminalHistory] = useState<Array<{ command: string; output: string; exitCode: number }>>([]);
+  const [terminalLoading, setTerminalLoading] = useState(false);
+  const terminalRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+
+  // Initial load
   useEffect(() => {
     loadMachine();
-    const interval = setInterval(loadMachine, 5000); // Refresh every 5s for stats
+  }, [id]);
+
+  // Periodic refresh for stats only (not notes)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadMachineStats();
+    }, 5000);
     return () => clearInterval(interval);
   }, [id]);
+
+  // Auto-refresh logs
+  useEffect(() => {
+    if (autoRefreshLogs && activeTab === "logs") {
+      const interval = setInterval(loadLogs, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [autoRefreshLogs, activeTab, selectedLogType, logLines]);
 
   const loadMachine = async () => {
     try {
       const data = await api.getMachine(id);
       setMachine(data);
-      setNotes(data.notes_md || "");
+      // Only set notes if not dirty (user hasn't made edits)
+      if (!notesDirty) {
+        setLocalNotes(data.notes_md || "");
+      }
       if (data.fail2ban_config) {
         setFail2banConfig(data.fail2ban_config);
       }
+      setUfwEnabled(data.ufw_enabled);
+      setFail2banEnabled(data.fail2ban_enabled);
     } catch (err) {
       console.error("Failed to load machine:", err);
+      toast.error("Failed to load machine");
     } finally {
       setLoading(false);
     }
   };
 
+  const loadMachineStats = async () => {
+    try {
+      const data = await api.getMachine(id);
+      // Only update stats, not notes or config (preserve local edits)
+      setMachine(prev => prev ? {
+        ...prev,
+        cpu_percent: data.cpu_percent,
+        memory_used: data.memory_used,
+        memory_total: data.memory_total,
+        disk_used: data.disk_used,
+        disk_total: data.disk_total,
+        last_seen: data.last_seen,
+        ssh_port: data.ssh_port,
+        // Only update these if not pending
+        ufw_enabled: pendingUFW ? prev.ufw_enabled : data.ufw_enabled,
+        fail2ban_enabled: pendingFail2ban ? prev.fail2ban_enabled : data.fail2ban_enabled,
+      } : null);
+      
+      // Sync optimistic state with server if not pending
+      if (!pendingUFW) setUfwEnabled(data.ufw_enabled);
+      if (!pendingFail2ban) setFail2banEnabled(data.fail2ban_enabled);
+    } catch (err) {
+      console.error("Failed to load stats:", err);
+    }
+  };
+
+  const loadLogs = useCallback(async () => {
+    if (!machine) return;
+    setLogsLoading(true);
+    try {
+      const data = await api.getMachineLogs(machine.id, selectedLogType, logLines);
+      setLogs(data.logs);
+      // Auto-scroll to bottom
+      if (logsRef.current) {
+        logsRef.current.scrollTop = logsRef.current.scrollHeight;
+      }
+    } catch (err) {
+      console.error("Failed to load logs:", err);
+      toast.error("Failed to load logs");
+    } finally {
+      setLogsLoading(false);
+    }
+  }, [machine, selectedLogType, logLines]);
+
   const handleSaveNotes = async () => {
     if (!machine) return;
     setSaving(true);
     try {
-      await api.updateMachineNotes(machine.id, notes);
+      await api.updateMachineNotes(machine.id, localNotes);
+      setNotesDirty(false);
+      toast.success("Notes saved successfully");
     } catch (err) {
       console.error("Failed to save notes:", err);
-      alert("Failed to save notes");
+      toast.error("Failed to save notes");
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleNotesChange = (value: string) => {
+    setLocalNotes(value);
+    setNotesDirty(true);
   };
 
   const handleDelete = async () => {
@@ -86,32 +199,63 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
     if (!confirm("Are you sure you want to delete this machine? This action cannot be undone.")) return;
     try {
       await api.deleteMachine(machine.id);
+      toast.success("Machine deleted");
       router.push("/machines");
     } catch (err) {
       console.error("Failed to delete machine:", err);
-      alert("Failed to delete machine");
+      toast.error("Failed to delete machine");
     }
   };
 
-  const handleToggleUFW = async () => {
+  const handleUFWToggleRequest = (newValue: boolean) => {
+    setPendingToggleValue(newValue);
+    setShowConfirmUFWDialog(true);
+  };
+
+  const handleConfirmUFWToggle = async () => {
     if (!machine) return;
+    setShowConfirmUFWDialog(false);
+    
+    // Optimistic update
+    setUfwEnabled(pendingToggleValue);
+    setPendingUFW(true);
+    
     try {
-      await api.toggleUFW(machine.id, !machine.ufw_enabled);
-      loadMachine();
+      await api.toggleUFW(machine.id, pendingToggleValue);
+      toast.success(`Firewall ${pendingToggleValue ? "enabled" : "disabled"} job created`);
+      // Wait a bit then allow server sync
+      setTimeout(() => setPendingUFW(false), 10000);
     } catch (err) {
       console.error("Failed to toggle UFW:", err);
-      alert("Failed to toggle UFW");
+      // Revert optimistic update
+      setUfwEnabled(!pendingToggleValue);
+      setPendingUFW(false);
+      toast.error("Failed to toggle firewall");
     }
   };
 
-  const handleToggleFail2ban = async () => {
+  const handleFail2banToggleRequest = (newValue: boolean) => {
+    setPendingToggleValue(newValue);
+    setShowConfirmFail2banDialog(true);
+  };
+
+  const handleConfirmFail2banToggle = async () => {
     if (!machine) return;
+    setShowConfirmFail2banDialog(false);
+    
+    // Optimistic update
+    setFail2banEnabled(pendingToggleValue);
+    setPendingFail2ban(true);
+    
     try {
-      await api.toggleFail2ban(machine.id, !machine.fail2ban_enabled, fail2banConfig);
-      loadMachine();
+      await api.toggleFail2ban(machine.id, pendingToggleValue, fail2banConfig);
+      toast.success(`Fail2ban ${pendingToggleValue ? "enabled" : "disabled"} job created`);
+      setTimeout(() => setPendingFail2ban(false), 10000);
     } catch (err) {
       console.error("Failed to toggle fail2ban:", err);
-      alert("Failed to toggle fail2ban");
+      setFail2banEnabled(!pendingToggleValue);
+      setPendingFail2ban(false);
+      toast.error("Failed to toggle Fail2ban");
     }
   };
 
@@ -119,29 +263,28 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
     if (!machine) return;
     const port = parseInt(sshPort);
     if (isNaN(port) || port < 1024 || port > 65535) {
-      alert("Port must be between 1024 and 65535");
+      toast.error("Port must be between 1024 and 65535");
       return;
     }
     try {
       await api.changeSSHPort(machine.id, port);
       setShowSSHPortDialog(false);
       setSSHPort("");
-      alert("SSH port change job created. The agent will apply this change.");
-      loadMachine();
+      toast.success("SSH port change job created");
     } catch (err) {
       console.error("Failed to change SSH port:", err);
-      alert("Failed to change SSH port");
+      toast.error("Failed to change SSH port");
     }
   };
 
   const handleChangePassword = async () => {
     if (!machine) return;
     if (newPassword !== confirmPassword) {
-      alert("Passwords do not match");
+      toast.error("Passwords do not match");
       return;
     }
     if (newPassword.length < 8) {
-      alert("Password must be at least 8 characters");
+      toast.error("Password must be at least 8 characters");
       return;
     }
     try {
@@ -149,11 +292,10 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
       setShowPasswordDialog(false);
       setNewPassword("");
       setConfirmPassword("");
-      alert("Root password change job created. The agent will apply this change.");
-      loadMachine();
+      toast.success("Root password change job created");
     } catch (err) {
       console.error("Failed to change password:", err);
-      alert("Failed to change password");
+      toast.error("Failed to change password");
     }
   };
 
@@ -163,23 +305,96 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
       await api.addUFWRule(machine.id, newPort, newProtocol);
       setShowAddPortDialog(false);
       setNewPort("");
-      alert("UFW rule job created. The agent will apply this change.");
+      toast.success("UFW rule job created");
     } catch (err) {
       console.error("Failed to add UFW rule:", err);
-      alert("Failed to add UFW rule");
+      toast.error("Failed to add UFW rule");
     }
   };
 
   const handleSaveFail2banConfig = async () => {
     if (!machine) return;
     try {
-      await api.toggleFail2ban(machine.id, machine.fail2ban_enabled, fail2banConfig);
+      await api.toggleFail2ban(machine.id, fail2banEnabled, fail2banConfig);
       setShowFail2banDialog(false);
-      alert("Fail2ban config update job created.");
-      loadMachine();
+      toast.success("Fail2ban config update job created");
     } catch (err) {
       console.error("Failed to update fail2ban config:", err);
-      alert("Failed to update fail2ban config");
+      toast.error("Failed to update fail2ban config");
+    }
+  };
+
+  const handleDownloadLogs = () => {
+    const blob = new Blob([logs], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${machine?.hostname || "machine"}-${selectedLogType}-${new Date().toISOString()}.log`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Logs downloaded");
+  };
+
+  const filteredLogs = logSearch
+    ? logs.split("\n").filter(line => line.toLowerCase().includes(logSearch.toLowerCase())).join("\n")
+    : logs;
+
+  const handleTerminalSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!machine || !terminalCommand.trim()) return;
+    
+    setTerminalLoading(true);
+    const cmd = terminalCommand.trim();
+    setCommandHistory(prev => [...prev.filter(c => c !== cmd), cmd]);
+    setHistoryIndex(-1);
+    
+    try {
+      const result = await api.execTerminalCommand(machine.id, cmd);
+      setTerminalHistory(prev => [...prev, {
+        command: cmd,
+        output: result.output,
+        exitCode: result.exit_code,
+      }]);
+      setTerminalCommand("");
+      // Scroll to bottom
+      setTimeout(() => {
+        if (terminalRef.current) {
+          terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+        }
+      }, 50);
+    } catch (err) {
+      console.error("Terminal command failed:", err);
+      setTerminalHistory(prev => [...prev, {
+        command: cmd,
+        output: `Error: ${err instanceof Error ? err.message : "Command failed"}`,
+        exitCode: 1,
+      }]);
+    } finally {
+      setTerminalLoading(false);
+      setTerminalCommand("");
+    }
+  };
+
+  const handleTerminalKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (commandHistory.length > 0) {
+        const newIndex = historyIndex === -1 ? commandHistory.length - 1 : Math.max(0, historyIndex - 1);
+        setHistoryIndex(newIndex);
+        setTerminalCommand(commandHistory[newIndex]);
+      }
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (historyIndex !== -1) {
+        const newIndex = historyIndex + 1;
+        if (newIndex >= commandHistory.length) {
+          setHistoryIndex(-1);
+          setTerminalCommand("");
+        } else {
+          setHistoryIndex(newIndex);
+          setTerminalCommand(commandHistory[newIndex]);
+        }
+      }
     }
   };
 
@@ -248,6 +463,11 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
             <div className="flex items-center gap-3">
               <h1 className="text-3xl font-semibold tracking-tight">{machine.hostname || "Unknown"}</h1>
               {getStatusBadge()}
+              {(pendingUFW || pendingFail2ban) && (
+                <Badge variant="outline" className="animate-pulse">
+                  Applying changes...
+                </Badge>
+              )}
             </div>
             <p className="text-muted-foreground mt-1">{machine.ip_address || "No IP address"}</p>
           </div>
@@ -257,226 +477,387 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
         </Button>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Machine Info */}
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader>
-            <CardTitle>Machine Information</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <p className="text-muted-foreground">Hostname</p>
-                <p className="font-medium">{machine.hostname || "Unknown"}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground">IP Address</p>
-                <p className="font-medium">{machine.ip_address || "Unknown"}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground">OS Version</p>
-                <p className="font-medium">{machine.ubuntu_version || "Unknown"}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground">Agent Version</p>
-                <p className="font-medium">{machine.agent_version || "Unknown"}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground">SSH Port</p>
-                <div className="flex items-center gap-2">
-                  <p className="font-medium font-mono">{machine.ssh_port || 22}</p>
-                  <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setShowSSHPortDialog(true)}>
+      {/* Main Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="security">Security</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
+          <TabsTrigger value="terminal">Terminal</TabsTrigger>
+          <TabsTrigger value="notes">Notes</TabsTrigger>
+        </TabsList>
+
+        {/* Overview Tab */}
+        <TabsContent value="overview" className="space-y-6 mt-6">
+          <div className="grid gap-6 md:grid-cols-2">
+            {/* Machine Info */}
+            <Card className="border-border/50 bg-card/50">
+              <CardHeader>
+                <CardTitle>Machine Information</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <p className="text-muted-foreground">Hostname</p>
+                    <p className="font-medium">{machine.hostname || "Unknown"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">IP Address</p>
+                    <p className="font-medium">{machine.ip_address || "Unknown"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">OS Version</p>
+                    <p className="font-medium">{machine.ubuntu_version || "Unknown"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Agent Version</p>
+                    <p className="font-medium">{machine.agent_version || "Unknown"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">SSH Port</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium font-mono">{machine.ssh_port || 22}</p>
+                      <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setShowSSHPortDialog(true)}>
+                        Change
+                      </Button>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Last Seen</p>
+                    <p className="font-medium">{formatDate(machine.last_seen)}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* System Stats */}
+            <Card className="border-border/50 bg-card/50">
+              <CardHeader>
+                <CardTitle>System Stats</CardTitle>
+                <CardDescription>Real-time resource utilization</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-muted-foreground">CPU</span>
+                    <span>{machine.cpu_percent?.toFixed(1) || 0}%</span>
+                  </div>
+                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-primary transition-all duration-500" 
+                      style={{ width: `${machine.cpu_percent || 0}%` }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-muted-foreground">Memory</span>
+                    <span>{formatBytes(machine.memory_used || 0)} / {formatBytes(machine.memory_total || 0)}</span>
+                  </div>
+                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-primary transition-all duration-500" 
+                      style={{ width: machine.memory_total > 0 ? `${(machine.memory_used / machine.memory_total) * 100}%` : "0%" }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-muted-foreground">Disk</span>
+                    <span>{formatBytes(machine.disk_used || 0)} / {formatBytes(machine.disk_total || 0)}</span>
+                  </div>
+                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-primary transition-all duration-500" 
+                      style={{ width: machine.disk_total > 0 ? `${(machine.disk_used / machine.disk_total) * 100}%` : "0%" }}
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* Security Tab */}
+        <TabsContent value="security" className="space-y-6 mt-6">
+          <div className="grid gap-6 md:grid-cols-2">
+            {/* Security Settings */}
+            <Card className="border-border/50 bg-card/50">
+              <CardHeader>
+                <CardTitle>Security</CardTitle>
+                <CardDescription>SSH, firewall, and intrusion prevention</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Root Password */}
+                <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                  <div>
+                    <p className="font-medium text-sm">Root Password</p>
+                    <p className="text-xs text-muted-foreground">
+                      {machine.root_password_set ? "Password has been changed" : "Using default password"}
+                    </p>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => setShowPasswordDialog(true)}>
                     Change
                   </Button>
                 </div>
-              </div>
-              <div>
-                <p className="text-muted-foreground">Last Seen</p>
-                <p className="font-medium">{formatDate(machine.last_seen)}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
 
-        {/* System Stats */}
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader>
-            <CardTitle>System Stats</CardTitle>
-            <CardDescription>Real-time resource utilization</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span className="text-muted-foreground">CPU</span>
-                <span>{machine.cpu_percent?.toFixed(1) || 0}%</span>
-              </div>
-              <div className="h-2 bg-muted rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-primary transition-all" 
-                  style={{ width: `${machine.cpu_percent || 0}%` }}
-                />
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span className="text-muted-foreground">Memory</span>
-                <span>{formatBytes(machine.memory_used || 0)} / {formatBytes(machine.memory_total || 0)}</span>
-              </div>
-              <div className="h-2 bg-muted rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-primary transition-all" 
-                  style={{ width: machine.memory_total > 0 ? `${(machine.memory_used / machine.memory_total) * 100}%` : "0%" }}
-                />
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span className="text-muted-foreground">Disk</span>
-                <span>{formatBytes(machine.disk_used || 0)} / {formatBytes(machine.disk_total || 0)}</span>
-              </div>
-              <div className="h-2 bg-muted rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-primary transition-all" 
-                  style={{ width: machine.disk_total > 0 ? `${(machine.disk_used / machine.disk_total) * 100}%` : "0%" }}
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+                {/* Fail2ban */}
+                <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                  <div className="flex items-center gap-3">
+                    <div>
+                      <p className="font-medium text-sm">Fail2ban</p>
+                      <p className="text-xs text-muted-foreground">SSH brute-force protection</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="ghost" onClick={() => setShowFail2banDialog(true)}>
+                      Configure
+                    </Button>
+                    <Switch 
+                      checked={fail2banEnabled} 
+                      onCheckedChange={handleFail2banToggleRequest}
+                      disabled={pendingFail2ban}
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
-        {/* Security Settings */}
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader>
-            <CardTitle>Security</CardTitle>
-            <CardDescription>SSH, firewall, and intrusion prevention</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* Root Password */}
-            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-              <div>
-                <p className="font-medium text-sm">Root Password</p>
-                <p className="text-xs text-muted-foreground">
-                  {machine.root_password_set ? "Password has been changed" : "Using default password"}
-                </p>
-              </div>
-              <Button size="sm" variant="outline" onClick={() => setShowPasswordDialog(true)}>
-                Change
-              </Button>
-            </div>
-
-            {/* Fail2ban */}
-            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-              <div className="flex items-center gap-3">
+            {/* UFW Firewall */}
+            <Card className="border-border/50 bg-card/50">
+              <CardHeader className="flex flex-row items-center justify-between">
                 <div>
-                  <p className="font-medium text-sm">Fail2ban</p>
-                  <p className="text-xs text-muted-foreground">SSH brute-force protection</p>
+                  <CardTitle>Firewall (UFW)</CardTitle>
+                  <CardDescription>Manage allowed ports</CardDescription>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">
+                      {ufwEnabled ? "Enabled" : "Disabled"}
+                    </span>
+                    <Switch 
+                      checked={ufwEnabled} 
+                      onCheckedChange={handleUFWToggleRequest}
+                      disabled={pendingUFW}
+                    />
+                  </div>
+                  <Button size="sm" onClick={() => setShowAddPortDialog(true)} disabled={!ufwEnabled}>
+                    Add Port
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
+                    <div className="flex items-center gap-3">
+                      <Badge variant="outline">TCP</Badge>
+                      <span className="font-mono">{machine.ssh_port || 22}</span>
+                      <span className="text-xs text-muted-foreground">(SSH)</span>
+                    </div>
+                    <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
+                  </div>
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
+                    <div className="flex items-center gap-3">
+                      <Badge variant="outline">TCP</Badge>
+                      <span className="font-mono">80</span>
+                      <span className="text-xs text-muted-foreground">(HTTP)</span>
+                    </div>
+                    <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
+                  </div>
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
+                    <div className="flex items-center gap-3">
+                      <Badge variant="outline">TCP</Badge>
+                      <span className="font-mono">443</span>
+                      <span className="text-xs text-muted-foreground">(HTTPS)</span>
+                    </div>
+                    <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground text-center mt-4">
+                  Default ports shown. Custom rules are managed via agent jobs.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* Logs Tab */}
+        <TabsContent value="logs" className="space-y-4 mt-6">
+          <Card className="border-border/50 bg-card/50">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Server Logs</CardTitle>
+                  <CardDescription>View and search log files</CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Select value={selectedLogType} onValueChange={setSelectedLogType}>
+                    <SelectTrigger className="w-40">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LOG_TYPES.map(lt => (
+                        <SelectItem key={lt.value} value={lt.value}>{lt.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={logLines.toString()} onValueChange={(v) => setLogLines(parseInt(v))}>
+                    <SelectTrigger className="w-24">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="50">50 lines</SelectItem>
+                      <SelectItem value="100">100 lines</SelectItem>
+                      <SelectItem value="500">500 lines</SelectItem>
+                      <SelectItem value="1000">1000 lines</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <div className="flex items-center gap-2">
+                    <Switch checked={autoRefreshLogs} onCheckedChange={setAutoRefreshLogs} />
+                    <span className="text-sm text-muted-foreground">Auto</span>
+                  </div>
+                  <Button onClick={loadLogs} disabled={logsLoading} size="sm">
+                    {logsLoading ? "Loading..." : "Refresh"}
+                  </Button>
+                  <Button onClick={handleDownloadLogs} disabled={!logs} size="sm" variant="outline">
+                    Download
+                  </Button>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="ghost" onClick={() => setShowFail2banDialog(true)}>
-                  Configure
-                </Button>
-                <Switch 
-                  checked={machine.fail2ban_enabled} 
-                  onCheckedChange={handleToggleFail2ban}
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                <Input
+                  placeholder="Search logs..."
+                  value={logSearch}
+                  onChange={(e) => setLogSearch(e.target.value)}
+                  className="max-w-sm"
                 />
+                <pre 
+                  ref={logsRef}
+                  className="bg-black/50 text-green-400 p-4 rounded-lg font-mono text-xs overflow-auto max-h-[500px] whitespace-pre-wrap"
+                >
+                  {filteredLogs || "Click Refresh to load logs..."}
+                </pre>
               </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-        {/* UFW Firewall */}
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle>Firewall (UFW)</CardTitle>
-              <CardDescription>Manage allowed ports</CardDescription>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">
-                  {machine.ufw_enabled ? "Enabled" : "Disabled"}
+        {/* Terminal Tab */}
+        <TabsContent value="terminal" className="space-y-4 mt-6">
+          <Card className="border-border/50 bg-card/50">
+            <CardHeader>
+              <CardTitle>Terminal</CardTitle>
+              <CardDescription>Execute commands on the remote machine</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div 
+                ref={terminalRef}
+                className="bg-black rounded-lg p-4 font-mono text-sm h-[400px] overflow-auto"
+                onClick={() => inputRef.current?.focus()}
+              >
+                {/* Welcome message */}
+                <div className="text-green-400 mb-2">
+                  Welcome to {machine.hostname} ({machine.ip_address})
+                </div>
+                <div className="text-muted-foreground mb-4">
+                  Type commands and press Enter. Use ↑/↓ arrows for history.
+                </div>
+                
+                {/* Command history */}
+                {terminalHistory.map((entry, i) => (
+                  <div key={i} className="mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-green-400">$</span>
+                      <span className="text-white">{entry.command}</span>
+                    </div>
+                    <pre className={`whitespace-pre-wrap ml-4 ${entry.exitCode !== 0 ? "text-red-400" : "text-gray-300"}`}>
+                      {entry.output}
+                    </pre>
+                    {entry.exitCode !== 0 && (
+                      <div className="text-red-400 text-xs ml-4">Exit code: {entry.exitCode}</div>
+                    )}
+                  </div>
+                ))}
+                
+                {/* Current input */}
+                <form onSubmit={handleTerminalSubmit} className="flex items-center gap-2">
+                  <span className="text-green-400">$</span>
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={terminalCommand}
+                    onChange={(e) => setTerminalCommand(e.target.value)}
+                    onKeyDown={handleTerminalKeyDown}
+                    disabled={terminalLoading}
+                    className="flex-1 bg-transparent text-white outline-none"
+                    placeholder={terminalLoading ? "Running..." : "Enter command..."}
+                    autoFocus
+                  />
+                </form>
+              </div>
+              <div className="flex items-center gap-2 mt-4">
+                <Button 
+                  size="sm" 
+                  variant="outline" 
+                  onClick={() => setTerminalHistory([])}
+                >
+                  Clear Terminal
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  Commands are executed via the agent. Non-interactive only.
                 </span>
-                <Switch 
-                  checked={machine.ufw_enabled} 
-                  onCheckedChange={handleToggleUFW}
-                />
               </div>
-              <Button size="sm" onClick={() => setShowAddPortDialog(true)} disabled={!machine.ufw_enabled}>
-                Add Port
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {/* Show SSH port */}
-              <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
-                <div className="flex items-center gap-3">
-                  <Badge variant="outline">TCP</Badge>
-                  <span className="font-mono">{machine.ssh_port || 22}</span>
-                  <span className="text-xs text-muted-foreground">(SSH)</span>
-                </div>
-                <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
-              </div>
-              <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
-                <div className="flex items-center gap-3">
-                  <Badge variant="outline">TCP</Badge>
-                  <span className="font-mono">80</span>
-                  <span className="text-xs text-muted-foreground">(HTTP)</span>
-                </div>
-                <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
-              </div>
-              <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50">
-                <div className="flex items-center gap-3">
-                  <Badge variant="outline">TCP</Badge>
-                  <span className="font-mono">443</span>
-                  <span className="text-xs text-muted-foreground">(HTTPS)</span>
-                </div>
-                <Badge className="bg-green-500/20 text-green-400 border-green-500/30">ALLOW</Badge>
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground text-center mt-4">
-              Default ports shown. Custom rules are managed via agent jobs.
-            </p>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-        {/* Notes - Full Width */}
-        <Card className="border-border/50 bg-card/50 md:col-span-2">
-          <CardHeader>
-            <CardTitle>Notes</CardTitle>
-            <CardDescription>Markdown notes about this machine</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Tabs value={notesTab} onValueChange={setNotesTab} className="w-full">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="preview">Preview</TabsTrigger>
-                <TabsTrigger value="edit">Edit</TabsTrigger>
-              </TabsList>
-              <TabsContent value="preview" className="mt-4">
-                <div className="min-h-[200px] p-4 border rounded-md bg-muted/30 prose prose-invert prose-sm max-w-none">
-                  {notes ? (
-                    <ReactMarkdown>{notes}</ReactMarkdown>
-                  ) : (
-                    <p className="text-muted-foreground italic">No notes yet. Click Edit to add notes.</p>
-                  )}
-                </div>
-              </TabsContent>
-              <TabsContent value="edit" className="mt-4">
-                <Textarea
-                  className="min-h-[200px] font-mono text-sm"
-                  placeholder="# Server Notes&#10;&#10;**Hosting:** DigitalOcean&#10;**Expiry:** 2025-12-31&#10;&#10;## Info&#10;- Monthly billing&#10;- Contact: admin@example.com"
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                />
-                <Button onClick={handleSaveNotes} disabled={saving} className="mt-4">
-                  {saving ? "Saving..." : "Save Notes"}
-                </Button>
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
-      </div>
+        {/* Notes Tab */}
+        <TabsContent value="notes" className="space-y-4 mt-6">
+          <Card className="border-border/50 bg-card/50">
+            <CardHeader>
+              <CardTitle>Notes</CardTitle>
+              <CardDescription>Markdown notes about this machine</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Tabs value={notesTab} onValueChange={setNotesTab} className="w-full">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="preview">Preview</TabsTrigger>
+                  <TabsTrigger value="edit">
+                    Edit {notesDirty && <span className="ml-1 text-orange-400">•</span>}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="preview" className="mt-4">
+                  <div className="min-h-[200px] p-4 border rounded-md bg-muted/30 prose prose-invert prose-sm max-w-none">
+                    {localNotes ? (
+                      <ReactMarkdown>{localNotes}</ReactMarkdown>
+                    ) : (
+                      <p className="text-muted-foreground italic">No notes yet. Click Edit to add notes.</p>
+                    )}
+                  </div>
+                </TabsContent>
+                <TabsContent value="edit" className="mt-4">
+                  <Textarea
+                    className="min-h-[200px] font-mono text-sm"
+                    placeholder="# Server Notes&#10;&#10;**Hosting:** DigitalOcean&#10;**Expiry:** 2025-12-31&#10;&#10;## Info&#10;- Monthly billing&#10;- Contact: admin@example.com"
+                    value={localNotes}
+                    onChange={(e) => handleNotesChange(e.target.value)}
+                  />
+                  <div className="flex items-center gap-2 mt-4">
+                    <Button onClick={handleSaveNotes} disabled={saving || !notesDirty}>
+                      {saving ? "Saving..." : "Save Notes"}
+                    </Button>
+                    {notesDirty && (
+                      <span className="text-sm text-orange-400">Unsaved changes</span>
+                    )}
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       {/* Add Port Dialog */}
       <Dialog open={showAddPortDialog} onOpenChange={setShowAddPortDialog}>
@@ -642,6 +1023,60 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
             </Button>
             <Button onClick={handleSaveFail2banConfig}>
               Save Configuration
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirm UFW Toggle Dialog */}
+      <Dialog open={showConfirmUFWDialog} onOpenChange={setShowConfirmUFWDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {pendingToggleValue ? "Enable" : "Disable"} Firewall?
+            </DialogTitle>
+            <DialogDescription>
+              {pendingToggleValue
+                ? "Enabling the firewall will block all incoming connections except allowed ports. Make sure SSH is allowed to avoid lockout."
+                : "Disabling the firewall will allow all incoming connections. This may expose your server to security risks."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowConfirmUFWDialog(false)}>
+              Cancel
+            </Button>
+            <Button 
+              variant={pendingToggleValue ? "default" : "destructive"} 
+              onClick={handleConfirmUFWToggle}
+            >
+              {pendingToggleValue ? "Enable Firewall" : "Disable Firewall"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirm Fail2ban Toggle Dialog */}
+      <Dialog open={showConfirmFail2banDialog} onOpenChange={setShowConfirmFail2banDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {pendingToggleValue ? "Enable" : "Disable"} Fail2ban?
+            </DialogTitle>
+            <DialogDescription>
+              {pendingToggleValue
+                ? "Fail2ban will monitor authentication logs and ban IPs with too many failed login attempts."
+                : "Disabling Fail2ban will stop monitoring for brute-force attacks. Your server may be more vulnerable to SSH attacks."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowConfirmFail2banDialog(false)}>
+              Cancel
+            </Button>
+            <Button 
+              variant={pendingToggleValue ? "default" : "destructive"} 
+              onClick={handleConfirmFail2banToggle}
+            >
+              {pendingToggleValue ? "Enable Fail2ban" : "Disable Fail2ban"}
             </Button>
           </DialogFooter>
         </DialogContent>

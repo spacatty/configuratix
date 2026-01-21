@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
+import { Toaster } from "sonner";
 
 export default function DashboardLayout({
   children,
@@ -65,6 +66,7 @@ export default function DashboardLayout({
 
   return (
     <SidebarProvider>
+      <Toaster richColors position="top-right" />
       <AppSidebar user={user} />
       <SidebarInset>
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/50 px-4">
