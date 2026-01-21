@@ -23,7 +23,7 @@ tasks:
     desc: Start backend in development mode
     dir: backend
     cmds:
-      - echo "Starting backend on port $BACKEND_PORT..."
+      - echo "Starting backend on port $PORT..."
       - go run cmd/server/main.go
 
   dev:frontend:
@@ -45,7 +45,7 @@ tasks:
     cmds:
       - echo "Building backend..."
       - go build -o bin/server.exe cmd/server/main.go
-      - echo "Starting backend on port $BACKEND_PORT..."
+      - echo "Starting backend on port $PORT..."
       - bin/server.exe
 
   prod:frontend:

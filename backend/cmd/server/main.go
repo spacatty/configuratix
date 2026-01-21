@@ -34,6 +34,10 @@ func main() {
 	router := mux.NewRouter()
 	router.Use(middleware.CORSMiddleware)
 
+	// Install script (public)
+	installHandler := handlers.NewInstallHandler()
+	router.HandleFunc("/install.sh", installHandler.ServeInstallScript).Methods("GET")
+
 	// Setup routes (public - for initial setup only)
 	setupHandler := handlers.NewSetupHandler(db)
 	router.HandleFunc("/api/setup/status", setupHandler.CheckSetup).Methods("GET", "OPTIONS")

@@ -252,8 +252,23 @@ export default function MachinesPage() {
               </div>
               <Button
                 className="w-full"
-                onClick={() => {
-                  navigator.clipboard.writeText(getInstallCommand(newToken.token || ""));
+                onClick={async () => {
+                  const text = getInstallCommand(newToken.token || "");
+                  try {
+                    await navigator.clipboard.writeText(text);
+                    alert("Copied to clipboard!");
+                  } catch {
+                    // Fallback for HTTP sites (clipboard API requires HTTPS)
+                    const textarea = document.createElement("textarea");
+                    textarea.value = text;
+                    textarea.style.position = "fixed";
+                    textarea.style.opacity = "0";
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand("copy");
+                    document.body.removeChild(textarea);
+                    alert("Copied to clipboard!");
+                  }
                 }}
               >
                 Copy to Clipboard
