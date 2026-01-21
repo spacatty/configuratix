@@ -62,12 +62,8 @@ set -e
 
 TOKEN="$1"
 SERVER_URL="${CONFIGURATIX_SERVER:-http://localhost:8080}"
-
-if [ -z "$TOKEN" ]; then
-    echo "Error: Enrollment token is required"
-    echo "Usage: curl -sSL $SERVER_URL/install.sh | sudo bash -s -- YOUR_TOKEN"
-    exit 1
-fi
+REINSTALL=false
+CONFIG_FILE="/etc/configuratix/agent.json"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Error: This script must be run as root"
@@ -77,6 +73,25 @@ fi
 echo "=== Configuratix Agent Installer ==="
 echo "Server: $SERVER_URL"
 echo ""
+
+# Check if agent already exists
+if [ -f "$CONFIG_FILE" ]; then
+    echo "Existing agent configuration found."
+    REINSTALL=true
+    
+    # Stop existing agent
+    if systemctl is-active --quiet configuratix-agent; then
+        echo "Stopping existing agent..."
+        systemctl stop configuratix-agent
+    fi
+fi
+
+# If no config exists, token is required
+if [ "$REINSTALL" = false ] && [ -z "$TOKEN" ]; then
+    echo "Error: Enrollment token is required for new installation"
+    echo "Usage: curl -sSL $SERVER_URL/install.sh | sudo bash -s -- YOUR_TOKEN"
+    exit 1
+fi
 
 # Install dependencies
 echo "Installing dependencies..."
@@ -88,12 +103,13 @@ mkdir -p /etc/configuratix
 mkdir -p /opt/configuratix/bin
 mkdir -p /etc/nginx/conf.d/configuratix
 
-# Enable nginx
-systemctl enable nginx
-systemctl start nginx
+# Enable nginx (if not already)
+systemctl enable nginx 2>/dev/null || true
+systemctl start nginx 2>/dev/null || true
 
-# Configure fail2ban with SSH protection
-cat > /etc/fail2ban/jail.local << 'JAILEOF'
+# Configure fail2ban with SSH protection (only if not configured)
+if [ ! -f /etc/fail2ban/jail.local ]; then
+    cat > /etc/fail2ban/jail.local << 'JAILEOF'
 [sshd]
 enabled = true
 port = ssh
@@ -103,17 +119,20 @@ maxretry = 3
 bantime = 3600
 findtime = 600
 JAILEOF
+fi
 
-systemctl enable fail2ban
-systemctl restart fail2ban
+systemctl enable fail2ban 2>/dev/null || true
+systemctl restart fail2ban 2>/dev/null || true
 
-# Configure UFW
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp
-ufw allow 80/tcp
-ufw allow 443/tcp
-echo "y" | ufw enable
+# Configure UFW (only if not enabled)
+if ! ufw status | grep -q "Status: active"; then
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow 22/tcp
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    echo "y" | ufw enable
+fi
 
 # Build agent
 echo "Building agent..."
@@ -893,8 +912,13 @@ MAINEOF
 go build -o /opt/configuratix/bin/configuratix-agent ./cmd/agent
 cd / && rm -rf /tmp/configuratix-agent-build
 
-echo "Enrolling..."
-/opt/configuratix/bin/configuratix-agent enroll --server "$SERVER_URL" --token "$TOKEN"
+# Only enroll if this is a new installation (no existing config)
+if [ "$REINSTALL" = false ]; then
+    echo "Enrolling new agent..."
+    /opt/configuratix/bin/configuratix-agent enroll --server "$SERVER_URL" --token "$TOKEN"
+else
+    echo "Re-using existing agent configuration..."
+fi
 
 cat > /etc/systemd/system/configuratix-agent.service << EOF
 [Unit]

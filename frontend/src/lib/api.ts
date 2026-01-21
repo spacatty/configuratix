@@ -65,6 +65,36 @@ export interface Job {
   finished_at: string | null;
 }
 
+export interface VariableDef {
+  name: string;
+  type: string;
+  required: boolean;
+  default?: string;
+  description: string;
+}
+
+export interface CommandStep {
+  action: string;
+  command?: string;
+  timeout?: number;
+  path?: string;
+  content?: string;
+  url?: string;
+  mode?: string;
+  op?: string;
+  name?: string;
+}
+
+export interface CommandTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  variables: VariableDef[];
+  steps: CommandStep[];
+  on_error: string;
+}
+
 export interface EnrollmentToken {
   id: string;
   name: string | null;
@@ -352,6 +382,26 @@ class ApiClient {
 
   async deleteNginxConfig(id: string): Promise<void> {
     await this.request(`/api/nginx-configs/${id}`, { method: "DELETE" });
+  }
+
+  // Commands (Templates)
+  async listCommands(): Promise<CommandTemplate[]> {
+    return this.request<CommandTemplate[]>("/api/commands");
+  }
+
+  async getCommand(id: string): Promise<CommandTemplate> {
+    return this.request<CommandTemplate>(`/api/commands/${id}`);
+  }
+
+  async executeCommand(machineId: string, commandId: string, variables: Record<string, string>): Promise<Job> {
+    return this.request<Job>("/api/commands/execute", {
+      method: "POST",
+      body: JSON.stringify({
+        machine_id: machineId,
+        command_id: commandId,
+        variables,
+      }),
+    });
   }
 }
 

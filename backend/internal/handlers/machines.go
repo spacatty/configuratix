@@ -4,12 +4,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
 
 	"configuratix/backend/internal/database"
 	"configuratix/backend/internal/models"
+	"configuratix/backend/internal/templates"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -220,6 +222,42 @@ func (h *MachinesHandler) DeleteEnrollmentToken(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// executeTemplate is a helper to create a job from a template
+func (h *MachinesHandler) executeTemplate(w http.ResponseWriter, machineID uuid.UUID, templateID string, vars map[string]string) {
+	// Get command template
+	cmd := templates.GetCommand(templateID)
+	if cmd == nil {
+		http.Error(w, "Template not found: "+templateID, http.StatusInternalServerError)
+		return
+	}
+
+	// Get agent_id for this machine
+	var agentID uuid.UUID
+	err := h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
+	if err != nil {
+		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
+		return
+	}
+
+	// Create job with run type using template
+	payload := cmd.ToPayload(vars)
+
+	var job models.Job
+	err = h.db.Get(&job, `
+		INSERT INTO jobs (agent_id, type, payload_json, status)
+		VALUES ($1, 'run', $2, 'pending')
+		RETURNING *
+	`, agentID, payload)
+	if err != nil {
+		log.Printf("Failed to create job: %v", err)
+		http.Error(w, "Failed to create job", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(job)
+}
+
 // ChangeSSHPort creates a job to change the SSH port
 func (h *MachinesHandler) ChangeSSHPort(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -242,30 +280,9 @@ func (h *MachinesHandler) ChangeSSHPort(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Get agent_id for this machine
-	var agentID uuid.UUID
-	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
-	if err != nil {
-		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
-		return
-	}
-
-	// Create job
-	payload, _ := json.Marshal(map[string]int{"port": req.Port})
-	var job models.Job
-	err = h.db.Get(&job, `
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'change_ssh_port', $2, 'pending')
-		RETURNING *
-	`, agentID, payload)
-	if err != nil {
-		log.Printf("Failed to create job: %v", err)
-		http.Error(w, "Failed to create job", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(job)
+	h.executeTemplate(w, machineID, "change_ssh_port", map[string]string{
+		"port": fmt.Sprintf("%d", req.Port),
+	})
 }
 
 // ChangeRootPassword creates a job to change the root password
@@ -290,33 +307,12 @@ func (h *MachinesHandler) ChangeRootPassword(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Get agent_id for this machine
-	var agentID uuid.UUID
-	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
-	if err != nil {
-		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
-		return
-	}
-
-	// Create job
-	payload, _ := json.Marshal(map[string]string{"password": req.Password})
-	var job models.Job
-	err = h.db.Get(&job, `
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'change_root_password', $2, 'pending')
-		RETURNING *
-	`, agentID, payload)
-	if err != nil {
-		log.Printf("Failed to create job: %v", err)
-		http.Error(w, "Failed to create job", http.StatusInternalServerError)
-		return
-	}
-
-	// Mark password as set (will be confirmed when job completes)
+	// Mark password as set
 	h.db.Exec("UPDATE machines SET root_password_set = true WHERE id = $1", machineID)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(job)
+	h.executeTemplate(w, machineID, "change_root_password", map[string]string{
+		"password": req.Password,
+	})
 }
 
 // ToggleUFW creates a job to enable/disable UFW
@@ -336,30 +332,9 @@ func (h *MachinesHandler) ToggleUFW(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get agent_id for this machine
-	var agentID uuid.UUID
-	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
-	if err != nil {
-		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
-		return
-	}
-
-	// Create job
-	payload, _ := json.Marshal(map[string]bool{"enabled": req.Enabled})
-	var job models.Job
-	err = h.db.Get(&job, `
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'toggle_ufw', $2, 'pending')
-		RETURNING *
-	`, agentID, payload)
-	if err != nil {
-		log.Printf("Failed to create job: %v", err)
-		http.Error(w, "Failed to create job", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(job)
+	h.executeTemplate(w, machineID, "toggle_ufw", map[string]string{
+		"enabled": fmt.Sprintf("%t", req.Enabled),
+	})
 }
 
 // ToggleFail2ban creates a job to enable/disable fail2ban
@@ -380,14 +355,6 @@ func (h *MachinesHandler) ToggleFail2ban(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Get agent_id for this machine
-	var agentID uuid.UUID
-	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
-	if err != nil {
-		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
-		return
-	}
-
 	// Use default config if not provided
 	config := req.Config
 	if config == "" {
@@ -397,22 +364,10 @@ func (h *MachinesHandler) ToggleFail2ban(w http.ResponseWriter, r *http.Request)
 	// Store config in machine
 	h.db.Exec("UPDATE machines SET fail2ban_config = $1 WHERE id = $2", config, machineID)
 
-	// Create job
-	payload, _ := json.Marshal(map[string]interface{}{"enabled": req.Enabled, "config": config})
-	var job models.Job
-	err = h.db.Get(&job, `
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'toggle_fail2ban', $2, 'pending')
-		RETURNING *
-	`, agentID, payload)
-	if err != nil {
-		log.Printf("Failed to create job: %v", err)
-		http.Error(w, "Failed to create job", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(job)
+	h.executeTemplate(w, machineID, "toggle_fail2ban", map[string]string{
+		"enabled": fmt.Sprintf("%t", req.Enabled),
+		"config":  config,
+	})
 }
 
 // AddUFWRule creates a job to add a UFW rule
@@ -433,30 +388,15 @@ func (h *MachinesHandler) AddUFWRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get agent_id for this machine
-	var agentID uuid.UUID
-	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
-	if err != nil {
-		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
-		return
+	protocol := req.Protocol
+	if protocol == "" {
+		protocol = "tcp"
 	}
 
-	// Create job
-	payload, _ := json.Marshal(map[string]string{"port": req.Port, "protocol": req.Protocol, "action": "allow"})
-	var job models.Job
-	err = h.db.Get(&job, `
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'ufw_rule', $2, 'pending')
-		RETURNING *
-	`, agentID, payload)
-	if err != nil {
-		log.Printf("Failed to create job: %v", err)
-		http.Error(w, "Failed to create job", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(job)
+	h.executeTemplate(w, machineID, "ufw_allow_port", map[string]string{
+		"port":     req.Port,
+		"protocol": protocol,
+	})
 }
 
 // RemoveUFWRule creates a job to remove a UFW rule
@@ -477,29 +417,14 @@ func (h *MachinesHandler) RemoveUFWRule(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Get agent_id for this machine
-	var agentID uuid.UUID
-	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
-	if err != nil {
-		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
-		return
+	protocol := req.Protocol
+	if protocol == "" {
+		protocol = "tcp"
 	}
 
-	// Create job
-	payload, _ := json.Marshal(map[string]string{"port": req.Port, "protocol": req.Protocol, "action": "delete"})
-	var job models.Job
-	err = h.db.Get(&job, `
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'ufw_rule', $2, 'pending')
-		RETURNING *
-	`, agentID, payload)
-	if err != nil {
-		log.Printf("Failed to create job: %v", err)
-		http.Error(w, "Failed to create job", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(job)
+	h.executeTemplate(w, machineID, "ufw_delete_port", map[string]string{
+		"port":     req.Port,
+		"protocol": protocol,
+	})
 }
 

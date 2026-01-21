@@ -102,6 +102,12 @@ func main() {
 	apiRouter.HandleFunc("/jobs", jobsHandler.CreateJob).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/jobs/{id}", jobsHandler.GetJob).Methods("GET", "OPTIONS")
 
+	// Commands (templates)
+	commandsHandler := handlers.NewCommandsHandler(db)
+	apiRouter.HandleFunc("/commands", commandsHandler.ListCommands).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/commands/{id}", commandsHandler.GetCommand).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/commands/execute", commandsHandler.ExecuteCommand).Methods("POST", "OPTIONS")
+
 	// Start domain health check scheduler
 	checkInterval := 1 // Default: 1 hour
 	if intervalStr := os.Getenv("CHECK_INTERVAL_HOURS"); intervalStr != "" {
