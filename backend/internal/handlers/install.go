@@ -347,7 +347,48 @@ func processJob(cfg *Config, client *http.Client, id, jobType string, payload js
 	
 	var logs string
 	var err error
+	
+	// Generic instruction-based jobs (no agent update needed for new features)
 	switch jobType {
+	case "script":
+		// Execute bash script with variable substitution
+		var p struct { 
+			Script string ` + "`" + `json:"script"` + "`" + `
+			Vars map[string]string ` + "`" + `json:"vars"` + "`" + `
+		}
+		json.Unmarshal(payload, &p)
+		logs, err = execScript(p.Script, p.Vars)
+	case "exec":
+		// Execute simple command(s)
+		var p struct { 
+			Commands []string ` + "`" + `json:"commands"` + "`" + `
+			Command string ` + "`" + `json:"command"` + "`" + ` // single command alternative
+		}
+		json.Unmarshal(payload, &p)
+		if p.Command != "" {
+			p.Commands = []string{p.Command}
+		}
+		logs, err = execCommands(p.Commands)
+	case "file":
+		// File operations
+		var p struct {
+			Action string ` + "`" + `json:"action"` + "`" + ` // write, append, delete
+			Path string ` + "`" + `json:"path"` + "`" + `
+			Content string ` + "`" + `json:"content"` + "`" + `
+			Mode string ` + "`" + `json:"mode"` + "`" + ` // optional: "0644"
+		}
+		json.Unmarshal(payload, &p)
+		logs, err = fileOp(p.Action, p.Path, p.Content, p.Mode)
+	case "service":
+		// Systemd service management
+		var p struct {
+			Name string ` + "`" + `json:"name"` + "`" + `
+			Action string ` + "`" + `json:"action"` + "`" + ` // start, stop, restart, reload, enable, disable
+		}
+		json.Unmarshal(payload, &p)
+		logs, err = serviceOp(p.Name, p.Action)
+	
+	// Legacy typed jobs (kept for backwards compatibility)
 	case "bootstrap_machine":
 		logs, err = bootstrap()
 	case "apply_domain":
@@ -388,6 +429,105 @@ func processJob(cfg *Config, client *http.Client, id, jobType string, payload js
 	} else {
 		updateJob(cfg, client, id, "completed", logs)
 	}
+}
+
+// execScript runs a bash script with variable substitution
+func execScript(script string, vars map[string]string) (string, error) {
+	var logs strings.Builder
+	logs.WriteString("Executing script...\n")
+	
+	// Variable substitution: {{varname}} -> value
+	for k, v := range vars {
+		script = strings.ReplaceAll(script, "{{"+k+"}}", v)
+	}
+	
+	// Write script to temp file
+	tmpFile, err := os.CreateTemp("", "configuratix-*.sh")
+	if err != nil { return logs.String(), err }
+	defer os.Remove(tmpFile.Name())
+	
+	tmpFile.WriteString(script)
+	tmpFile.Close()
+	os.Chmod(tmpFile.Name(), 0755)
+	
+	// Execute
+	cmd := exec.Command("/bin/bash", tmpFile.Name())
+	out, err := cmd.CombinedOutput()
+	logs.WriteString(string(out))
+	
+	return logs.String(), err
+}
+
+// execCommands runs a list of shell commands
+func execCommands(commands []string) (string, error) {
+	var logs strings.Builder
+	
+	for _, cmdStr := range commands {
+		logs.WriteString("$ " + cmdStr + "\n")
+		cmd := exec.Command("/bin/bash", "-c", cmdStr)
+		out, err := cmd.CombinedOutput()
+		logs.WriteString(string(out))
+		if err != nil {
+			return logs.String(), fmt.Errorf("command failed: %s", cmdStr)
+		}
+	}
+	
+	return logs.String(), nil
+}
+
+// fileOp performs file operations
+func fileOp(action, path, content, mode string) (string, error) {
+	var logs strings.Builder
+	
+	switch action {
+	case "write":
+		logs.WriteString(fmt.Sprintf("Writing to %s...\n", path))
+		// Create parent dirs if needed
+		os.MkdirAll(filepath.Dir(path), 0755)
+		perm := os.FileMode(0644)
+		if mode != "" {
+			if m, err := strconv.ParseUint(mode, 8, 32); err == nil {
+				perm = os.FileMode(m)
+			}
+		}
+		if err := os.WriteFile(path, []byte(content), perm); err != nil {
+			return logs.String(), err
+		}
+		logs.WriteString("Done\n")
+	case "append":
+		logs.WriteString(fmt.Sprintf("Appending to %s...\n", path))
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil { return logs.String(), err }
+		defer f.Close()
+		f.WriteString(content)
+		logs.WriteString("Done\n")
+	case "delete":
+		logs.WriteString(fmt.Sprintf("Deleting %s...\n", path))
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return logs.String(), err
+		}
+		logs.WriteString("Done\n")
+	default:
+		return logs.String(), fmt.Errorf("unknown file action: %s", action)
+	}
+	
+	return logs.String(), nil
+}
+
+// serviceOp manages systemd services
+func serviceOp(name, action string) (string, error) {
+	var logs strings.Builder
+	logs.WriteString(fmt.Sprintf("Service %s: %s...\n", name, action))
+	
+	validActions := map[string]bool{"start": true, "stop": true, "restart": true, "reload": true, "enable": true, "disable": true}
+	if !validActions[action] {
+		return logs.String(), fmt.Errorf("invalid service action: %s", action)
+	}
+	
+	out, err := runCmd("systemctl", action, name)
+	logs.WriteString(out)
+	
+	return logs.String(), err
 }
 
 func updateJob(cfg *Config, client *http.Client, id, status, logs string) {
