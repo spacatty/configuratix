@@ -15,6 +15,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { api, Machine } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
+import dynamic from "next/dynamic";
+
+// Dynamically import terminal to avoid SSR issues
+const WebSocketTerminal = dynamic(
+  () => import("@/components/terminal").then((mod) => mod.WebSocketTerminal),
+  { ssr: false, loading: () => <div className="h-[400px] bg-black rounded-lg animate-pulse" /> }
+);
 
 const DEFAULT_FAIL2BAN_CONFIG = `[sshd]
 enabled = true
@@ -78,15 +85,6 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
   const [logSearch, setLogSearch] = useState("");
   const [autoRefreshLogs, setAutoRefreshLogs] = useState(false);
   const logsRef = useRef<HTMLPreElement>(null);
-
-  // Terminal state
-  const [terminalCommand, setTerminalCommand] = useState("");
-  const [terminalHistory, setTerminalHistory] = useState<Array<{ command: string; output: string; exitCode: number }>>([]);
-  const [terminalLoading, setTerminalLoading] = useState(false);
-  const terminalRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-  const [commandHistory, setCommandHistory] = useState<string[]>([]);
 
   // Initial load
   useEffect(() => {
@@ -350,65 +348,6 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
   const filteredLogs = logSearch
     ? logs.split("\n").filter(line => line.toLowerCase().includes(logSearch.toLowerCase())).join("\n")
     : logs;
-
-  const handleTerminalSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!machine || !terminalCommand.trim()) return;
-    
-    setTerminalLoading(true);
-    const cmd = terminalCommand.trim();
-    setCommandHistory(prev => [...prev.filter(c => c !== cmd), cmd]);
-    setHistoryIndex(-1);
-    
-    try {
-      const result = await api.execTerminalCommand(machine.id, cmd);
-      setTerminalHistory(prev => [...prev, {
-        command: cmd,
-        output: result.output,
-        exitCode: result.exit_code,
-      }]);
-      setTerminalCommand("");
-      // Scroll to bottom
-      setTimeout(() => {
-        if (terminalRef.current) {
-          terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-        }
-      }, 50);
-    } catch (err) {
-      console.error("Terminal command failed:", err);
-      setTerminalHistory(prev => [...prev, {
-        command: cmd,
-        output: `Error: ${err instanceof Error ? err.message : "Command failed"}`,
-        exitCode: 1,
-      }]);
-    } finally {
-      setTerminalLoading(false);
-      setTerminalCommand("");
-    }
-  };
-
-  const handleTerminalKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      if (commandHistory.length > 0) {
-        const newIndex = historyIndex === -1 ? commandHistory.length - 1 : Math.max(0, historyIndex - 1);
-        setHistoryIndex(newIndex);
-        setTerminalCommand(commandHistory[newIndex]);
-      }
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      if (historyIndex !== -1) {
-        const newIndex = historyIndex + 1;
-        if (newIndex >= commandHistory.length) {
-          setHistoryIndex(-1);
-          setTerminalCommand("");
-        } else {
-          setHistoryIndex(newIndex);
-          setTerminalCommand(commandHistory[newIndex]);
-        }
-      }
-    }
-  };
 
   const getStatusBadge = () => {
     if (!machine?.last_seen) {
@@ -837,66 +776,21 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
           <Card className="border-border/50 bg-card/50">
             <CardHeader>
               <CardTitle>Terminal</CardTitle>
-              <CardDescription>Execute commands on the remote machine</CardDescription>
+              <CardDescription>
+                Real-time shell access via WebSocket. Full PTY support.
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              <div 
-                ref={terminalRef}
-                className="bg-black rounded-lg p-4 font-mono text-sm h-[400px] overflow-auto"
-                onClick={() => inputRef.current?.focus()}
-              >
-                {/* Welcome message */}
-                <div className="text-green-400 mb-2">
-                  Welcome to {machine.hostname} ({machine.ip_address})
-                </div>
-                <div className="text-muted-foreground mb-4">
-                  Type commands and press Enter. Use ↑/↓ arrows for history.
-                </div>
-                
-                {/* Command history */}
-                {terminalHistory.map((entry, i) => (
-                  <div key={i} className="mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-green-400">$</span>
-                      <span className="text-white">{entry.command}</span>
-                    </div>
-                    <pre className={`whitespace-pre-wrap ml-4 ${entry.exitCode !== 0 ? "text-red-400" : "text-gray-300"}`}>
-                      {entry.output}
-                    </pre>
-                    {entry.exitCode !== 0 && (
-                      <div className="text-red-400 text-xs ml-4">Exit code: {entry.exitCode}</div>
-                    )}
-                  </div>
-                ))}
-                
-                {/* Current input */}
-                <form onSubmit={handleTerminalSubmit} className="flex items-center gap-2">
-                  <span className="text-green-400">$</span>
-                  <input
-                    ref={inputRef}
-                    type="text"
-                    value={terminalCommand}
-                    onChange={(e) => setTerminalCommand(e.target.value)}
-                    onKeyDown={handleTerminalKeyDown}
-                    disabled={terminalLoading}
-                    className="flex-1 bg-transparent text-white outline-none"
-                    placeholder={terminalLoading ? "Running..." : "Enter command..."}
-                    autoFocus
-                  />
-                </form>
+              <div className="h-[450px] rounded-lg overflow-hidden border border-border/50">
+                <WebSocketTerminal
+                  machineId={machine.id}
+                  apiUrl={api.getApiUrl()}
+                  token={localStorage.getItem("token") || ""}
+                />
               </div>
-              <div className="flex items-center gap-2 mt-4">
-                <Button 
-                  size="sm" 
-                  variant="outline" 
-                  onClick={() => setTerminalHistory([])}
-                >
-                  Clear Terminal
-                </Button>
-                <span className="text-xs text-muted-foreground">
-                  Commands are executed via the agent. Non-interactive only.
-                </span>
-              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Connected via WebSocket. Supports interactive commands, colors, and full shell features.
+              </p>
             </CardContent>
           </Card>
         </TabsContent>

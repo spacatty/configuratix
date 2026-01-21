@@ -9,6 +9,7 @@ import (
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
 	"configuratix/backend/internal/models"
+	"configuratix/backend/internal/templates"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -302,6 +303,7 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 	tx.Get(&domainFQDN, "SELECT fqdn FROM domains WHERE id = $1", id)
 
 	var nginxConfig string
+	var configJSON json.RawMessage
 	if req.ConfigID != nil {
 		var config struct {
 			StructuredJSON json.RawMessage `db:"structured_json"`
@@ -309,6 +311,7 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 			Mode           string          `db:"mode"`
 		}
 		tx.Get(&config, "SELECT structured_json, raw_text, mode FROM nginx_configs WHERE id = $1", req.ConfigID)
+		configJSON = config.StructuredJSON
 		
 		if config.Mode == "manual" && config.RawText != nil {
 			nginxConfig = *config.RawText
@@ -318,36 +321,54 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If old machine exists and different from new, create remove_domain job
+	// If old machine exists and different from new, create remove_domain job using template
 	if currentMachineID != nil && (req.MachineID == nil || *currentMachineID != *req.MachineID) {
 		var oldAgentID uuid.UUID
 		tx.Get(&oldAgentID, "SELECT agent_id FROM machines WHERE id = $1", currentMachineID)
 		if oldAgentID != uuid.Nil {
-			payload, _ := json.Marshal(map[string]string{"domain": domainFQDN})
-			tx.Exec(`
-				INSERT INTO jobs (agent_id, type, payload_json, status)
-				VALUES ($1, 'remove_domain', $2, 'pending')
-			`, oldAgentID, payload)
+			// Use template-based job
+			removeCmd := templates.GetCommand("remove_domain")
+			if removeCmd != nil {
+				payload := removeCmd.ToPayload(map[string]string{"domain": domainFQDN})
+				tx.Exec(`
+					INSERT INTO jobs (agent_id, type, payload_json, status)
+					VALUES ($1, 'run', $2, 'pending')
+				`, oldAgentID, payload)
+			}
 		}
 	}
 
-	// If new machine exists, create apply_domain job
+	// If new machine exists, create apply_domain job using template
 	if req.MachineID != nil && req.ConfigID != nil {
 		var newAgentID uuid.UUID
 		tx.Get(&newAgentID, "SELECT agent_id FROM machines WHERE id = $1", req.MachineID)
 		if newAgentID != uuid.Nil {
-			payload, _ := json.Marshal(map[string]interface{}{
-				"domain":       domainFQDN,
-				"nginx_config": nginxConfig,
-				"ssl_mode":     "allow_http",
-			})
-			tx.Exec(`
-				INSERT INTO jobs (agent_id, type, payload_json, status)
-				VALUES ($1, 'apply_domain', $2, 'pending')
-			`, newAgentID, payload)
+			// Determine if SSL is enabled
+			sslEnabled := "true"
+			var structured struct {
+				SSLMode string `json:"ssl_mode"`
+			}
+			json.Unmarshal(configJSON, &structured)
+			if structured.SSLMode == "disabled" {
+				sslEnabled = "false"
+			}
+
+			// Use template-based job
+			applyCmd := templates.GetCommand("apply_domain")
+			if applyCmd != nil {
+				payload := applyCmd.ToPayload(map[string]string{
+					"domain":       domainFQDN,
+					"nginx_config": nginxConfig,
+					"ssl_enabled":  sslEnabled,
+				})
+				tx.Exec(`
+					INSERT INTO jobs (agent_id, type, payload_json, status)
+					VALUES ($1, 'run', $2, 'pending')
+				`, newAgentID, payload)
+			}
 
 			// Check for landing deployments in the config
-			var structured struct {
+			var landingStructured struct {
 				Locations []struct {
 					StaticType string `json:"static_type"`
 					LandingID  string `json:"landing_id"`
@@ -356,11 +377,9 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 					UsePHP     bool   `json:"use_php"`
 				} `json:"locations"`
 			}
-			var configJSON json.RawMessage
-			tx.Get(&configJSON, "SELECT structured_json FROM nginx_configs WHERE id = $1", req.ConfigID)
-			json.Unmarshal(configJSON, &structured)
+			json.Unmarshal(configJSON, &landingStructured)
 
-			for _, loc := range structured.Locations {
+			for _, loc := range landingStructured.Locations {
 				if loc.StaticType == "landing" && loc.LandingID != "" {
 					landingUUID, err := uuid.Parse(loc.LandingID)
 					if err != nil {

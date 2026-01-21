@@ -483,43 +483,13 @@ func processJob(cfg *Config, client *http.Client, id, jobType string, payload js
 		logs, err = serviceOp(p.Name, p.Action)
 	
 	case "run":
-		// Unified multi-step job with rollback support
+		// Unified multi-step job with rollback support - THE ONLY job type needed
 		var p RunPayload
 		json.Unmarshal(payload, &p)
 		logs, err = executeRun(p)
 	
-	// Legacy typed jobs (kept for backwards compatibility)
-	case "bootstrap_machine":
-		logs, err = bootstrap()
-	case "apply_domain":
-		var p struct { Domain string ` + "`" + `json:"domain"` + "`" + `; NginxConfig string ` + "`" + `json:"nginx_config"` + "`" + ` }
-		json.Unmarshal(payload, &p)
-		logs, err = applyDomain(p.Domain, p.NginxConfig)
-	case "remove_domain":
-		var p struct { Domain string ` + "`" + `json:"domain"` + "`" + ` }
-		json.Unmarshal(payload, &p)
-		logs, err = removeDomain(p.Domain)
-	case "change_ssh_port":
-		var p struct { Port int ` + "`" + `json:"port"` + "`" + ` }
-		json.Unmarshal(payload, &p)
-		logs, err = changeSSHPort(p.Port)
-	case "change_root_password":
-		var p struct { Password string ` + "`" + `json:"password"` + "`" + ` }
-		json.Unmarshal(payload, &p)
-		logs, err = changeRootPassword(p.Password)
-	case "toggle_ufw":
-		var p struct { Enabled bool ` + "`" + `json:"enabled"` + "`" + ` }
-		json.Unmarshal(payload, &p)
-		logs, err = toggleUFW(p.Enabled)
-	case "toggle_fail2ban":
-		var p struct { Enabled bool ` + "`" + `json:"enabled"` + "`" + `; Config string ` + "`" + `json:"config"` + "`" + ` }
-		json.Unmarshal(payload, &p)
-		logs, err = toggleFail2ban(p.Enabled, p.Config)
-	case "ufw_rule":
-		var p struct { Port string ` + "`" + `json:"port"` + "`" + `; Protocol string ` + "`" + `json:"protocol"` + "`" + `; Action string ` + "`" + `json:"action"` + "`" + ` }
-		json.Unmarshal(payload, &p)
-		logs, err = ufwRule(p.Port, p.Protocol, p.Action)
 	case "deploy_landing":
+		// Special case: needs HTTP download from server (can't be done via exec)
 		var p struct { 
 			LandingID string ` + "`" + `json:"landing_id"` + "`" + `
 			TargetPath string ` + "`" + `json:"target_path"` + "`" + `
@@ -528,9 +498,10 @@ func processJob(cfg *Config, client *http.Client, id, jobType string, payload js
 		}
 		json.Unmarshal(payload, &p)
 		logs, err = deployLanding(cfg, client, p.LandingID, p.TargetPath, p.IndexFile)
+	
 	default:
-		logs = "Unknown job type: " + jobType
-		err = fmt.Errorf("unknown job type")
+		logs = "Unknown job type: " + jobType + ". Agent only supports 'run' and 'deploy_landing' types."
+		err = fmt.Errorf("unknown job type: %s", jobType)
 	}
 	
 	if err != nil {

@@ -355,6 +355,59 @@ var Commands = map[string]*CommandTemplate{
 			{Action: "exec", Command: "chown -R www-data:www-data {{target_path}}", Timeout: 30},
 		},
 	},
+
+	"apply_domain": {
+		ID:          "apply_domain",
+		Name:        "Apply Domain Configuration",
+		Description: "Apply nginx config for a domain, issuing SSL certificate if needed",
+		Category:    "domains",
+		Variables: []VariableDef{
+			{Name: "domain", Type: "string", Required: true, Description: "Domain name"},
+			{Name: "nginx_config", Type: "text", Required: true, Description: "Nginx configuration content"},
+			{Name: "ssl_enabled", Type: "bool", Required: false, Default: "true", Description: "Whether SSL is enabled"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			// Create config directory
+			{Action: "exec", Command: "mkdir -p /etc/nginx/conf.d/configuratix", Timeout: 10},
+			// Issue SSL cert if needed (uses script for conditional logic)
+			{Action: "exec", Command: `
+DOMAIN="{{domain}}"
+SSL_ENABLED="{{ssl_enabled}}"
+CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+
+if [ "$SSL_ENABLED" = "true" ] && [ ! -f "$CERT_PATH" ]; then
+    echo "Issuing SSL certificate for $DOMAIN..."
+    systemctl stop nginx 2>/dev/null || true
+    certbot certonly --standalone -d "$DOMAIN" \
+        --non-interactive --agree-tos --no-eff-email \
+        --email noreply@configuratix.local \
+        --cert-name "$DOMAIN"
+    systemctl start nginx
+fi
+`, Timeout: 120},
+			// Write nginx config
+			{Action: "file", Op: "write", Path: "/etc/nginx/conf.d/configuratix/{{domain}}.conf", Content: "{{nginx_config}}", Mode: "0644"},
+			// Test and reload nginx
+			{Action: "exec", Command: "nginx -t", Timeout: 30},
+			{Action: "service", Name: "nginx", Op: "reload"},
+		},
+	},
+
+	"remove_domain": {
+		ID:          "remove_domain",
+		Name:        "Remove Domain Configuration",
+		Description: "Remove nginx configuration for a domain",
+		Category:    "domains",
+		Variables: []VariableDef{
+			{Name: "domain", Type: "string", Required: true, Description: "Domain name to remove"},
+		},
+		OnError: "continue",
+		Steps: []Step{
+			{Action: "exec", Command: "rm -f /etc/nginx/conf.d/configuratix/{{domain}}.conf", Timeout: 10},
+			{Action: "service", Name: "nginx", Op: "reload"},
+		},
+	},
 }
 
 // GetCommand returns a command template by ID
