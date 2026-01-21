@@ -107,7 +107,7 @@ fi
 # Install dependencies
 echo "Installing dependencies..."
 apt-get update
-apt-get install -y golang-go nginx certbot python3-certbot-nginx fail2ban ufw
+apt-get install -y golang-go nginx certbot python3-certbot-nginx fail2ban ufw unzip
 
 # Create directories
 mkdir -p /etc/configuratix
@@ -820,7 +820,7 @@ func bootstrap() (string, error) {
 	var logs strings.Builder
 	logs.WriteString("Bootstrapping machine...\n")
 	runCmd("apt-get", "update")
-	out, _ := runCmd("apt-get", "install", "-y", "nginx", "certbot", "python3-certbot-nginx", "fail2ban", "ufw")
+	out, _ := runCmd("apt-get", "install", "-y", "nginx", "certbot", "python3-certbot-nginx", "fail2ban", "ufw", "unzip")
 	logs.WriteString(out)
 	os.MkdirAll("/etc/nginx/conf.d/configuratix", 0755)
 	runCmd("systemctl", "enable", "nginx")
