@@ -958,7 +958,7 @@ func deployLanding(cfg *Config, client *http.Client, landingID, targetPath, inde
 	logs.WriteString(fmt.Sprintf("Downloading from %s...\n", downloadURL))
 	
 	req, _ := http.NewRequest("GET", downloadURL, nil)
-	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	req.Header.Set("X-API-Key", cfg.APIKey)
 	
 	resp, err := client.Do(req)
 	if err != nil {
