@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { api, NginxConfig, NginxConfigStructured, LocationConfig } from "@/lib/api";
+import { api, NginxConfig, NginxConfigStructured, LocationConfig, Landing } from "@/lib/api";
 import dynamic from "next/dynamic";
 
 // Dynamically import Monaco to avoid SSR issues
@@ -17,6 +17,7 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false 
 
 export default function NginxConfigsPage() {
   const [configs, setConfigs] = useState<NginxConfig[]>([]);
+  const [landings, setLandings] = useState<Landing[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -38,10 +39,14 @@ export default function NginxConfigsPage() {
 
   const loadData = async () => {
     try {
-      const data = await api.listNginxConfigs();
-      setConfigs(data);
+      const [configsData, landingsData] = await Promise.all([
+        api.listNginxConfigs(),
+        api.listLandings(),
+      ]);
+      setConfigs(configsData);
+      setLandings(landingsData);
     } catch (err) {
-      console.error("Failed to load configs:", err);
+      console.error("Failed to load data:", err);
     } finally {
       setLoading(false);
     }
@@ -367,16 +372,74 @@ export default function NginxConfigsPage() {
                           />
                         ) : (
                           <div className="space-y-2">
-                            <Input
-                              placeholder="/var/www/html"
-                              value={loc.root || ""}
-                              onChange={(e) => updateLocation(index, { root: e.target.value })}
-                            />
-                            <Input
-                              placeholder="index.html"
-                              value={loc.index || ""}
-                              onChange={(e) => updateLocation(index, { index: e.target.value })}
-                            />
+                            {/* Static Type Selector */}
+                            <Select
+                              value={loc.static_type || "local"}
+                              onValueChange={(value) => updateLocation(index, { static_type: value })}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Static type" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="local">Local Path</SelectItem>
+                                <SelectItem value="landing">Landing Page</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            
+                            {loc.static_type === "landing" ? (
+                              <>
+                                {/* Landing Selector */}
+                                <Select
+                                  value={loc.landing_id || ""}
+                                  onValueChange={(value) => updateLocation(index, { landing_id: value })}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Select a landing page" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {landings.length === 0 ? (
+                                      <SelectItem value="" disabled>No landings available</SelectItem>
+                                    ) : (
+                                      landings.map((landing) => (
+                                        <SelectItem key={landing.id} value={landing.id}>
+                                          {landing.name} ({landing.type.toUpperCase()})
+                                        </SelectItem>
+                                      ))
+                                    )}
+                                  </SelectContent>
+                                </Select>
+                                <Input
+                                  placeholder="/var/www/html/landing"
+                                  value={loc.root || ""}
+                                  onChange={(e) => updateLocation(index, { root: e.target.value })}
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                  Target path where landing will be extracted
+                                </p>
+                              </>
+                            ) : (
+                              <>
+                                <Input
+                                  placeholder="/var/www/html"
+                                  value={loc.root || ""}
+                                  onChange={(e) => updateLocation(index, { root: e.target.value })}
+                                />
+                                <Input
+                                  placeholder="index.html"
+                                  value={loc.index || ""}
+                                  onChange={(e) => updateLocation(index, { index: e.target.value })}
+                                />
+                              </>
+                            )}
+                            
+                            {/* PHP Toggle */}
+                            <div className="flex items-center justify-between pt-2 border-t">
+                              <Label className="text-sm">Enable PHP</Label>
+                              <Switch 
+                                checked={loc.use_php || false}
+                                onCheckedChange={(checked) => updateLocation(index, { use_php: checked })}
+                              />
+                            </div>
                           </div>
                         )}
                       </CardContent>
@@ -526,16 +589,74 @@ export default function NginxConfigsPage() {
                           />
                         ) : (
                           <div className="space-y-2">
-                            <Input
-                              placeholder="/var/www/html"
-                              value={loc.root || ""}
-                              onChange={(e) => updateLocation(index, { root: e.target.value })}
-                            />
-                            <Input
-                              placeholder="index.html"
-                              value={loc.index || ""}
-                              onChange={(e) => updateLocation(index, { index: e.target.value })}
-                            />
+                            {/* Static Type Selector */}
+                            <Select
+                              value={loc.static_type || "local"}
+                              onValueChange={(value) => updateLocation(index, { static_type: value })}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Static type" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="local">Local Path</SelectItem>
+                                <SelectItem value="landing">Landing Page</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            
+                            {loc.static_type === "landing" ? (
+                              <>
+                                {/* Landing Selector */}
+                                <Select
+                                  value={loc.landing_id || ""}
+                                  onValueChange={(value) => updateLocation(index, { landing_id: value })}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Select a landing page" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {landings.length === 0 ? (
+                                      <SelectItem value="" disabled>No landings available</SelectItem>
+                                    ) : (
+                                      landings.map((landing) => (
+                                        <SelectItem key={landing.id} value={landing.id}>
+                                          {landing.name} ({landing.type.toUpperCase()})
+                                        </SelectItem>
+                                      ))
+                                    )}
+                                  </SelectContent>
+                                </Select>
+                                <Input
+                                  placeholder="/var/www/html/landing"
+                                  value={loc.root || ""}
+                                  onChange={(e) => updateLocation(index, { root: e.target.value })}
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                  Target path where landing will be extracted
+                                </p>
+                              </>
+                            ) : (
+                              <>
+                                <Input
+                                  placeholder="/var/www/html"
+                                  value={loc.root || ""}
+                                  onChange={(e) => updateLocation(index, { root: e.target.value })}
+                                />
+                                <Input
+                                  placeholder="index.html"
+                                  value={loc.index || ""}
+                                  onChange={(e) => updateLocation(index, { index: e.target.value })}
+                                />
+                              </>
+                            )}
+                            
+                            {/* PHP Toggle */}
+                            <div className="flex items-center justify-between pt-2 border-t">
+                              <Label className="text-sm">Enable PHP</Label>
+                              <Switch 
+                                checked={loc.use_php || false}
+                                onCheckedChange={(checked) => updateLocation(index, { use_php: checked })}
+                              />
+                            </div>
                           </div>
                         )}
                       </CardContent>

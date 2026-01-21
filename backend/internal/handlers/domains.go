@@ -345,6 +345,63 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 				INSERT INTO jobs (agent_id, type, payload_json, status)
 				VALUES ($1, 'apply_domain', $2, 'pending')
 			`, newAgentID, payload)
+
+			// Check for landing deployments in the config
+			var structured struct {
+				Locations []struct {
+					StaticType string `json:"static_type"`
+					LandingID  string `json:"landing_id"`
+					Root       string `json:"root"`
+					Index      string `json:"index"`
+					UsePHP     bool   `json:"use_php"`
+				} `json:"locations"`
+			}
+			var configJSON json.RawMessage
+			tx.Get(&configJSON, "SELECT structured_json FROM nginx_configs WHERE id = $1", req.ConfigID)
+			json.Unmarshal(configJSON, &structured)
+
+			for _, loc := range structured.Locations {
+				if loc.StaticType == "landing" && loc.LandingID != "" {
+					landingUUID, err := uuid.Parse(loc.LandingID)
+					if err != nil {
+						continue
+					}
+
+					// Get landing info
+					var landing struct {
+						StoragePath string `db:"storage_path"`
+						Type        string `db:"type"`
+						FileName    string `db:"file_name"`
+					}
+					err = tx.Get(&landing, "SELECT storage_path, type, file_name FROM landings WHERE id = $1", landingUUID)
+					if err != nil {
+						log.Printf("Failed to get landing %s: %v", loc.LandingID, err)
+						continue
+					}
+
+					// Create deploy_landing job
+					index := loc.Index
+					if index == "" {
+						if landing.Type == "php" {
+							index = "index.php"
+						} else {
+							index = "index.html"
+						}
+					}
+
+					deployPayload, _ := json.Marshal(map[string]interface{}{
+						"landing_id":   loc.LandingID,
+						"storage_path": landing.StoragePath,
+						"target_path":  loc.Root,
+						"index_file":   index,
+						"use_php":      loc.UsePHP,
+					})
+					tx.Exec(`
+						INSERT INTO jobs (agent_id, type, payload_json, status)
+						VALUES ($1, 'deploy_landing', $2, 'pending')
+					`, newAgentID, deployPayload)
+				}
+			}
 		}
 	}
 

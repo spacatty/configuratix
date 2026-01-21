@@ -266,9 +266,19 @@ func (h *LandingsHandler) extractZipForPreview(zipPath, destPath string, landing
 
 // ServePreview serves landing page preview (static files only, no PHP execution)
 func (h *LandingsHandler) ServePreview(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	token := vars["token"]
-	filePath := vars["path"]
+	// Parse URL: /api/landings/preview/{token}/{path...}
+	urlPath := strings.TrimPrefix(r.URL.Path, "/api/landings/preview/")
+	parts := strings.SplitN(urlPath, "/", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		http.Error(w, "Missing preview token", http.StatusBadRequest)
+		return
+	}
+	
+	token := parts[0]
+	filePath := ""
+	if len(parts) > 1 {
+		filePath = parts[1]
+	}
 
 	// Validate token format
 	if len(token) != 32 || !isAlphanumeric(token) {
@@ -469,6 +479,26 @@ func (h *LandingsHandler) DownloadLanding(w http.ResponseWriter, r *http.Request
 	// Check access
 	if landing.OwnerID != userID && !claims.IsSuperAdmin() {
 		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", landing.FileName))
+	w.Header().Set("Content-Type", "application/zip")
+	http.ServeFile(w, r, landing.StoragePath)
+}
+
+// AgentDownloadLanding allows agents to download landing files (uses agent auth via API key)
+func (h *LandingsHandler) AgentDownloadLanding(w http.ResponseWriter, r *http.Request) {
+	landingID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid landing ID", http.StatusBadRequest)
+		return
+	}
+
+	var landing models.Landing
+	err = h.db.Get(&landing, "SELECT * FROM landings WHERE id = $1", landingID)
+	if err != nil {
+		http.Error(w, "Landing not found", http.StatusNotFound)
 		return
 	}
 

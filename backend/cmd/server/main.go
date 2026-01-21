@@ -159,9 +159,7 @@ func main() {
 	apiRouter.HandleFunc("/landings/{id}", landingsHandler.DeleteLanding).Methods("DELETE", "OPTIONS")
 	apiRouter.HandleFunc("/landings/{id}/download", landingsHandler.DownloadLanding).Methods("GET", "OPTIONS")
 	// Landing preview (static file serving - public with token)
-	router.PathPrefix("/api/landings/preview/{token}/").Handler(
-		http.StripPrefix("/api/landings/preview/", http.HandlerFunc(landingsHandler.ServePreview)),
-	)
+	router.PathPrefix("/api/landings/preview/").HandlerFunc(landingsHandler.ServePreview)
 
 	// Terminal WebSocket
 	terminalHandler := handlers.NewTerminalHandler(db)
@@ -169,6 +167,8 @@ func main() {
 	apiRouter.HandleFunc("/machines/{id}/terminal/status", terminalHandler.GetTerminalStatus).Methods("GET", "OPTIONS")
 	// Agent terminal WebSocket (uses agent auth)
 	agentRouter.HandleFunc("/terminal", terminalHandler.AgentTerminalConnect).Methods("GET")
+	// Agent landing download (uses agent auth)
+	agentRouter.HandleFunc("/landings/{id}/download", landingsHandler.AgentDownloadLanding).Methods("GET", "OPTIONS")
 
 	// Start domain health check scheduler
 	checkInterval := 1 // Default: 1 hour

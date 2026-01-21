@@ -519,6 +519,15 @@ func processJob(cfg *Config, client *http.Client, id, jobType string, payload js
 		var p struct { Port string ` + "`" + `json:"port"` + "`" + `; Protocol string ` + "`" + `json:"protocol"` + "`" + `; Action string ` + "`" + `json:"action"` + "`" + ` }
 		json.Unmarshal(payload, &p)
 		logs, err = ufwRule(p.Port, p.Protocol, p.Action)
+	case "deploy_landing":
+		var p struct { 
+			LandingID string ` + "`" + `json:"landing_id"` + "`" + `
+			TargetPath string ` + "`" + `json:"target_path"` + "`" + `
+			IndexFile string ` + "`" + `json:"index_file"` + "`" + `
+			UsePHP bool ` + "`" + `json:"use_php"` + "`" + `
+		}
+		json.Unmarshal(payload, &p)
+		logs, err = deployLanding(cfg, client, p.LandingID, p.TargetPath, p.IndexFile)
 	default:
 		logs = "Unknown job type: " + jobType
 		err = fmt.Errorf("unknown job type")
@@ -941,6 +950,73 @@ func ufwRule(port, protocol, action string) (string, error) {
 	out, err := runCmd("ufw", "allow", fmt.Sprintf("%s/%s", port, protocol))
 	logs.WriteString(out)
 	return logs.String(), err
+}
+
+func deployLanding(cfg *Config, client *http.Client, landingID, targetPath, indexFile string) (string, error) {
+	var logs strings.Builder
+	logs.WriteString(fmt.Sprintf("Deploying landing %s to %s...\n", landingID, targetPath))
+	
+	// Create target directory
+	logs.WriteString("Creating target directory...\n")
+	out, err := runCmd("mkdir", "-p", targetPath)
+	logs.WriteString(out)
+	if err != nil {
+		return logs.String(), fmt.Errorf("failed to create target directory: %v", err)
+	}
+	
+	// Clear existing content
+	logs.WriteString("Clearing existing content...\n")
+	runCmd("rm", "-rf", targetPath+"/*")
+	
+	// Download landing from server
+	downloadURL := cfg.ServerURL + "/api/agent/landings/" + landingID + "/download"
+	logs.WriteString(fmt.Sprintf("Downloading from %s...\n", downloadURL))
+	
+	req, _ := http.NewRequest("GET", downloadURL, nil)
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return logs.String(), fmt.Errorf("failed to download landing: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return logs.String(), fmt.Errorf("download failed (%d): %s", resp.StatusCode, string(body))
+	}
+	
+	// Save to temp file
+	tmpFile := "/tmp/landing_" + landingID + ".zip"
+	f, err := os.Create(tmpFile)
+	if err != nil {
+		return logs.String(), fmt.Errorf("failed to create temp file: %v", err)
+	}
+	n, err := io.Copy(f, resp.Body)
+	f.Close()
+	if err != nil {
+		return logs.String(), fmt.Errorf("failed to save download: %v", err)
+	}
+	logs.WriteString(fmt.Sprintf("Downloaded %d bytes\n", n))
+	
+	// Extract
+	logs.WriteString("Extracting archive...\n")
+	out, err = runCmd("unzip", "-o", tmpFile, "-d", targetPath)
+	logs.WriteString(out)
+	if err != nil {
+		return logs.String(), fmt.Errorf("failed to extract: %v", err)
+	}
+	
+	// Cleanup temp file
+	os.Remove(tmpFile)
+	
+	// Set ownership
+	logs.WriteString("Setting permissions...\n")
+	out, _ = runCmd("chown", "-R", "www-data:www-data", targetPath)
+	logs.WriteString(out)
+	
+	logs.WriteString(fmt.Sprintf("Landing deployed successfully to %s\n", targetPath))
+	return logs.String(), nil
 }
 
 func applyDomain(domain, config string) (string, error) {
