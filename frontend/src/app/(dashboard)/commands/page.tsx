@@ -1,34 +1,36 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { ColumnDef } from "@tanstack/react-table";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DataTable } from "@/components/ui/data-table";
 import { api, CommandTemplate, Machine } from "@/lib/api";
-
-const categoryColors: Record<string, string> = {
-  security: "bg-red-500/20 text-red-400 border-red-500/30",
-  firewall: "bg-orange-500/20 text-orange-400 border-orange-500/30",
-  nginx: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-  ssl: "bg-green-500/20 text-green-400 border-green-500/30",
-  system: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  files: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
-};
+import { toast } from "sonner";
+import { 
+  Play, 
+  Terminal,
+  Cog,
+  Shield,
+  Server,
+  FileCode,
+  Zap
+} from "lucide-react";
 
 export default function CommandsPage() {
   const [commands, setCommands] = useState<CommandTemplate[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showExecuteDialog, setShowExecuteDialog] = useState(false);
   const [selectedCommand, setSelectedCommand] = useState<CommandTemplate | null>(null);
-  const [selectedMachine, setSelectedMachine] = useState<string>("");
+  const [selectedMachine, setSelectedMachine] = useState("");
   const [variables, setVariables] = useState<Record<string, string>>({});
   const [executing, setExecuting] = useState(false);
-  const [filterCategory, setFilterCategory] = useState<string>("all");
 
   useEffect(() => {
     loadData();
@@ -36,58 +38,187 @@ export default function CommandsPage() {
 
   const loadData = async () => {
     try {
-      const [cmds, mchs] = await Promise.all([
+      const [commandsData, machinesData] = await Promise.all([
         api.listCommands(),
         api.listMachines(),
       ]);
-      setCommands(cmds || []);
-      setMachines(mchs || []);
+      setCommands(commandsData);
+      setMachines(machinesData);
     } catch (err) {
       console.error("Failed to load data:", err);
+      toast.error("Failed to load commands");
     } finally {
       setLoading(false);
     }
   };
 
-  const openExecuteDialog = (cmd: CommandTemplate) => {
-    setSelectedCommand(cmd);
-    // Initialize variables with defaults
-    const vars: Record<string, string> = {};
-    cmd.variables.forEach(v => {
-      vars[v.name] = v.default || "";
+  const openExecuteDialog = (command: CommandTemplate) => {
+    setSelectedCommand(command);
+    const defaultVars: Record<string, string> = {};
+    command.variables.forEach(v => {
+      defaultVars[v.name] = v.default || "";
     });
-    setVariables(vars);
+    setVariables(defaultVars);
+    setSelectedMachine("");
+    setShowExecuteDialog(true);
   };
 
   const handleExecute = async () => {
-    if (!selectedCommand || !selectedMachine) return;
-    
+    if (!selectedCommand || !selectedMachine) {
+      toast.error("Please select a machine");
+      return;
+    }
+
+    // Validate required variables
+    for (const v of selectedCommand.variables) {
+      if (v.required && !variables[v.name]) {
+        toast.error(`Variable "${v.name}" is required`);
+        return;
+      }
+    }
+
     setExecuting(true);
     try {
       await api.executeCommand(selectedMachine, selectedCommand.id, variables);
-      alert("Job created successfully! Check the machine's job history.");
-      setSelectedCommand(null);
-      setSelectedMachine("");
-      setVariables({});
+      setShowExecuteDialog(false);
+      toast.success(`Command "${selectedCommand.name}" sent to machine`);
     } catch (err) {
       console.error("Failed to execute command:", err);
-      alert("Failed to create job: " + err);
+      toast.error("Failed to execute command");
     } finally {
       setExecuting(false);
     }
   };
 
-  const categories = [...new Set(commands.map(c => c.category))];
-  const filteredCommands = filterCategory === "all" 
-    ? commands 
-    : commands.filter(c => c.category === filterCategory);
+  const getCategoryIcon = (category: string) => {
+    switch (category) {
+      case "system":
+        return <Cog className="h-4 w-4" />;
+      case "security":
+        return <Shield className="h-4 w-4" />;
+      case "nginx":
+        return <FileCode className="h-4 w-4" />;
+      default:
+        return <Terminal className="h-4 w-4" />;
+    }
+  };
 
-  // Group by category
-  const groupedCommands = filteredCommands.reduce((acc, cmd) => {
-    if (!acc[cmd.category]) acc[cmd.category] = [];
-    acc[cmd.category].push(cmd);
-    return acc;
-  }, {} as Record<string, CommandTemplate[]>);
+  const getCategoryColor = (category: string) => {
+    switch (category) {
+      case "system":
+        return "bg-blue-500/20 text-blue-400 border-blue-500/30";
+      case "security":
+        return "bg-red-500/20 text-red-400 border-red-500/30";
+      case "nginx":
+        return "bg-green-500/20 text-green-400 border-green-500/30";
+      default:
+        return "bg-gray-500/20 text-gray-400 border-gray-500/30";
+    }
+  };
+
+  const columns: ColumnDef<CommandTemplate>[] = [
+    {
+      accessorKey: "name",
+      header: "Command",
+      cell: ({ row }) => {
+        const cmd = row.original;
+        return (
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-yellow-500/20 to-yellow-500/5 flex items-center justify-center">
+              <Zap className="h-5 w-5 text-yellow-500" />
+            </div>
+            <div>
+              <div className="font-medium">{cmd.name}</div>
+              <div className="text-xs text-muted-foreground max-w-md truncate">
+                {cmd.description}
+              </div>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: "category",
+      header: "Category",
+      cell: ({ row }) => {
+        const category = row.original.category;
+        return (
+          <Badge className={`${getCategoryColor(category)} text-xs capitalize`}>
+            {getCategoryIcon(category)}
+            <span className="ml-1">{category}</span>
+          </Badge>
+        );
+      },
+    },
+    {
+      accessorKey: "variables",
+      header: "Variables",
+      cell: ({ row }) => {
+        const vars = row.original.variables;
+        const required = vars.filter(v => v.required).length;
+        const optional = vars.length - required;
+        return (
+          <div className="text-sm">
+            {vars.length === 0 ? (
+              <span className="text-muted-foreground">None</span>
+            ) : (
+              <span>
+                {required > 0 && (
+                  <Badge variant="outline" className="mr-1 text-xs">
+                    {required} required
+                  </Badge>
+                )}
+                {optional > 0 && (
+                  <Badge variant="secondary" className="text-xs">
+                    {optional} optional
+                  </Badge>
+                )}
+              </span>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: "steps",
+      header: "Steps",
+      cell: ({ row }) => (
+        <span className="text-sm text-muted-foreground">
+          {row.original.steps.length} step(s)
+        </span>
+      ),
+    },
+    {
+      accessorKey: "on_error",
+      header: "On Error",
+      cell: ({ row }) => {
+        const onError = row.original.on_error;
+        return (
+          <Badge 
+            variant="outline" 
+            className={`text-xs ${
+              onError === "rollback" 
+                ? "border-yellow-500/30 text-yellow-500" 
+                : onError === "stop"
+                ? "border-red-500/30 text-red-500"
+                : "border-gray-500/30"
+            }`}
+          >
+            {onError}
+          </Badge>
+        );
+      },
+    },
+    {
+      id: "actions",
+      cell: ({ row }) => (
+        <Button size="sm" onClick={() => openExecuteDialog(row.original)}>
+          <Play className="h-4 w-4 mr-1" />
+          Execute
+        </Button>
+      ),
+    },
+  ];
 
   if (loading) {
     return (
@@ -97,91 +228,73 @@ export default function CommandsPage() {
     );
   }
 
+  const categories = [...new Set(commands.map(c => c.category))];
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Commands</h1>
           <p className="text-muted-foreground mt-1">
-            Built-in command templates for managing machines
+            Execute predefined commands on your machines. {commands.length} template(s) available.
           </p>
         </div>
-        <Select value={filterCategory} onValueChange={setFilterCategory}>
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="Filter by category" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Categories</SelectItem>
-            {categories.map(cat => (
-              <SelectItem key={cat} value={cat} className="capitalize">{cat}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
       </div>
 
-      {Object.entries(groupedCommands).map(([category, cmds]) => (
-        <div key={category} className="space-y-4">
-          <h2 className="text-xl font-semibold capitalize flex items-center gap-2">
-            <Badge className={categoryColors[category] || ""}>{category}</Badge>
-            <span className="text-muted-foreground text-sm font-normal">({cmds.length} commands)</span>
-          </h2>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {cmds.map(cmd => (
-              <Card key={cmd.id} className="border-border/50 bg-card/50 hover:border-primary/50 transition-colors">
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <CardTitle className="text-lg">{cmd.name}</CardTitle>
-                      <CardDescription className="mt-1">{cmd.description}</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {cmd.variables.length > 0 && (
-                      <div className="text-sm">
-                        <p className="text-muted-foreground mb-1">Variables:</p>
-                        <div className="flex flex-wrap gap-1">
-                          {cmd.variables.map(v => (
-                            <Badge key={v.name} variant="outline" className="font-mono text-xs">
-                              {v.name}{v.required && <span className="text-red-400">*</span>}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    <div className="text-xs text-muted-foreground">
-                      {cmd.steps.length} step{cmd.steps.length !== 1 ? 's' : ''} • on_error: {cmd.on_error}
-                    </div>
-                    <Button 
-                      size="sm" 
-                      className="w-full"
-                      onClick={() => openExecuteDialog(cmd)}
-                      disabled={machines.length === 0}
-                    >
-                      Execute
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      ))}
-
-      {commands.length === 0 && (
+      {/* Category Stats */}
+      <div className="grid gap-4 md:grid-cols-4">
+        {categories.map(category => (
+          <Card key={category} className="border-border/50 bg-card/50">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium capitalize">{category}</CardTitle>
+              {getCategoryIcon(category)}
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                {commands.filter(c => c.category === category).length}
+              </div>
+              <p className="text-xs text-muted-foreground">commands</p>
+            </CardContent>
+          </Card>
+        ))}
         <Card className="border-border/50 bg-card/50">
-          <CardHeader>
-            <CardTitle>No Commands Available</CardTitle>
-            <CardDescription>
-              Command templates will appear here once the backend is configured.
-            </CardDescription>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Online Machines</CardTitle>
+            <Server className="h-4 w-4 text-green-500" />
           </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-500">
+              {machines.filter(m => {
+                if (!m.last_seen) return false;
+                const diff = (Date.now() - new Date(m.last_seen).getTime()) / 1000 / 60;
+                return diff < 5;
+              }).length}
+            </div>
+            <p className="text-xs text-muted-foreground">ready for commands</p>
+          </CardContent>
         </Card>
-      )}
+      </div>
 
-      {/* Execute Command Dialog */}
-      <Dialog open={!!selectedCommand} onOpenChange={(open) => !open && setSelectedCommand(null)}>
+      {/* Commands Table */}
+      <Card className="border-border/50 bg-card/50">
+        <CardHeader>
+          <CardTitle className="text-lg">Command Templates</CardTitle>
+          <CardDescription>
+            Predefined commands that can be executed on any connected machine.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DataTable 
+            columns={columns} 
+            data={commands}
+            searchKey="name"
+            searchPlaceholder="Search commands..."
+          />
+        </CardContent>
+      </Card>
+
+      {/* Execute Dialog */}
+      <Dialog open={showExecuteDialog} onOpenChange={setShowExecuteDialog}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Execute: {selectedCommand?.name}</DialogTitle>
@@ -190,74 +303,86 @@ export default function CommandsPage() {
             </DialogDescription>
           </DialogHeader>
           
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Target Machine</Label>
-              <Select value={selectedMachine} onValueChange={setSelectedMachine}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a machine" />
-                </SelectTrigger>
-                <SelectContent>
-                  {machines.map(m => (
-                    <SelectItem key={m.id} value={m.id}>
-                      {m.hostname || m.ip_address || m.id}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {selectedCommand?.variables.map(v => (
-              <div key={v.name} className="space-y-2">
-                <Label htmlFor={v.name}>
-                  {v.name}
-                  {v.required && <span className="text-red-400 ml-1">*</span>}
-                </Label>
-                {v.type === "text" ? (
-                  <Textarea
-                    id={v.name}
-                    placeholder={v.description}
-                    value={variables[v.name] || ""}
-                    onChange={(e) => setVariables({...variables, [v.name]: e.target.value})}
-                    className="font-mono text-sm"
-                    rows={4}
-                  />
-                ) : (
-                  <Input
-                    id={v.name}
-                    type={v.type === "int" ? "number" : "text"}
-                    placeholder={v.description}
-                    value={variables[v.name] || ""}
-                    onChange={(e) => setVariables({...variables, [v.name]: e.target.value})}
-                  />
-                )}
-                <p className="text-xs text-muted-foreground">{v.description}</p>
+          {selectedCommand && (
+            <div className="space-y-4">
+              {/* Machine Selection */}
+              <div className="space-y-2">
+                <Label>Target Machine</Label>
+                <Select value={selectedMachine} onValueChange={setSelectedMachine}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a machine" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {machines.map(machine => {
+                      const isOnline = machine.last_seen && 
+                        (Date.now() - new Date(machine.last_seen).getTime()) / 1000 / 60 < 5;
+                      return (
+                        <SelectItem key={machine.id} value={machine.id}>
+                          <div className="flex items-center gap-2">
+                            <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-500'}`} />
+                            {machine.title || machine.hostname || machine.ip_address}
+                          </div>
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
               </div>
-            ))}
 
-            {selectedCommand && selectedCommand.steps.length > 0 && (
-              <div className="p-3 rounded-lg bg-muted/50 space-y-2">
-                <p className="text-sm font-medium">Steps Preview:</p>
-                <div className="text-xs font-mono space-y-1 max-h-32 overflow-auto">
+              {/* Variables */}
+              {selectedCommand.variables.length > 0 && (
+                <div className="space-y-3">
+                  <Label>Variables</Label>
+                  <div className="space-y-3 p-4 rounded-lg bg-muted/50">
+                    {selectedCommand.variables.map(v => (
+                      <div key={v.name} className="space-y-1">
+                        <Label htmlFor={`var-${v.name}`} className="text-sm">
+                          {v.name}
+                          {v.required && <span className="text-red-500 ml-1">*</span>}
+                        </Label>
+                        <Input
+                          id={`var-${v.name}`}
+                          type={v.type === "password" ? "password" : "text"}
+                          value={variables[v.name] || ""}
+                          onChange={(e) => setVariables({...variables, [v.name]: e.target.value})}
+                          placeholder={v.description}
+                        />
+                        <p className="text-xs text-muted-foreground">{v.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Steps Preview */}
+              <div className="space-y-2">
+                <Label>Steps ({selectedCommand.steps.length})</Label>
+                <div className="max-h-32 overflow-y-auto text-xs font-mono p-3 rounded-lg bg-black text-green-400">
                   {selectedCommand.steps.map((step, i) => (
-                    <div key={i} className="text-muted-foreground">
-                      {i + 1}. {step.action}: {step.command || step.path || step.name || step.url}
+                    <div key={i} className="mb-1">
+                      <span className="text-muted-foreground">{i + 1}.</span>{" "}
+                      <span className="text-yellow-400">{step.action}</span>
+                      {step.command && <span>: {step.command}</span>}
+                      {step.path && <span>: {step.path}</span>}
+                      {step.name && <span>: {step.name}</span>}
                     </div>
                   ))}
                 </div>
               </div>
-            )}
-          </div>
+
+              {/* On Error */}
+              <div className="text-sm text-muted-foreground">
+                On error: <Badge variant="outline" className="ml-1">{selectedCommand.on_error}</Badge>
+              </div>
+            </div>
+          )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSelectedCommand(null)}>
+            <Button variant="outline" onClick={() => setShowExecuteDialog(false)}>
               Cancel
             </Button>
-            <Button 
-              onClick={handleExecute} 
-              disabled={!selectedMachine || executing}
-            >
-              {executing ? "Creating Job..." : "Execute"}
+            <Button onClick={handleExecute} disabled={executing || !selectedMachine}>
+              {executing ? "Executing..." : "Execute Command"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -265,4 +390,3 @@ export default function CommandsPage() {
     </div>
   );
 }
-
