@@ -10,6 +10,10 @@ dotenv: ['.env']
 # - CORS_ALLOWED_ORIGINS: Comma-separated allowed origins (backend)
 # - NEXT_PUBLIC_API_URL: Backend API URL for frontend (e.g., http://localhost:8080)
 
+vars:
+  PORT: '{{.PORT | default "8080"}}'
+  NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}'
+
 tasks:
   default:
     desc: Show available tasks
@@ -29,20 +33,18 @@ tasks:
   dev:backend:
     desc: Start backend in development mode
     dir: backend
-    env:
-      PORT: '{{.PORT | default "8080"}}'
     cmds:
-      - echo "Starting backend on port {{.PORT | default "8080"}}..."
+      - echo "Starting backend on port {{.PORT}}..."
       - go run cmd/server/main.go
 
   dev:frontend:
     desc: Start frontend in development mode
     dir: frontend
     env:
-      NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}'
+      NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL}}'
     cmds:
       - echo "Starting frontend on port 3000..."
-      - echo "API URL: {{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}"
+      - echo "API URL {{.NEXT_PUBLIC_API_URL}}"
       - pnpm dev
 
   db:check:
@@ -54,21 +56,19 @@ tasks:
   prod:backend:
     desc: Build and run backend in production mode
     dir: backend
-    env:
-      PORT: '{{.PORT | default "8080"}}'
     cmds:
       - echo "Building backend..."
       - go build -o bin/server.exe cmd/server/main.go
-      - echo "Starting backend on port {{.PORT | default "8080"}}..."
+      - echo "Starting backend on port {{.PORT}}..."
       - bin/server.exe
 
   prod:frontend:
     desc: Build and run frontend in production mode
     dir: frontend
     env:
-      NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}'
+      NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL}}'
     cmds:
-      - echo "Building frontend with API URL: {{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}..."
+      - echo "Building frontend with API URL {{.NEXT_PUBLIC_API_URL}}..."
       - pnpm build
       - echo "Starting frontend in production mode..."
       - pnpm start
@@ -95,15 +95,15 @@ tasks:
     cmds:
       - echo "Building backend..."
       - go build -o bin/server.exe cmd/server/main.go
-      - echo Backend built successfully at backend/bin/server.exe
+      - echo "Backend built successfully at backend/bin/server.exe"
 
   build:frontend:
     desc: Build frontend for production
     dir: frontend
     env:
-      NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}'
+      NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL}}'
     cmds:
-      - echo "Building frontend with API URL: {{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}..."
+      - echo "Building frontend with API URL {{.NEXT_PUBLIC_API_URL}}..."
       - pnpm build
       - echo "Frontend built successfully"
 
@@ -140,4 +140,4 @@ tasks:
     desc: Clean build artifacts (Windows PowerShell)
     cmds:
       - powershell -Command "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue backend\bin, frontend\.next, frontend\dist"
-      - echo Clean complete
+      - echo "Clean complete"
