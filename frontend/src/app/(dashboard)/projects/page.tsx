@@ -114,13 +114,40 @@ export default function ProjectsPage() {
     }
   };
 
+  const copyToClipboard = async (text: string): Promise<boolean> => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } else {
+        // Fallback for HTTP
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-999999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const success = document.execCommand("copy");
+        document.body.removeChild(textArea);
+        return success;
+      }
+    } catch {
+      return false;
+    }
+  };
+
   const toggleSharing = async (project: ProjectWithStats) => {
     try {
       const updated = await api.toggleProjectSharing(project.id, !project.sharing_enabled);
       if (updated.sharing_enabled && updated.invite_token) {
         const inviteUrl = `${window.location.origin}/join?token=${updated.invite_token}`;
-        await navigator.clipboard.writeText(inviteUrl);
-        toast.success("Sharing enabled! Invite link copied to clipboard.");
+        const copied = await copyToClipboard(inviteUrl);
+        if (copied) {
+          toast.success("Sharing enabled! Invite link copied to clipboard.");
+        } else {
+          toast.success("Sharing enabled! Token: " + updated.invite_token);
+        }
       } else {
         toast.success("Sharing disabled");
       }
@@ -131,10 +158,14 @@ export default function ProjectsPage() {
     }
   };
 
-  const copyInviteLink = (token: string) => {
+  const copyInviteLink = async (token: string) => {
     const inviteUrl = `${window.location.origin}/join?token=${token}`;
-    navigator.clipboard.writeText(inviteUrl);
-    toast.success("Invite link copied");
+    const copied = await copyToClipboard(inviteUrl);
+    if (copied) {
+      toast.success("Invite link copied");
+    } else {
+      toast.error("Failed to copy. Token: " + token);
+    }
   };
 
   const columns: ColumnDef<ProjectWithStats>[] = [
