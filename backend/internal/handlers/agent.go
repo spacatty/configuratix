@@ -143,6 +143,19 @@ func (h *AgentHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// HeartbeatRequest includes system stats from agent
+type HeartbeatRequest struct {
+	Version     string  `json:"version"`
+	CPUPercent  float64 `json:"cpu_percent"`
+	MemoryUsed  int64   `json:"memory_used"`
+	MemoryTotal int64   `json:"memory_total"`
+	DiskUsed    int64   `json:"disk_used"`
+	DiskTotal   int64   `json:"disk_total"`
+	SSHPort     int     `json:"ssh_port"`
+	UFWEnabled  bool    `json:"ufw_enabled"`
+	Fail2ban    bool    `json:"fail2ban_enabled"`
+}
+
 // Heartbeat handles agent heartbeat
 func (h *AgentHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	agentID, ok := r.Context().Value("agent_id").(uuid.UUID)
@@ -151,17 +164,35 @@ func (h *AgentHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Version string `json:"version"`
-	}
+	var req HeartbeatRequest
 	json.NewDecoder(r.Body).Decode(&req)
 
+	// Update agent last_seen and version
 	_, err := h.db.Exec(`
-		UPDATE agents SET last_seen = NOW(), version = COALESCE($1, version)
+		UPDATE agents SET last_seen = NOW(), version = COALESCE(NULLIF($1, ''), version)
 		WHERE id = $2
 	`, req.Version, agentID)
 	if err != nil {
-		log.Printf("Failed to update heartbeat: %v", err)
+		log.Printf("Failed to update agent heartbeat: %v", err)
+	}
+
+	// Update machine stats
+	_, err = h.db.Exec(`
+		UPDATE machines SET 
+			cpu_percent = $1,
+			memory_used = $2,
+			memory_total = $3,
+			disk_used = $4,
+			disk_total = $5,
+			ssh_port = CASE WHEN $6 > 0 THEN $6 ELSE ssh_port END,
+			ufw_enabled = $7,
+			fail2ban_enabled = $8,
+			updated_at = NOW()
+		WHERE agent_id = $9
+	`, req.CPUPercent, req.MemoryUsed, req.MemoryTotal, req.DiskUsed, req.DiskTotal,
+		req.SSHPort, req.UFWEnabled, req.Fail2ban, agentID)
+	if err != nil {
+		log.Printf("Failed to update machine stats: %v", err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

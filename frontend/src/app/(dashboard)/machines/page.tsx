@@ -156,7 +156,12 @@ export default function MachinesPage() {
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between">
                   <div>
-                    <CardTitle className="text-lg">{machine.hostname || "Unknown"}</CardTitle>
+                    <CardTitle 
+                      className="text-lg cursor-pointer hover:text-primary transition-colors"
+                      onClick={() => window.location.href = `/machines/${machine.id}`}
+                    >
+                      {machine.hostname || "Unknown"}
+                    </CardTitle>
                     <CardDescription>{machine.ip_address || "No IP"}</CardDescription>
                   </div>
                   {getStatusBadge(machine)}

@@ -39,6 +39,30 @@ export interface Machine {
   agent_name: string | null;
   agent_version: string | null;
   last_seen: string | null;
+  // Settings
+  ssh_port: number;
+  ufw_enabled: boolean;
+  fail2ban_enabled: boolean;
+  fail2ban_config: string | null;
+  root_password_set: boolean;
+  // Stats
+  cpu_percent: number;
+  memory_used: number;
+  memory_total: number;
+  disk_used: number;
+  disk_total: number;
+}
+
+export interface Job {
+  id: string;
+  agent_id: string;
+  type: string;
+  payload_json: unknown;
+  status: string;
+  logs: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 export interface EnrollmentToken {
@@ -198,6 +222,49 @@ class ApiClient {
 
   async deleteMachine(id: string): Promise<void> {
     await this.request(`/api/machines/${id}`, { method: "DELETE" });
+  }
+
+  // Machine Settings
+  async changeSSHPort(id: string, port: number): Promise<Job> {
+    return this.request<Job>(`/api/machines/${id}/ssh-port`, {
+      method: "POST",
+      body: JSON.stringify({ port }),
+    });
+  }
+
+  async changeRootPassword(id: string, password: string): Promise<Job> {
+    return this.request<Job>(`/api/machines/${id}/root-password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    });
+  }
+
+  async toggleUFW(id: string, enabled: boolean): Promise<Job> {
+    return this.request<Job>(`/api/machines/${id}/ufw`, {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    });
+  }
+
+  async addUFWRule(id: string, port: string, protocol: string): Promise<Job> {
+    return this.request<Job>(`/api/machines/${id}/ufw/rules`, {
+      method: "POST",
+      body: JSON.stringify({ port, protocol }),
+    });
+  }
+
+  async removeUFWRule(id: string, port: string, protocol: string): Promise<Job> {
+    return this.request<Job>(`/api/machines/${id}/ufw/rules`, {
+      method: "DELETE",
+      body: JSON.stringify({ port, protocol }),
+    });
+  }
+
+  async toggleFail2ban(id: string, enabled: boolean, config?: string): Promise<Job> {
+    return this.request<Job>(`/api/machines/${id}/fail2ban`, {
+      method: "POST",
+      body: JSON.stringify({ enabled, config }),
+    });
   }
 
   // Enrollment Tokens

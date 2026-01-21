@@ -57,6 +57,7 @@ func (db *DB) RunMigrations() error {
 	migrations := []string{
 		"001_initial_schema.sql",
 		"002_add_notes_and_token_name.sql",
+		"003_machine_settings.sql",
 	}
 
 	// Base paths to try
