@@ -3,6 +3,13 @@ version: '3'
 # Task automatically loads .env file if present
 dotenv: ['.env']
 
+# Environment variables used:
+# - DATABASE_URL: PostgreSQL connection string (backend)
+# - PORT: Backend HTTP port (default 8080)
+# - JWT_SECRET: JWT signing secret (backend)
+# - CORS_ALLOWED_ORIGINS: Comma-separated allowed origins (backend)
+# - NEXT_PUBLIC_API_URL: Backend API URL for frontend (e.g., http://localhost:8080)
+
 tasks:
   default:
     desc: Show available tasks
@@ -22,15 +29,20 @@ tasks:
   dev:backend:
     desc: Start backend in development mode
     dir: backend
+    env:
+      PORT: '{{.PORT | default "8080"}}'
     cmds:
-      - echo "Starting backend on port $PORT..."
+      - echo "Starting backend on port {{.PORT | default "8080"}}..."
       - go run cmd/server/main.go
 
   dev:frontend:
     desc: Start frontend in development mode
     dir: frontend
+    env:
+      NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}'
     cmds:
       - echo "Starting frontend on port 3000..."
+      - echo "API URL: {{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}"
       - pnpm dev
 
   db:check:
@@ -42,17 +54,21 @@ tasks:
   prod:backend:
     desc: Build and run backend in production mode
     dir: backend
+    env:
+      PORT: '{{.PORT | default "8080"}}'
     cmds:
       - echo "Building backend..."
       - go build -o bin/server.exe cmd/server/main.go
-      - echo "Starting backend on port $PORT..."
+      - echo "Starting backend on port {{.PORT | default "8080"}}..."
       - bin/server.exe
 
   prod:frontend:
     desc: Build and run frontend in production mode
     dir: frontend
+    env:
+      NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}'
     cmds:
-      - echo "Building frontend..."
+      - echo "Building frontend with API URL: {{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}..."
       - pnpm build
       - echo "Starting frontend in production mode..."
       - pnpm start
@@ -84,8 +100,10 @@ tasks:
   build:frontend:
     desc: Build frontend for production
     dir: frontend
+    env:
+      NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}'
     cmds:
-      - echo "Building frontend..."
+      - echo "Building frontend with API URL: {{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}..."
       - pnpm build
       - echo "Frontend built successfully"
 
