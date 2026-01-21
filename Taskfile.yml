@@ -61,8 +61,11 @@ tasks:
     desc: Start production environment (backend + frontend)
     cmds:
       - task: db:check
-      - task: prod:backend
-      - task: prod:frontend
+      - task: prod:run
+
+  prod:run:
+    desc: Run backend and frontend in parallel (production)
+    deps: [prod:backend, prod:frontend]
 
   build:
     desc: Build both backend and frontend
