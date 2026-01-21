@@ -170,12 +170,15 @@ func (h *AdminHandler) CreateAdmin(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(user)
 }
 
-// UpdateUserRole updates a user's role (superadmin only for admin role)
+// UpdateUserRole updates a user's role
+// - Only superadmin can change roles of admins or to admin
+// - Cannot set superadmin role (there can only be one, created at setup)
 func (h *AdminHandler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	claims := r.Context().Value("claims").(*auth.Claims)
 
-	if !claims.IsAdmin() {
-		http.Error(w, "Admin access required", http.StatusForbidden)
+	// Only superadmin can change roles
+	if !claims.IsSuperAdmin() {
+		http.Error(w, "Only superadmin can change user roles", http.StatusForbidden)
 		return
 	}
 
@@ -193,9 +196,9 @@ func (h *AdminHandler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only superadmin can set admin role
-	if req.Role == "admin" && !claims.IsSuperAdmin() {
-		http.Error(w, "Only superadmin can set admin role", http.StatusForbidden)
+	// Validate role
+	if req.Role != "admin" && req.Role != "user" {
+		http.Error(w, "Invalid role. Must be 'admin' or 'user'", http.StatusBadRequest)
 		return
 	}
 
@@ -211,9 +214,19 @@ func (h *AdminHandler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get current role for audit
+	// Get current role for audit and validation
 	var oldRole string
-	h.db.Get(&oldRole, "SELECT role FROM users WHERE id = $1", userID)
+	err = h.db.Get(&oldRole, "SELECT role FROM users WHERE id = $1", userID)
+	if err != nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Cannot change superadmin role
+	if oldRole == "superadmin" {
+		http.Error(w, "Cannot change superadmin role", http.StatusForbidden)
+		return
+	}
 
 	_, err = h.db.Exec("UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2", req.Role, userID)
 	if err != nil {
@@ -231,7 +244,9 @@ func (h *AdminHandler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Role updated"})
 }
 
-// ChangeUserPassword changes another user's password (admin/superadmin)
+// ChangeUserPassword changes another user's password
+// - Superadmin can change any user's password
+// - Admin can only change regular users' passwords (NOT other admins)
 func (h *AdminHandler) ChangeUserPassword(w http.ResponseWriter, r *http.Request) {
 	claims := r.Context().Value("claims").(*auth.Claims)
 
@@ -259,7 +274,7 @@ func (h *AdminHandler) ChangeUserPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Check target user's role - cannot change superadmin's password unless you are superadmin
+	// Check target user's role
 	var targetRole string
 	err = h.db.Get(&targetRole, "SELECT role FROM users WHERE id = $1", userID)
 	if err != nil {
@@ -267,8 +282,9 @@ func (h *AdminHandler) ChangeUserPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if targetRole == "superadmin" && !claims.IsSuperAdmin() {
-		http.Error(w, "Cannot change superadmin password", http.StatusForbidden)
+	// Only superadmin can change admin/superadmin passwords
+	if (targetRole == "admin" || targetRole == "superadmin") && !claims.IsSuperAdmin() {
+		http.Error(w, "Only superadmin can change admin passwords", http.StatusForbidden)
 		return
 	}
 
@@ -296,7 +312,9 @@ func (h *AdminHandler) ChangeUserPassword(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]string{"message": "Password updated"})
 }
 
-// Reset2FA resets a user's 2FA (admin/superadmin)
+// Reset2FA resets a user's 2FA
+// - Superadmin can reset any user's 2FA
+// - Admin can only reset regular users' 2FA (NOT other admins)
 func (h *AdminHandler) Reset2FA(w http.ResponseWriter, r *http.Request) {
 	claims := r.Context().Value("claims").(*auth.Claims)
 
@@ -319,8 +337,9 @@ func (h *AdminHandler) Reset2FA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if targetRole == "superadmin" && !claims.IsSuperAdmin() {
-		http.Error(w, "Cannot reset superadmin 2FA", http.StatusForbidden)
+	// Only superadmin can reset admin/superadmin 2FA
+	if (targetRole == "admin" || targetRole == "superadmin") && !claims.IsSuperAdmin() {
+		http.Error(w, "Only superadmin can reset admin 2FA", http.StatusForbidden)
 		return
 	}
 
