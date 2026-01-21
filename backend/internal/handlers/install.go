@@ -134,6 +134,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -388,6 +389,12 @@ func processJob(cfg *Config, client *http.Client, id, jobType string, payload js
 		json.Unmarshal(payload, &p)
 		logs, err = serviceOp(p.Name, p.Action)
 	
+	case "run":
+		// Unified multi-step job with rollback support
+		var p RunPayload
+		json.Unmarshal(payload, &p)
+		logs, err = executeRun(p)
+	
 	// Legacy typed jobs (kept for backwards compatibility)
 	case "bootstrap_machine":
 		logs, err = bootstrap()
@@ -431,95 +438,256 @@ func processJob(cfg *Config, client *http.Client, id, jobType string, payload js
 	}
 }
 
-// execScript runs a bash script with variable substitution
-func execScript(script string, vars map[string]string) (string, error) {
-	var logs strings.Builder
-	logs.WriteString("Executing script...\n")
+// Step represents a single operation in a run job
+type Step struct {
+	Action  string ` + "`" + `json:"action"` + "`" + `  // exec, file, service, fetch
 	
-	// Variable substitution: {{varname}} -> value
-	for k, v := range vars {
-		script = strings.ReplaceAll(script, "{{"+k+"}}", v)
+	// For exec
+	Command string ` + "`" + `json:"command"` + "`" + `
+	Timeout int    ` + "`" + `json:"timeout"` + "`" + ` // seconds, default 300
+	
+	// For file
+	Path    string ` + "`" + `json:"path"` + "`" + `
+	Content string ` + "`" + `json:"content"` + "`" + `
+	URL     string ` + "`" + `json:"url"` + "`" + `     // fetch content from URL instead of inline
+	Mode    string ` + "`" + `json:"mode"` + "`" + `    // file permissions
+	Op      string ` + "`" + `json:"op"` + "`" + `      // write, append, delete, backup
+	
+	// For service
+	Name    string ` + "`" + `json:"name"` + "`" + `
+}
+
+// RunPayload is the unified job type for complex operations
+type RunPayload struct {
+	Steps    []Step ` + "`" + `json:"steps"` + "`" + `
+	OnError  string ` + "`" + `json:"on_error"` + "`" + `  // stop (default), continue, rollback
+	Vars     map[string]string ` + "`" + `json:"vars"` + "`" + ` // variable substitution
+}
+
+// executeRun processes a run job with multiple steps
+func executeRun(payload RunPayload) (string, error) {
+	var logs strings.Builder
+	var backups []string // for rollback
+	
+	onError := payload.OnError
+	if onError == "" { onError = "stop" }
+	
+	for i, step := range payload.Steps {
+		logs.WriteString(fmt.Sprintf("\n=== Step %d: %s ===\n", i+1, step.Action))
+		
+		// Variable substitution
+		step = substituteVars(step, payload.Vars)
+		
+		var stepLog string
+		var err error
+		
+		switch step.Action {
+		case "exec":
+			stepLog, err = execWithTimeout(step.Command, step.Timeout)
+		case "file":
+			stepLog, err, backups = fileOpSafe(step, backups)
+		case "service":
+			stepLog, err = serviceOp(step.Name, step.Op)
+		case "fetch":
+			stepLog, err = fetchToFile(step.URL, step.Path, step.Mode)
+		default:
+			err = fmt.Errorf("unknown action: %s", step.Action)
+		}
+		
+		logs.WriteString(stepLog)
+		
+		if err != nil {
+			logs.WriteString(fmt.Sprintf("ERROR: %v\n", err))
+			
+			if onError == "rollback" {
+				logs.WriteString("\n=== Rolling back ===\n")
+				rollbackLog := rollback(backups)
+				logs.WriteString(rollbackLog)
+			}
+			
+			if onError != "continue" {
+				return logs.String(), err
+			}
+		}
 	}
 	
-	// Write script to temp file
-	tmpFile, err := os.CreateTemp("", "configuratix-*.sh")
-	if err != nil { return logs.String(), err }
-	defer os.Remove(tmpFile.Name())
+	logs.WriteString("\n=== All steps completed ===\n")
+	return logs.String(), nil
+}
+
+// substituteVars replaces {{var}} with values in all string fields
+func substituteVars(step Step, vars map[string]string) Step {
+	for k, v := range vars {
+		placeholder := "{{" + k + "}}"
+		step.Command = strings.ReplaceAll(step.Command, placeholder, v)
+		step.Path = strings.ReplaceAll(step.Path, placeholder, v)
+		step.Content = strings.ReplaceAll(step.Content, placeholder, v)
+		step.URL = strings.ReplaceAll(step.URL, placeholder, v)
+		step.Name = strings.ReplaceAll(step.Name, placeholder, v)
+	}
+	return step
+}
+
+// execWithTimeout runs a command with timeout
+func execWithTimeout(cmdStr string, timeoutSec int) (string, error) {
+	var logs strings.Builder
+	logs.WriteString("$ " + cmdStr + "\n")
 	
-	tmpFile.WriteString(script)
-	tmpFile.Close()
-	os.Chmod(tmpFile.Name(), 0755)
+	if timeoutSec <= 0 { timeoutSec = 300 } // 5 min default
 	
-	// Execute
-	cmd := exec.Command("/bin/bash", tmpFile.Name())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+	
+	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", cmdStr)
 	out, err := cmd.CombinedOutput()
 	logs.WriteString(string(out))
+	
+	if ctx.Err() == context.DeadlineExceeded {
+		return logs.String(), fmt.Errorf("command timed out after %ds", timeoutSec)
+	}
 	
 	return logs.String(), err
 }
 
-// execCommands runs a list of shell commands
-func execCommands(commands []string) (string, error) {
+// fileOpSafe performs file operations with backup support
+func fileOpSafe(step Step, backups []string) (string, error, []string) {
 	var logs strings.Builder
+	path := step.Path
+	op := step.Op
+	if op == "" { op = "write" }
 	
-	for _, cmdStr := range commands {
-		logs.WriteString("$ " + cmdStr + "\n")
-		cmd := exec.Command("/bin/bash", "-c", cmdStr)
-		out, err := cmd.CombinedOutput()
-		logs.WriteString(string(out))
-		if err != nil {
-			return logs.String(), fmt.Errorf("command failed: %s", cmdStr)
-		}
+	// Fetch content from URL if specified
+	content := step.Content
+	if step.URL != "" {
+		logs.WriteString(fmt.Sprintf("Fetching content from %s...\n", step.URL))
+		resp, err := http.Get(step.URL)
+		if err != nil { return logs.String(), err, backups }
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil { return logs.String(), err, backups }
+		content = string(data)
+		logs.WriteString(fmt.Sprintf("Fetched %d bytes\n", len(data)))
 	}
 	
-	return logs.String(), nil
-}
-
-// fileOp performs file operations
-func fileOp(action, path, content, mode string) (string, error) {
-	var logs strings.Builder
-	
-	switch action {
+	switch op {
 	case "write":
-		logs.WriteString(fmt.Sprintf("Writing to %s...\n", path))
-		// Create parent dirs if needed
+		// Backup existing file for rollback
+		if _, err := os.Stat(path); err == nil {
+			backupPath := path + ".configuratix-backup"
+			if data, err := os.ReadFile(path); err == nil {
+				os.WriteFile(backupPath, data, 0644)
+				backups = append(backups, backupPath+":"+path)
+				logs.WriteString(fmt.Sprintf("Backed up to %s\n", backupPath))
+			}
+		}
+		
+		logs.WriteString(fmt.Sprintf("Writing to %s (%d bytes)...\n", path, len(content)))
 		os.MkdirAll(filepath.Dir(path), 0755)
 		perm := os.FileMode(0644)
-		if mode != "" {
-			if m, err := strconv.ParseUint(mode, 8, 32); err == nil {
+		if step.Mode != "" {
+			if m, err := strconv.ParseUint(step.Mode, 8, 32); err == nil {
 				perm = os.FileMode(m)
 			}
 		}
 		if err := os.WriteFile(path, []byte(content), perm); err != nil {
-			return logs.String(), err
+			return logs.String(), err, backups
 		}
 		logs.WriteString("Done\n")
+		
 	case "append":
 		logs.WriteString(fmt.Sprintf("Appending to %s...\n", path))
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil { return logs.String(), err }
+		if err != nil { return logs.String(), err, backups }
 		defer f.Close()
 		f.WriteString(content)
 		logs.WriteString("Done\n")
+		
 	case "delete":
+		// Backup before delete
+		if data, err := os.ReadFile(path); err == nil {
+			backupPath := path + ".configuratix-backup"
+			os.WriteFile(backupPath, data, 0644)
+			backups = append(backups, backupPath+":"+path)
+		}
 		logs.WriteString(fmt.Sprintf("Deleting %s...\n", path))
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return logs.String(), err
+			return logs.String(), err, backups
 		}
 		logs.WriteString("Done\n")
+		
+	case "backup":
+		backupPath := path + ".configuratix-backup"
+		logs.WriteString(fmt.Sprintf("Backing up %s to %s...\n", path, backupPath))
+		if data, err := os.ReadFile(path); err == nil {
+			os.WriteFile(backupPath, data, 0644)
+			logs.WriteString("Done\n")
+		} else {
+			logs.WriteString("File not found, skipped\n")
+		}
+		
 	default:
-		return logs.String(), fmt.Errorf("unknown file action: %s", action)
+		return logs.String(), fmt.Errorf("unknown file op: %s", op), backups
 	}
 	
+	return logs.String(), nil, backups
+}
+
+// fetchToFile downloads a URL to a file
+func fetchToFile(url, path, mode string) (string, error) {
+	var logs strings.Builder
+	logs.WriteString(fmt.Sprintf("Fetching %s -> %s\n", url, path))
+	
+	resp, err := http.Get(url)
+	if err != nil { return logs.String(), err }
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return logs.String(), fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	
+	os.MkdirAll(filepath.Dir(path), 0755)
+	perm := os.FileMode(0644)
+	if mode != "" {
+		if m, err := strconv.ParseUint(mode, 8, 32); err == nil {
+			perm = os.FileMode(m)
+		}
+	}
+	
+	data, err := io.ReadAll(resp.Body)
+	if err != nil { return logs.String(), err }
+	
+	if err := os.WriteFile(path, data, perm); err != nil {
+		return logs.String(), err
+	}
+	
+	logs.WriteString(fmt.Sprintf("Downloaded %d bytes\n", len(data)))
 	return logs.String(), nil
+}
+
+// rollback restores backed up files
+func rollback(backups []string) string {
+	var logs strings.Builder
+	for _, b := range backups {
+		parts := strings.SplitN(b, ":", 2)
+		if len(parts) != 2 { continue }
+		backupPath, originalPath := parts[0], parts[1]
+		
+		if data, err := os.ReadFile(backupPath); err == nil {
+			os.WriteFile(originalPath, data, 0644)
+			os.Remove(backupPath)
+			logs.WriteString(fmt.Sprintf("Restored %s\n", originalPath))
+		}
+	}
+	return logs.String()
 }
 
 // serviceOp manages systemd services
 func serviceOp(name, action string) (string, error) {
 	var logs strings.Builder
+	if action == "" { action = "restart" }
 	logs.WriteString(fmt.Sprintf("Service %s: %s...\n", name, action))
 	
-	validActions := map[string]bool{"start": true, "stop": true, "restart": true, "reload": true, "enable": true, "disable": true}
+	validActions := map[string]bool{"start": true, "stop": true, "restart": true, "reload": true, "enable": true, "disable": true, "status": true}
 	if !validActions[action] {
 		return logs.String(), fmt.Errorf("invalid service action: %s", action)
 	}
@@ -528,6 +696,29 @@ func serviceOp(name, action string) (string, error) {
 	logs.WriteString(out)
 	
 	return logs.String(), err
+}
+
+// Legacy compatibility functions
+func execScript(script string, vars map[string]string) (string, error) {
+	return executeRun(RunPayload{
+		Steps: []Step{{Action: "exec", Command: script}},
+		Vars:  vars,
+	})
+}
+
+func execCommands(commands []string) (string, error) {
+	var logs strings.Builder
+	for _, cmd := range commands {
+		out, err := execWithTimeout(cmd, 300)
+		logs.WriteString(out)
+		if err != nil { return logs.String(), err }
+	}
+	return logs.String(), nil
+}
+
+func fileOp(action, path, content, mode string) (string, error) {
+	out, err, _ := fileOpSafe(Step{Action: "file", Op: action, Path: path, Content: content, Mode: mode}, nil)
+	return out, err
 }
 
 func updateJob(cfg *Config, client *http.Client, id, status, logs string) {
