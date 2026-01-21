@@ -200,9 +200,9 @@ func (h *ProjectsHandler) UpdateProject(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Check if user is owner or manager
-	if !h.canManageProject(userID, projectID, claims.IsSuperAdmin()) {
-		http.Error(w, "Access denied", http.StatusForbidden)
+	// Only project owner or superadmin can update project
+	if !h.isProjectOwner(userID, projectID) && !claims.IsSuperAdmin() {
+		http.Error(w, "Only project owner can update project settings", http.StatusForbidden)
 		return
 	}
 
@@ -435,8 +435,9 @@ func (h *ProjectsHandler) ApproveMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if !h.canManageProject(userID, projectID, claims.IsSuperAdmin()) {
-		http.Error(w, "Access denied", http.StatusForbidden)
+	// Only project owner or superadmin can approve members
+	if !h.isProjectOwner(userID, projectID) && !claims.IsSuperAdmin() {
+		http.Error(w, "Only project owner can approve members", http.StatusForbidden)
 		return
 	}
 
@@ -484,8 +485,9 @@ func (h *ProjectsHandler) DenyMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.canManageProject(userID, projectID, claims.IsSuperAdmin()) {
-		http.Error(w, "Access denied", http.StatusForbidden)
+	// Only project owner or superadmin can deny members
+	if !h.isProjectOwner(userID, projectID) && !claims.IsSuperAdmin() {
+		http.Error(w, "Only project owner can deny members", http.StatusForbidden)
 		return
 	}
 
@@ -517,8 +519,9 @@ func (h *ProjectsHandler) UpdateMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.canManageProject(userID, projectID, claims.IsSuperAdmin()) {
-		http.Error(w, "Access denied", http.StatusForbidden)
+	// Only project owner or superadmin can update member permissions
+	if !h.isProjectOwner(userID, projectID) && !claims.IsSuperAdmin() {
+		http.Error(w, "Only project owner can update member permissions", http.StatusForbidden)
 		return
 	}
 
@@ -562,8 +565,20 @@ func (h *ProjectsHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.canManageProject(userID, projectID, claims.IsSuperAdmin()) {
-		http.Error(w, "Access denied", http.StatusForbidden)
+	// Check if user is trying to leave the project themselves
+	var memberUserID uuid.UUID
+	err = h.db.Get(&memberUserID, "SELECT user_id FROM project_members WHERE id = $1", memberID)
+	if err != nil {
+		http.Error(w, "Member not found", http.StatusNotFound)
+		return
+	}
+
+	// Allow self-removal (leaving project)
+	isSelfRemoval := memberUserID == userID
+
+	// Only project owner, superadmin, or self can remove member
+	if !isSelfRemoval && !h.isProjectOwner(userID, projectID) && !claims.IsSuperAdmin() {
+		http.Error(w, "Only project owner can remove members", http.StatusForbidden)
 		return
 	}
 

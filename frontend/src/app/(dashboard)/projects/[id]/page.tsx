@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { DataTable } from "@/components/ui/data-table";
-import { api, ProjectWithStats, ProjectMember, Machine } from "@/lib/api";
+import { api, ProjectWithStats, ProjectMember, Machine, User } from "@/lib/api";
 import { toast } from "sonner";
 import { ColumnDef } from "@tanstack/react-table";
 import { 
@@ -51,6 +51,7 @@ export default function ProjectDetailPage({ params }: PageProps) {
   const [project, setProject] = useState<ProjectWithStats | null>(null);
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [editingNotes, setEditingNotes] = useState(false);
   const [notes, setNotes] = useState("");
@@ -61,12 +62,27 @@ export default function ProjectDetailPage({ params }: PageProps) {
   const [memberRole, setMemberRole] = useState("member");
   const [canViewNotes, setCanViewNotes] = useState(false);
 
+  // Check if current user is project owner or superadmin
+  const isOwner = currentUser && project && (
+    currentUser.id === project.owner_id || currentUser.role === "superadmin"
+  );
+
   useEffect(() => {
+    loadCurrentUser();
     loadProject();
     loadMembers();
     loadMachines();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  const loadCurrentUser = async () => {
+    try {
+      const user = await api.getMe();
+      setCurrentUser(user);
+    } catch (err) {
+      console.error("Failed to load user:", err);
+    }
+  };
 
   const loadProject = async () => {
     try {
@@ -272,6 +288,11 @@ export default function ProjectDetailPage({ params }: PageProps) {
       cell: ({ row }) => {
         const member = row.original;
         
+        // Only owner can manage members
+        if (!isOwner) {
+          return null;
+        }
+        
         if (member.status === "pending") {
           return (
             <div className="flex items-center gap-2">
@@ -418,25 +439,27 @@ export default function ProjectDetailPage({ params }: PageProps) {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setShowEditDialog(true)}>
-            <Edit className="mr-2 h-4 w-4" />
-            Edit
-          </Button>
-          <Button
-            variant={project.sharing_enabled ? "secondary" : "default"}
-            onClick={toggleSharing}
-          >
-            <Share2 className="mr-2 h-4 w-4" />
-            {project.sharing_enabled ? "Disable Sharing" : "Enable Sharing"}
-          </Button>
-          {project.sharing_enabled && project.invite_token && (
-            <Button variant="outline" onClick={copyInviteToken}>
-              <Copy className="mr-2 h-4 w-4" />
-              Copy Token
+        {isOwner && (
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setShowEditDialog(true)}>
+              <Edit className="mr-2 h-4 w-4" />
+              Edit
             </Button>
-          )}
-        </div>
+            <Button
+              variant={project.sharing_enabled ? "secondary" : "default"}
+              onClick={toggleSharing}
+            >
+              <Share2 className="mr-2 h-4 w-4" />
+              {project.sharing_enabled ? "Disable Sharing" : "Enable Sharing"}
+            </Button>
+            {project.sharing_enabled && project.invite_token && (
+              <Button variant="outline" onClick={copyInviteToken}>
+                <Copy className="mr-2 h-4 w-4" />
+                Copy Token
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Stats */}
@@ -546,19 +569,21 @@ export default function ProjectDetailPage({ params }: PageProps) {
                   Markdown notes about this project.
                 </CardDescription>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (editingNotes) {
-                    handleSaveNotes();
-                  } else {
-                    setEditingNotes(true);
-                  }
-                }}
-              >
-                {editingNotes ? "Save" : "Edit"}
-              </Button>
+              {isOwner && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (editingNotes) {
+                      handleSaveNotes();
+                    } else {
+                      setEditingNotes(true);
+                    }
+                  }}
+                >
+                  {editingNotes ? "Save" : "Edit"}
+                </Button>
+              )}
             </CardHeader>
             <CardContent>
               {editingNotes ? (
