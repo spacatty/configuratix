@@ -12,10 +12,149 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { api, Machine } from "@/lib/api";
+import { api, Machine, UFWRule } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+
+const UFW_PAGE_SIZE = 8;
+
+// UFW Rules Table Component with pagination
+function UFWRulesTable({ 
+  rules, 
+  sshPort, 
+  onDelete 
+}: { 
+  rules: UFWRule[]; 
+  sshPort: number; 
+  onDelete: (port: string, protocol: string) => void;
+}) {
+  const [page, setPage] = useState(1);
+  
+  const totalPages = Math.ceil(rules.length / UFW_PAGE_SIZE);
+  const paginatedRules = rules.slice((page - 1) * UFW_PAGE_SIZE, page * UFW_PAGE_SIZE);
+
+  const getPortLabel = (port: string) => {
+    if (port === "80") return "HTTP";
+    if (port === "443") return "HTTPS";
+    if (port === String(sshPort) || port === "22") return "SSH";
+    return null;
+  };
+
+  if (rules.length === 0) {
+    return (
+      <div className="text-center text-muted-foreground py-8">
+        No firewall rules detected. Agent may need to report rules.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-md border overflow-hidden" style={{ height: "320px" }}>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-20">Protocol</TableHead>
+              <TableHead>Port</TableHead>
+              <TableHead>Action</TableHead>
+              <TableHead>From</TableHead>
+              <TableHead className="w-24 text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {paginatedRules.map((rule, idx) => {
+              const isSSHPort = rule.port === String(sshPort) || rule.port === "22";
+              const portLabel = getPortLabel(rule.port);
+              return (
+                <TableRow key={`${rule.port}-${rule.protocol}-${idx}`}>
+                  <TableCell>
+                    <Badge variant="outline" className="uppercase">
+                      {rule.protocol}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="font-mono font-medium">
+                    {rule.port}
+                    {portLabel && (
+                      <span className="text-xs text-muted-foreground ml-2">({portLabel})</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge className={
+                      rule.action === "ALLOW" 
+                        ? "bg-green-500/20 text-green-400 border-green-500/30"
+                        : "bg-red-500/20 text-red-400 border-red-500/30"
+                    }>
+                      {rule.action}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {rule.from || "Anywhere"}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {isSSHPort ? (
+                      <span className="text-xs text-muted-foreground">Protected</span>
+                    ) : (
+                      <Button 
+                        size="sm" 
+                        variant="ghost" 
+                        className="h-6 px-2 text-destructive hover:text-destructive"
+                        onClick={() => onDelete(rule.port, rule.protocol)}
+                      >
+                        Delete
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+            {/* Fill empty rows to maintain fixed height */}
+            {Array.from({ length: Math.max(0, UFW_PAGE_SIZE - paginatedRules.length) }).map((_, idx) => (
+              <TableRow key={`empty-${idx}`}>
+                <TableCell colSpan={5} className="h-10">&nbsp;</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <div className="text-xs text-muted-foreground">
+            Page {page} of {totalPages}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Dynamically import terminal to avoid SSR issues
 const WebSocketTerminal = dynamic(
@@ -632,7 +771,9 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
               <CardHeader className="flex flex-row items-center justify-between">
                 <div>
                   <CardTitle>Firewall (UFW)</CardTitle>
-                  <CardDescription>Manage port access rules</CardDescription>
+                  <CardDescription>
+                    {machine.ufw_rules?.length || 0} rules total
+                  </CardDescription>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="flex items-center gap-2">
@@ -651,55 +792,11 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-2">
-                  {/* Display actual UFW rules from agent */}
-                  {machine.ufw_rules && machine.ufw_rules.length > 0 ? (
-                    machine.ufw_rules.map((rule, idx) => {
-                      const isSSHPort = rule.port === String(machine.ssh_port || 22);
-                      const portLabel = rule.port === "80" ? "HTTP" : 
-                                       rule.port === "443" ? "HTTPS" : 
-                                       isSSHPort ? "SSH" : null;
-                      return (
-                        <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-muted/50 group">
-                          <div className="flex items-center gap-3">
-                            <Badge variant="outline" className="w-12 justify-center uppercase">
-                              {rule.protocol}
-                            </Badge>
-                            <span className="font-mono font-medium">{rule.port}</span>
-                            {portLabel && (
-                              <span className="text-xs text-muted-foreground">({portLabel})</span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Badge className={
-                              rule.action === "ALLOW" 
-                                ? "bg-green-500/20 text-green-400 border-green-500/30"
-                                : "bg-red-500/20 text-red-400 border-red-500/30"
-                            }>
-                              {rule.action}
-                            </Badge>
-                            {isSSHPort ? (
-                              <span className="text-xs text-muted-foreground">Protected</span>
-                            ) : (
-                              <Button 
-                                size="sm" 
-                                variant="ghost" 
-                                className="h-6 px-2 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
-                                onClick={() => handleRemoveUFWRule(rule.port, rule.protocol)}
-                              >
-                                Delete
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <div className="text-center text-muted-foreground py-4">
-                      No firewall rules detected. Agent may need to report rules.
-                    </div>
-                  )}
-                </div>
+                <UFWRulesTable 
+                  rules={machine.ufw_rules || []} 
+                  sshPort={machine.ssh_port || 22}
+                  onDelete={handleRemoveUFWRule}
+                />
                 <p className="text-xs text-muted-foreground text-center mt-4">
                   Rules sync every 5 seconds from agent. SSH port is protected from deletion.
                 </p>

@@ -36,7 +36,8 @@ import {
   Shield,
   UserCircle,
   LogOut,
-  ChevronUp
+  ChevronUp,
+  ScrollText
 } from "lucide-react";
 
 interface AppSidebarProps {
@@ -82,6 +83,11 @@ const getNavigation = (role: string) => {
           title: "Commands",
           url: "/commands",
           icon: <Terminal className="h-4 w-4" />,
+        },
+        {
+          title: "Jobs",
+          url: "/jobs",
+          icon: <ScrollText className="h-4 w-4" />,
         },
         {
           title: "Nginx Configs",

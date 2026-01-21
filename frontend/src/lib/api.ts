@@ -610,6 +610,16 @@ class ApiClient {
     await this.request(`/api/enrollment-tokens/${id}`, { method: "DELETE" });
   }
 
+  // Jobs
+  async listJobs(machineId?: string): Promise<Job[]> {
+    const params = machineId ? `?machine_id=${machineId}` : "";
+    return this.request<Job[]>(`/api/jobs${params}`);
+  }
+
+  async getJob(id: string): Promise<Job> {
+    return this.request<Job>(`/api/jobs/${id}`);
+  }
+
   // Domains
   async listDomains(): Promise<Domain[]> {
     return this.request<Domain[]>("/api/domains");
