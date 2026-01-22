@@ -337,7 +337,21 @@ function MachineJobsTab({ machineId, agentId }: { machineId: string; agentId: st
                             
                             {job.logs ? (
                               <div className="space-y-2">
-                                <div className="text-sm font-medium">Execution Log:</div>
+                                <div className="flex items-center justify-between">
+                                  <div className="text-sm font-medium">Execution Log:</div>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 text-xs"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(job.logs || "");
+                                      toast.success("Copied to clipboard");
+                                    }}
+                                  >
+                                    <Copy className="h-3 w-3 mr-1" />
+                                    Copy
+                                  </Button>
+                                </div>
                                 <pre className="bg-black rounded-lg p-4 text-xs font-mono text-gray-300 overflow-x-auto max-h-[300px] overflow-y-auto whitespace-pre-wrap">
                                   {job.logs}
                                 </pre>

@@ -590,67 +590,61 @@ NGINX_CONF="/etc/nginx/nginx.conf"
 
 echo "=== Checking nginx stream module ==="
 
-# First, try loading dynamic module if it exists
-if [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
-    echo "Dynamic stream module found at /usr/lib/nginx/modules/ngx_stream_module.so"
-    if ! grep -q "load_module.*ngx_stream_module" "$NGINX_CONF"; then
-        echo "Adding stream module load directive to nginx.conf..."
-        sed -i '1i load_module /usr/lib/nginx/modules/ngx_stream_module.so;' "$NGINX_CONF"
-        echo "Added: load_module /usr/lib/nginx/modules/ngx_stream_module.so;"
-    else
-        echo "Stream module load directive already present"
-    fi
-else
-    echo "Dynamic stream module not found, checking if statically compiled..."
+# Check if module is already loaded via modules-enabled (Ubuntu/Debian style)
+MODULE_ALREADY_LOADED=false
+if [ -f /etc/nginx/modules-enabled/50-mod-stream.conf ] || \
+   ls /etc/nginx/modules-enabled/*stream* 2>/dev/null | grep -q .; then
+    echo "Stream module is auto-loaded via modules-enabled"
+    MODULE_ALREADY_LOADED=true
 fi
 
-# Test if stream works now by checking nginx -t output
-# First, temporarily remove any existing broken stream config
-if grep -q "^stream" "$NGINX_CONF" && nginx -t 2>&1 | grep -q "unknown directive.*stream"; then
-    echo "Stream block exists but module not loaded, need to fix..."
+# Remove any duplicate load_module directives we may have added previously
+if grep -q "^load_module.*ngx_stream_module" "$NGINX_CONF"; then
+    if [ "$MODULE_ALREADY_LOADED" = true ]; then
+        echo "Removing duplicate load_module directive (module already loaded via modules-enabled)..."
+        sed -i '/^load_module.*ngx_stream_module/d' "$NGINX_CONF"
+    fi
+fi
+
+# Test if stream works
+TEST_RESULT=$(nginx -t 2>&1)
+if echo "$TEST_RESULT" | grep -q "unknown directive.*stream"; then
+    echo "Stream module not available, need to install..."
     
-    # Check if we can load the module
-    if [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
-        # Module exists, just needs loading (should have been added above)
-        echo "Module should be loadable now, testing..."
+    # Check if dynamic module exists but not loaded
+    if [ -f /usr/lib/nginx/modules/ngx_stream_module.so ] && [ "$MODULE_ALREADY_LOADED" = false ]; then
+        if ! grep -q "load_module.*ngx_stream_module" "$NGINX_CONF"; then
+            echo "Adding stream module load directive..."
+            sed -i '1i load_module /usr/lib/nginx/modules/ngx_stream_module.so;' "$NGINX_CONF"
+        fi
     else
-        echo "Need to install nginx with stream support..."
+        echo "Installing nginx with stream support..."
         apt-get update
         
-        # Try nginx-extras first (has most modules)
-        if apt-cache show nginx-extras >/dev/null 2>&1; then
+        # Try libnginx-mod-stream first (smallest)
+        if apt-cache show libnginx-mod-stream >/dev/null 2>&1; then
+            echo "Installing libnginx-mod-stream..."
+            DEBIAN_FRONTEND=noninteractive apt-get install -y libnginx-mod-stream
+        elif apt-cache show nginx-extras >/dev/null 2>&1; then
             echo "Installing nginx-extras..."
             DEBIAN_FRONTEND=noninteractive apt-get install -y nginx-extras
         elif apt-cache show nginx-full >/dev/null 2>&1; then
             echo "Installing nginx-full..."
             DEBIAN_FRONTEND=noninteractive apt-get install -y nginx-full
         else
-            # As last resort, try libnginx-mod-stream
-            if apt-cache show libnginx-mod-stream >/dev/null 2>&1; then
-                echo "Installing libnginx-mod-stream..."
-                DEBIAN_FRONTEND=noninteractive apt-get install -y libnginx-mod-stream
-            else
-                echo "ERROR: Cannot find nginx stream module package"
-                echo "Please run: apt-get install nginx-extras"
-                exit 1
-            fi
-        fi
-        
-        # After install, check for dynamic module again and add load directive
-        if [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
-            if ! grep -q "load_module.*ngx_stream_module" "$NGINX_CONF"; then
-                sed -i '1i load_module /usr/lib/nginx/modules/ngx_stream_module.so;' "$NGINX_CONF"
-                echo "Added stream module load directive after install"
-            fi
+            echo "ERROR: Cannot find nginx stream module package"
+            exit 1
         fi
     fi
+elif echo "$TEST_RESULT" | grep -q "already loaded"; then
+    echo "Duplicate module load detected, cleaning up..."
+    # Remove manual load_module if modules-enabled handles it
+    sed -i '/^load_module.*ngx_stream_module/d' "$NGINX_CONF"
 fi
 
 # Final verification
 if nginx -t 2>&1 | grep -q "unknown directive.*stream"; then
-    echo "ERROR: Stream module still not working after all attempts"
-    echo "Current nginx.conf head:"
-    head -5 "$NGINX_CONF"
+    echo "ERROR: Stream module still not working"
     exit 1
 fi
 
