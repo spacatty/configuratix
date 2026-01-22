@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { ColumnDef } from "@tanstack/react-table";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,10 +12,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DataTable } from "@/components/ui/data-table";
 import { api, Domain, Machine, NginxConfig } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
-import { ExternalLink, MoreHorizontal, Pencil, Trash, Link2, FileText, Server } from "lucide-react";
+import { ExternalLink, MoreHorizontal, Trash, Link2, FileText, Server, Globe } from "lucide-react";
+import { toast } from "sonner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,7 +40,6 @@ export default function DomainsPage() {
   const [assignMachineId, setAssignMachineId] = useState<string>("");
   const [assignConfigId, setAssignConfigId] = useState<string>("");
   const [domainNotes, setDomainNotes] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
 
   const loadData = async () => {
     try {
@@ -68,9 +69,10 @@ export default function DomainsPage() {
       setNewFqdn("");
       setShowCreateDialog(false);
       loadData();
+      toast.success("Domain created");
     } catch (err) {
       console.error("Failed to create domain:", err);
-      alert("Failed to create domain");
+      toast.error("Failed to create domain");
     }
   };
 
@@ -85,9 +87,10 @@ export default function DomainsPage() {
       setShowAssignDialog(false);
       setSelectedDomain(null);
       loadData();
+      toast.success("Domain assigned");
     } catch (err) {
       console.error("Failed to assign domain:", err);
-      alert("Failed to assign domain");
+      toast.error("Failed to assign domain");
     }
   };
 
@@ -98,8 +101,10 @@ export default function DomainsPage() {
       setShowDeleteDialog(false);
       setSelectedDomain(null);
       loadData();
+      toast.success("Domain deleted");
     } catch (err) {
       console.error("Failed to delete domain:", err);
+      toast.error("Failed to delete domain");
     }
   };
 
@@ -127,9 +132,10 @@ export default function DomainsPage() {
       await api.updateDomainNotes(selectedDomain.id, domainNotes);
       setShowNotesDialog(false);
       loadData();
+      toast.success("Notes saved");
     } catch (err) {
       console.error("Failed to save notes:", err);
-      alert("Failed to save notes");
+      toast.error("Failed to save notes");
     }
   };
 
@@ -146,11 +152,110 @@ export default function DomainsPage() {
     }
   };
 
-  const filteredDomains = domains.filter(domain => 
-    domain.fqdn.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    domain.machine_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    domain.config_name?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const columns: ColumnDef<Domain>[] = [
+    {
+      accessorKey: "fqdn",
+      header: "Domain",
+      cell: ({ row }) => {
+        const domain = row.original;
+        return (
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-blue-500/20 to-blue-500/5 flex items-center justify-center">
+              <Globe className="h-5 w-5 text-blue-500" />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-medium">{domain.fqdn}</span>
+              <a
+                href={`https://${domain.fqdn}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: "status",
+      header: "Status",
+      cell: ({ row }) => getStatusBadge(row.original.status),
+    },
+    {
+      accessorKey: "machine_name",
+      header: "Machine",
+      cell: ({ row }) => {
+        const domain = row.original;
+        return domain.machine_name ? (
+          <div className="flex items-center gap-2">
+            <span className="text-sm">{domain.machine_name}</span>
+            {domain.status === "linked" && domain.assigned_machine_id && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2"
+                onClick={() => router.push(`/machines/${domain.assigned_machine_id}`)}
+              >
+                <Server className="h-3 w-3" />
+              </Button>
+            )}
+          </div>
+        ) : (
+          <span className="text-muted-foreground text-sm">Not assigned</span>
+        );
+      },
+    },
+    {
+      accessorKey: "config_name",
+      header: "Config",
+      cell: ({ row }) => {
+        const domain = row.original;
+        return domain.config_name ? (
+          <span className="text-sm">{domain.config_name}</span>
+        ) : (
+          <span className="text-muted-foreground text-sm">—</span>
+        );
+      },
+    },
+    {
+      id: "actions",
+      cell: ({ row }) => {
+        const domain = row.original;
+        return (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="h-8 w-8 p-0">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => openAssignDialog(domain)}>
+                <Link2 className="h-4 w-4 mr-2" />
+                {domain.assigned_machine_id ? "Reassign" : "Assign"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openNotesDialog(domain)}>
+                <FileText className="h-4 w-4 mr-2" />
+                Notes
+              </DropdownMenuItem>
+              {domain.assigned_machine_id && (
+                <DropdownMenuItem onClick={() => router.push(`/machines/${domain.assigned_machine_id}`)}>
+                  <Server className="h-4 w-4 mr-2" />
+                  Go to Machine
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => openDeleteDialog(domain)} className="text-destructive focus:text-destructive">
+                <Trash className="h-4 w-4 mr-2" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        );
+      },
+    },
+  ];
 
   if (loading) {
     return (
@@ -161,129 +266,22 @@ export default function DomainsPage() {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between mb-6">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Domains</h1>
-          <p className="text-muted-foreground mt-1">
-            {domains.length} domain{domains.length !== 1 ? "s" : ""} configured
-          </p>
+          <p className="text-muted-foreground mt-1">Manage domains and assign them to machines.</p>
         </div>
-        <Button onClick={() => setShowCreateDialog(true)} className="bg-primary hover:bg-primary/90">
-          + Add Domain
-        </Button>
+        <Button onClick={() => setShowCreateDialog(true)}>+ Add Domain</Button>
       </div>
 
-      <Card className="border-border/50 bg-card/50 flex-1 flex flex-col overflow-hidden">
-        <CardHeader className="pb-3">
-          <div className="flex items-center gap-4">
-            <Input
-              placeholder="Search domains..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="max-w-sm"
-            />
-          </div>
+      <Card className="border-border/50 bg-card/50">
+        <CardHeader>
+          <CardTitle className="text-lg">Your Domains</CardTitle>
+          <CardDescription>Domains that can be assigned to machines with nginx configurations.</CardDescription>
         </CardHeader>
-        <CardContent className="flex-1 overflow-auto p-0">
-          <Table>
-            <TableHeader className="sticky top-0 bg-card z-10">
-              <TableRow>
-                <TableHead>Domain</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Machine</TableHead>
-                <TableHead>Config</TableHead>
-                <TableHead className="w-[70px]"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredDomains.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
-                    {searchQuery ? "No domains match your search" : "No domains configured yet"}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filteredDomains.map((domain) => (
-                  <TableRow key={domain.id} className="group">
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{domain.fqdn}</span>
-                        <a 
-                          href={`https://${domain.fqdn}`} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          <ExternalLink className="h-3 w-3 text-muted-foreground hover:text-foreground" />
-                        </a>
-                      </div>
-                    </TableCell>
-                    <TableCell>{getStatusBadge(domain.status)}</TableCell>
-                    <TableCell>
-                      {domain.machine_name ? (
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm">{domain.machine_name}</span>
-                          {domain.status === "linked" && domain.assigned_machine_id && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 px-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                              onClick={() => router.push(`/machines/${domain.assigned_machine_id}`)}
-                            >
-                              <Server className="h-3 w-3" />
-                            </Button>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground text-sm">Not assigned</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {domain.config_name ? (
-                        <span className="text-sm">{domain.config_name}</span>
-                      ) : (
-                        <span className="text-muted-foreground text-sm">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openAssignDialog(domain)}>
-                            <Link2 className="h-4 w-4 mr-2" />
-                            {domain.assigned_machine_id ? "Reassign" : "Assign"}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => openNotesDialog(domain)}>
-                            <FileText className="h-4 w-4 mr-2" />
-                            Notes
-                          </DropdownMenuItem>
-                          {domain.assigned_machine_id && (
-                            <DropdownMenuItem onClick={() => router.push(`/machines/${domain.assigned_machine_id}`)}>
-                              <Server className="h-4 w-4 mr-2" />
-                              Go to Machine
-                            </DropdownMenuItem>
-                          )}
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem 
-                            onClick={() => openDeleteDialog(domain)}
-                            className="text-destructive focus:text-destructive"
-                          >
-                            <Trash className="h-4 w-4 mr-2" />
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+        <CardContent>
+          <DataTable columns={columns} data={domains} searchKey="fqdn" searchPlaceholder="Search domains..." />
         </CardContent>
       </Card>
 
@@ -413,7 +411,7 @@ export default function DomainsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Domain</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete <strong>{selectedDomain?.fqdn}</strong>? 
+              Are you sure you want to delete <strong>{selectedDomain?.fqdn}</strong>?
               This will also remove any associated configurations from servers.
             </AlertDialogDescription>
           </AlertDialogHeader>

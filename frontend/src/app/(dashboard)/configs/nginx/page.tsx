@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { ColumnDef } from "@tanstack/react-table";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -10,10 +11,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DataTable } from "@/components/ui/data-table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api, NginxConfig, NginxConfigStructured, LocationConfig, Landing } from "@/lib/api";
-import { MoreHorizontal, Pencil, Trash, Copy } from "lucide-react";
+import { MoreHorizontal, Pencil, Trash, Copy, FileCode } from "lucide-react";
+import { toast } from "sonner";
 import dynamic from "next/dynamic";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
@@ -26,7 +28,6 @@ export default function NginxConfigsPage() {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [selectedConfig, setSelectedConfig] = useState<NginxConfig | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
   
   const [formName, setFormName] = useState("");
   const [formMode, setFormMode] = useState("auto");
@@ -85,9 +86,10 @@ export default function NginxConfigsPage() {
       setShowCreateDialog(false);
       resetForm();
       loadData();
+      toast.success("Configuration created");
     } catch (err) {
       console.error("Failed to create config:", err);
-      alert("Failed to create config");
+      toast.error("Failed to create config");
     }
   };
 
@@ -110,9 +112,10 @@ export default function NginxConfigsPage() {
       setSelectedConfig(null);
       resetForm();
       loadData();
+      toast.success("Configuration updated");
     } catch (err) {
       console.error("Failed to update config:", err);
-      alert("Failed to update config");
+      toast.error("Failed to update config");
     }
   };
 
@@ -123,8 +126,10 @@ export default function NginxConfigsPage() {
       setShowDeleteDialog(false);
       setSelectedConfig(null);
       loadData();
+      toast.success("Configuration deleted");
     } catch (err) {
       console.error("Failed to delete config:", err);
+      toast.error("Failed to delete config");
     }
   };
 
@@ -169,7 +174,86 @@ export default function NginxConfigsPage() {
     setFormLocations(prev => prev.map((loc, i) => i === index ? { ...loc, ...updates } : loc));
   }, []);
 
-  const filteredConfigs = configs.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  const columns: ColumnDef<NginxConfig>[] = [
+    {
+      accessorKey: "name",
+      header: "Name",
+      cell: ({ row }) => {
+        const config = row.original;
+        return (
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-green-500/20 to-green-500/5 flex items-center justify-center">
+              <FileCode className="h-5 w-5 text-green-500" />
+            </div>
+            <div>
+              <div className="font-medium">{config.name}</div>
+              <div className="text-xs text-muted-foreground">
+                {(config.structured_json as NginxConfigStructured | null)?.locations?.length || 0} location(s)
+              </div>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: "mode",
+      header: "Mode",
+      cell: ({ row }) => (
+        <Badge variant={row.original.mode === "manual" ? "secondary" : "default"}>
+          {row.original.mode}
+        </Badge>
+      ),
+    },
+    {
+      accessorKey: "ssl",
+      header: "SSL",
+      cell: ({ row }) => {
+        const structured = row.original.structured_json as NginxConfigStructured | null;
+        return structured ? (
+          <Badge variant="outline" className="text-xs">{structured.ssl_mode}</Badge>
+        ) : <span className="text-muted-foreground">—</span>;
+      },
+    },
+    {
+      accessorKey: "cors",
+      header: "CORS",
+      cell: ({ row }) => {
+        const structured = row.original.structured_json as NginxConfigStructured | null;
+        return structured?.cors?.enabled ? (
+          <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
+            {structured.cors.allow_all ? "Allow All" : "Custom"}
+          </Badge>
+        ) : <span className="text-muted-foreground text-sm">Disabled</span>;
+      },
+    },
+    {
+      id: "actions",
+      cell: ({ row }) => {
+        const config = row.original;
+        return (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="h-8 w-8 p-0">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => openEditDialog(config)}>
+                <Pencil className="h-4 w-4 mr-2" />Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => navigator.clipboard.writeText(config.id)}>
+                <Copy className="h-4 w-4 mr-2" />Copy ID
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => openDeleteDialog(config)} className="text-destructive focus:text-destructive">
+                <Trash className="h-4 w-4 mr-2" />Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        );
+      },
+    },
+  ];
 
   const renderLocationFields = (loc: LocationConfig, index: number, keyPrefix: string) => (
     <Card key={`${keyPrefix}-${index}`} className="border-border/50">
@@ -308,83 +392,28 @@ export default function NginxConfigsPage() {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between mb-6">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Nginx Configurations</h1>
-          <p className="text-muted-foreground mt-1">{configs.length} configuration{configs.length !== 1 ? "s" : ""} created</p>
+          <p className="text-muted-foreground mt-1">Create and manage nginx configuration templates.</p>
         </div>
-        <Button onClick={() => { resetForm(); setShowCreateDialog(true); }} className="bg-primary hover:bg-primary/90">+ Create Config</Button>
+        <Button onClick={() => { resetForm(); setShowCreateDialog(true); }}>+ Create Config</Button>
       </div>
 
-      <Card className="border-border/50 bg-card/50 flex-1 flex flex-col overflow-hidden">
-        <CardHeader className="pb-3">
-          <Input placeholder="Search configurations..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="max-w-sm" />
+      <Card className="border-border/50 bg-card/50">
+        <CardHeader>
+          <CardTitle className="text-lg">Your Configurations</CardTitle>
+          <CardDescription>Nginx config templates that can be assigned to domains.</CardDescription>
         </CardHeader>
-        <CardContent className="flex-1 overflow-auto p-0">
-          <Table>
-            <TableHeader className="sticky top-0 bg-card z-10">
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Mode</TableHead>
-                <TableHead>SSL</TableHead>
-                <TableHead>Locations</TableHead>
-                <TableHead>CORS</TableHead>
-                <TableHead className="w-[70px]"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredConfigs.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                    {searchQuery ? "No configs match your search" : "No configurations created yet"}
-                  </TableCell>
-                </TableRow>
-              ) : filteredConfigs.map((config) => {
-                const structured = config.structured_json as NginxConfigStructured | null;
-                return (
-                  <TableRow key={config.id} className="group">
-                    <TableCell className="font-medium">{config.name}</TableCell>
-                    <TableCell>
-                      <Badge variant={config.mode === "manual" ? "secondary" : "default"}>{config.mode}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      {structured ? (
-                        <Badge variant="outline" className="text-xs">{structured.ssl_mode}</Badge>
-                      ) : "—"}
-                    </TableCell>
-                    <TableCell>{structured?.locations?.length || 0}</TableCell>
-                    <TableCell>
-                      {structured?.cors?.enabled ? (
-                        <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
-                          {structured.cors.allow_all ? "Allow All" : "Custom"}
-                        </Badge>
-                      ) : <span className="text-muted-foreground text-sm">Disabled</span>}
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0"><MoreHorizontal className="h-4 w-4" /></Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openEditDialog(config)}><Pencil className="h-4 w-4 mr-2" />Edit</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => { navigator.clipboard.writeText(config.id); }}><Copy className="h-4 w-4 mr-2" />Copy ID</DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => openDeleteDialog(config)} className="text-destructive focus:text-destructive"><Trash className="h-4 w-4 mr-2" />Delete</DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+        <CardContent>
+          <DataTable columns={columns} data={configs} searchKey="name" searchPlaceholder="Search configurations..." />
         </CardContent>
       </Card>
 
-      {/* Create Dialog - Wider */}
+      {/* Create Dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="max-w-4xl">
+        <DialogContent className="max-w-5xl">
           <DialogHeader>
             <DialogTitle>Create Nginx Configuration</DialogTitle>
             <DialogDescription>Configure nginx settings for your domains.</DialogDescription>
@@ -397,9 +426,9 @@ export default function NginxConfigsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Dialog - Wider */}
+      {/* Edit Dialog */}
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="max-w-4xl">
+        <DialogContent className="max-w-5xl">
           <DialogHeader>
             <DialogTitle>Edit Nginx Configuration</DialogTitle>
             <DialogDescription>Update nginx settings.</DialogDescription>

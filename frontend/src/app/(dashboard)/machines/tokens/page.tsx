@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { ColumnDef } from "@tanstack/react-table";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -8,10 +9,17 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DataTable } from "@/components/ui/data-table";
 import { api, EnrollmentToken, BACKEND_URL } from "@/lib/api";
 import { toast } from "sonner";
-import { Copy, Plus, Trash2, KeyRound, Clock, CheckCircle } from "lucide-react";
+import { Copy, Plus, Trash2, KeyRound, Clock, CheckCircle, MoreHorizontal } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 export default function EnrollmentTokensPage() {
   const [tokens, setTokens] = useState<EnrollmentToken[]>([]);
@@ -96,6 +104,95 @@ export default function EnrollmentTokensPage() {
   const activeTokens = tokens.filter(t => !t.used_at);
   const usedTokens = tokens.filter(t => t.used_at);
 
+  const getStatusBadge = (token: EnrollmentToken) => {
+    if (token.used_at) {
+      return (
+        <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
+          <CheckCircle className="h-3 w-3 mr-1" />
+          Used
+        </Badge>
+      );
+    }
+    if (new Date(token.expires_at) < new Date()) {
+      return <Badge variant="destructive">Expired</Badge>;
+    }
+    return (
+      <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
+        <Clock className="h-3 w-3 mr-1" />
+        Active
+      </Badge>
+    );
+  };
+
+  const columns: ColumnDef<EnrollmentToken>[] = [
+    {
+      accessorKey: "name",
+      header: "Name",
+      cell: ({ row }) => {
+        const token = row.original;
+        return (
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-yellow-500/20 to-yellow-500/5 flex items-center justify-center">
+              <KeyRound className="h-5 w-5 text-yellow-500" />
+            </div>
+            <span className="font-medium">{token.name || "Unnamed Token"}</span>
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: "status",
+      header: "Status",
+      cell: ({ row }) => getStatusBadge(row.original),
+    },
+    {
+      accessorKey: "created_at",
+      header: "Created",
+      cell: ({ row }) => (
+        <span className="text-sm text-muted-foreground">
+          {new Date(row.original.created_at).toLocaleDateString()}
+        </span>
+      ),
+    },
+    {
+      accessorKey: "expires_at",
+      header: "Expires",
+      cell: ({ row }) => (
+        <span className="text-sm text-muted-foreground">
+          {new Date(row.original.expires_at).toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      id: "actions",
+      cell: ({ row }) => {
+        const token = row.original;
+        if (token.used_at) return null;
+        
+        return (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="h-8 w-8 p-0">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => copyToClipboard(`curl -sSL ${BACKEND_URL}/install.sh | sudo bash -s -- ${token.token}`)}>
+                <Copy className="h-4 w-4 mr-2" />
+                Copy Install Command
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => openDeleteDialog(token)} className="text-destructive focus:text-destructive">
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        );
+      },
+    },
+  ];
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -105,96 +202,27 @@ export default function EnrollmentTokensPage() {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between mb-6">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Enrollment Tokens</h1>
           <p className="text-muted-foreground mt-1">
             Manage tokens for agent installation. {activeTokens.length} active, {usedTokens.length} used.
           </p>
         </div>
-        <Button onClick={() => setShowCreateDialog(true)} className="bg-primary hover:bg-primary/90">
+        <Button onClick={() => setShowCreateDialog(true)}>
           <Plus className="mr-2 h-4 w-4" />
           Create Token
         </Button>
       </div>
 
-      <Card className="border-border/50 bg-card/50 flex-1 flex flex-col overflow-hidden">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-lg flex items-center gap-2">
-            <KeyRound className="h-5 w-5" />
-            All Tokens
-          </CardTitle>
+      <Card className="border-border/50 bg-card/50">
+        <CardHeader>
+          <CardTitle className="text-lg">Your Tokens</CardTitle>
+          <CardDescription>Enrollment tokens allow new machines to register with the system.</CardDescription>
         </CardHeader>
-        <CardContent className="flex-1 overflow-auto p-0">
-          <Table>
-            <TableHeader className="sticky top-0 bg-card z-10">
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead>Expires</TableHead>
-                <TableHead className="w-[100px]"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {tokens.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
-                    No enrollment tokens yet. Create one to add a new machine.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                tokens.map((token) => (
-                  <TableRow key={token.id} className="group">
-                    <TableCell className="font-medium">{token.name || "Unnamed Token"}</TableCell>
-                    <TableCell>
-                      {token.used_at ? (
-                        <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
-                          <CheckCircle className="h-3 w-3 mr-1" />
-                          Used
-                        </Badge>
-                      ) : new Date(token.expires_at) < new Date() ? (
-                        <Badge variant="destructive">Expired</Badge>
-                      ) : (
-                        <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
-                          <Clock className="h-3 w-3 mr-1" />
-                          Active
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {new Date(token.created_at).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {new Date(token.expires_at).toLocaleString()}
-                    </TableCell>
-                    <TableCell>
-                      {!token.used_at && (
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => copyToClipboard(`curl -sSL ${BACKEND_URL}/install.sh | sudo bash -s -- ${token.token}`)}
-                          >
-                            <Copy className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-destructive hover:text-destructive"
-                            onClick={() => openDeleteDialog(token)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+        <CardContent>
+          <DataTable columns={columns} data={tokens} searchKey="name" searchPlaceholder="Search tokens..." />
         </CardContent>
       </Card>
 
@@ -292,4 +320,3 @@ export default function EnrollmentTokensPage() {
     </div>
   );
 }
-
