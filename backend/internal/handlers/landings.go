@@ -96,13 +96,9 @@ func (h *LandingsHandler) UploadLanding(w http.ResponseWriter, r *http.Request) 
 
 	// Get form values
 	name := r.FormValue("name")
-	landingType := r.FormValue("type")
 	if name == "" {
 		http.Error(w, "Name is required", http.StatusBadRequest)
 		return
-	}
-	if landingType != "html" && landingType != "php" {
-		landingType = "html"
 	}
 
 	// Get uploaded file
@@ -140,6 +136,10 @@ func (h *LandingsHandler) UploadLanding(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Auto-detect landing type by scanning zip contents for PHP files
+	landingType := detectLandingType(storagePath)
+	log.Printf("Auto-detected landing type: %s for %s", landingType, name)
+
 	// Create preview (extract to preview dir with random token)
 	previewToken := generateRandomToken(16)
 	previewPath := filepath.Join(PreviewBaseDir, previewToken)
@@ -174,6 +174,27 @@ func (h *LandingsHandler) UploadLanding(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(landing)
+}
+
+// detectLandingType scans a zip file and returns "php" if any PHP files are found, otherwise "html"
+func detectLandingType(zipPath string) string {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		log.Printf("Failed to open zip for type detection: %v", err)
+		return "html" // Default to HTML on error
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if ext == ".php" || ext == ".phtml" || ext == ".php3" || ext == ".php4" || ext == ".php5" {
+			return "php"
+		}
+	}
+	return "html"
 }
 
 // extractZipForPreview extracts zip file to preview directory with security measures

@@ -729,11 +729,11 @@ class ApiClient {
     return this.request<Landing>(`/api/landings/${id}`);
   }
 
-  async uploadLanding(name: string, type: string, file: File): Promise<Landing> {
+  async uploadLanding(name: string, file: File): Promise<Landing> {
     const formData = new FormData();
     formData.append("name", name);
-    formData.append("type", type);
     formData.append("file", file);
+    // Type is auto-detected by backend from ZIP contents
 
     const headers: Record<string, string> = {};
     if (this.token) {

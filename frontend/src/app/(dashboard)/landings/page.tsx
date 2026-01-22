@@ -9,7 +9,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DataTable } from "@/components/ui/data-table";
 import { api, Landing } from "@/lib/api";
 import { toast } from "sonner";
@@ -38,7 +37,6 @@ export default function LandingsPage() {
   const [showUploadDialog, setShowUploadDialog] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [landingName, setLandingName] = useState("");
-  const [landingType, setLandingType] = useState<string>("html");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [landingToDelete, setLandingToDelete] = useState<Landing | null>(null);
@@ -76,11 +74,10 @@ export default function LandingsPage() {
 
     setUploading(true);
     try {
-      await api.uploadLanding(landingName, landingType, selectedFile);
+      await api.uploadLanding(landingName, selectedFile);
       toast.success("Landing page uploaded successfully");
       setShowUploadDialog(false);
       setLandingName("");
-      setLandingType("html");
       setSelectedFile(null);
       loadLandings();
     } catch (err) {
@@ -310,21 +307,10 @@ export default function LandingsPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="landing-type">Type</Label>
-              <Select value={landingType} onValueChange={setLandingType}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="html">HTML (Static)</SelectItem>
-                  <SelectItem value="php">PHP (Requires PHP-FPM)</SelectItem>
-                </SelectContent>
-              </Select>
-              {landingType === "php" && (
-                <p className="text-xs text-muted-foreground">
-                  PHP pages require PHP-FPM to be installed on the target machine.
-                </p>
-              )}
+              <Label>Type</Label>
+              <p className="text-sm text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
+                Auto-detected from ZIP contents (PHP if .php files found, otherwise HTML)
+              </p>
             </div>
             <div className="space-y-2">
               <Label>ZIP File</Label>
