@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"configuratix/backend/internal/auth"
@@ -63,6 +64,10 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 		phpSocket = "/run/php/php" + phpVersion + "-fpm.sock"
 	}
 
+	// Track if we need a global PHP handler and what root to use
+	var phpEnabled bool
+	var phpRoot string
+
 	for _, loc := range structured.Locations {
 		// Build location directive based on match type
 		locationDirective := "    location "
@@ -87,29 +92,46 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 			if loc.Root != "" {
 				config += "        root " + loc.Root + ";\n"
 			}
-			if loc.Index != "" {
-				config += "        index " + loc.Index + ";\n"
+			indexValue := loc.Index
+			if indexValue == "" {
+				indexValue = "index.html index.htm"
 			}
-
-			// PHP-FPM configuration
 			if loc.UsePHP {
-				config += "\n"
-				config += "        location ~ \\.php$ {\n"
-				config += "            include snippets/fastcgi-php.conf;\n"
-				config += "            fastcgi_pass unix:" + phpSocket + ";\n"
-				config += "            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n"
-				config += "            include fastcgi_params;\n"
-				config += "        }\n"
-			} else {
-				config += "        try_files $uri $uri/ =404;\n"
+				// Add PHP files to index
+				if indexValue != "" && !strings.Contains(indexValue, "index.php") {
+					indexValue = "index.php " + indexValue
+				}
+				phpEnabled = true
+				if phpRoot == "" && loc.Root != "" {
+					phpRoot = loc.Root
+				}
 			}
+			config += "        index " + indexValue + ";\n"
+			config += "        try_files $uri $uri/ =404;\n"
 		}
+		config += "    }\n\n"
+	}
+
+	// Add PHP handler at server level if any location uses PHP
+	if phpEnabled {
+		config += "    # PHP-FPM handler\n"
+		config += "    location ~ \\.php$ {\n"
+		if phpRoot != "" {
+			config += "        root " + phpRoot + ";\n"
+		}
+		config += "        try_files $uri =404;\n"
+		config += "        fastcgi_split_path_info ^(.+\\.php)(/.+)$;\n"
+		config += "        fastcgi_pass unix:" + phpSocket + ";\n"
+		config += "        fastcgi_index index.php;\n"
+		config += "        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n"
+		config += "        include fastcgi_params;\n"
 		config += "    }\n\n"
 	}
 
 	config += "}\n"
 	return config
 }
+
 
 type DomainsHandler struct {
 	db *database.DB
