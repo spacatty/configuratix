@@ -130,6 +130,7 @@ export default function MachinesPage() {
       cell: ({ row }) => {
         const machine = row.original;
         const displayName = machine.title || machine.hostname || "Unknown";
+        const showHostname = machine.title && machine.hostname && machine.title !== machine.hostname;
         return (
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
@@ -142,8 +143,11 @@ export default function MachinesPage() {
               >
                 {displayName}
               </a>
-              <div className="text-xs text-muted-foreground">
-                {machine.ip_address || "No IP"}
+              <div className="text-xs text-muted-foreground flex items-center gap-2">
+                {showHostname && (
+                  <span className="bg-muted px-1.5 py-0.5 rounded text-[10px]">{machine.hostname}</span>
+                )}
+                <span>{machine.ip_address || "No IP"}</span>
               </div>
             </div>
           </div>

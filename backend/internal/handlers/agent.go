@@ -108,11 +108,11 @@ func (h *AgentHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create machine with owner from enrollment token
+	// Create machine with owner from enrollment token, set title to hostname by default
 	_, err = tx.Exec(`
-		INSERT INTO machines (agent_id, hostname, ip_address, ubuntu_version, owner_id)
-		VALUES ($1, $2, $3, $4, $5)
-	`, agent.ID, req.Hostname, req.IP, req.OS, enrollmentToken.OwnerID)
+		INSERT INTO machines (agent_id, hostname, ip_address, ubuntu_version, owner_id, title)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, agent.ID, req.Hostname, req.IP, req.OS, enrollmentToken.OwnerID, req.Hostname)
 	if err != nil {
 		log.Printf("Failed to create machine: %v", err)
 		http.Error(w, "Failed to enroll agent", http.StatusInternalServerError)

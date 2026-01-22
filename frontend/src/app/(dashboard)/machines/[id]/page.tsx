@@ -678,6 +678,10 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
   const [pendingUFW, setPendingUFW] = useState(false);
   const [pendingFail2ban, setPendingFail2ban] = useState(false);
 
+  // Title editing state
+  const [showTitleDialog, setShowTitleDialog] = useState(false);
+  const [editingTitle, setEditingTitle] = useState("");
+
   // Dialogs
   const [showAddPortDialog, setShowAddPortDialog] = useState(false);
   const [showSSHPortDialog, setShowSSHPortDialog] = useState(false);
@@ -804,6 +808,27 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSaveTitle = async () => {
+    if (!machine) return;
+    setSaving(true);
+    try {
+      await api.updateMachine(machine.id, { title: editingTitle || null });
+      setMachine(prev => prev ? { ...prev, title: editingTitle || null } : null);
+      setShowTitleDialog(false);
+      toast.success("Machine name updated");
+    } catch (err) {
+      console.error("Failed to update machine name:", err);
+      toast.error("Failed to update machine name");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openTitleDialog = () => {
+    setEditingTitle(machine?.title || machine?.hostname || "");
+    setShowTitleDialog(true);
   };
 
   const handleNotesChange = (value: string) => {
@@ -1031,7 +1056,14 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
           </Button>
           <div>
             <div className="flex items-center gap-3">
-              <h1 className="text-3xl font-semibold tracking-tight">{machine.hostname || "Unknown"}</h1>
+              <button 
+                onClick={openTitleDialog}
+                className="text-3xl font-semibold tracking-tight hover:text-primary/80 transition-colors flex items-center gap-2 group"
+                title="Click to edit machine name"
+              >
+                {machine.title || machine.hostname || "Unknown"}
+                <span className="text-sm opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground">✎</span>
+              </button>
               {getStatusBadge()}
               {(pendingUFW || pendingFail2ban) && (
                 <Badge variant="outline" className="animate-pulse">
@@ -1039,13 +1071,51 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
                 </Badge>
               )}
             </div>
-            <p className="text-muted-foreground mt-1">{machine.ip_address || "No IP address"}</p>
+            <p className="text-muted-foreground mt-1">
+              {machine.hostname && machine.title && machine.hostname !== machine.title && (
+                <span className="text-xs bg-muted px-2 py-0.5 rounded mr-2">{machine.hostname}</span>
+              )}
+              {machine.ip_address || "No IP address"}
+            </p>
           </div>
         </div>
         <Button variant="destructive" onClick={handleDelete}>
           Delete Machine
         </Button>
       </div>
+
+      {/* Title Edit Dialog */}
+      <Dialog open={showTitleDialog} onOpenChange={setShowTitleDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Machine Name</DialogTitle>
+            <DialogDescription>
+              Give this machine a friendly name. Leave empty to use the hostname.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Machine Name</Label>
+              <Input 
+                value={editingTitle}
+                onChange={(e) => setEditingTitle(e.target.value)}
+                placeholder={machine.hostname || "Machine name"}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Hostname: {machine.hostname || "Unknown"}
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowTitleDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveTitle} disabled={saving}>
+              {saving ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Main Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
