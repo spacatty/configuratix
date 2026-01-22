@@ -17,7 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable } from "@/components/ui/data-table";
 import { api, Domain, Machine, NginxConfig, DNSAccount, DNSRecord, NSStatus, DNSSyncResult } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
-import { ExternalLink, MoreHorizontal, Trash, Link2, FileText, Server, Globe, CheckCircle, XCircle, Cloud, Circle, Plus, RefreshCw, AlertTriangle, Settings2, X } from "lucide-react";
+import { ExternalLink, MoreHorizontal, Trash, Link2, FileText, Server, Globe, CheckCircle, XCircle, Cloud, Circle, Plus, RefreshCw, AlertTriangle, Settings2, X, Copy } from "lucide-react";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -784,7 +784,14 @@ function DNSSettingsDialog({
       setHttpOutPorts((domain.http_outgoing_ports || [80]).join(", "));
       setHttpsInPorts((domain.https_incoming_ports || [443]).join(", "));
       setHttpsOutPorts((domain.https_outgoing_ports || [443]).join(", "));
+      setExpectedNS(null);
+      setNsStatus(null);
       loadRecords();
+      
+      // Load nameservers if account is already set
+      if (domain.dns_account_id) {
+        loadExpectedNameservers(domain.dns_account_id);
+      }
     }
   }, [domain, open]);
 
@@ -835,7 +842,7 @@ function DNSSettingsDialog({
     try {
       await api.updateDomainDNS(domain.id, {
         dns_mode: dnsMode,
-        dns_account_id: dnsAccountId || null,
+        dns_account_id: dnsAccountId || "", // Empty string to unlink, not null
         ip_address: ipAddress || undefined,
         is_wildcard: isWildcard,
         https_send_proxy: httpsSendProxy,
@@ -1027,11 +1034,33 @@ function DNSSettingsDialog({
                             <span className="text-sm font-medium">{expectedNS.message}</span>
                           </div>
                           {expectedNS.found && expectedNS.nameservers.length > 0 && (
-                            <div className="space-y-1">
-                              <p className="text-xs text-muted-foreground">Point your domain to these nameservers:</p>
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <p className="text-xs text-muted-foreground">Point your domain to these nameservers:</p>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 px-2 text-xs"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(expectedNS.nameservers.join("\n"));
+                                    toast.success("Nameservers copied to clipboard");
+                                  }}
+                                >
+                                  <Copy className="h-3 w-3 mr-1" />
+                                  Copy
+                                </Button>
+                              </div>
                               <div className="flex flex-wrap gap-2">
                                 {expectedNS.nameservers.map((ns, i) => (
-                                  <code key={i} className="px-2 py-1 bg-background rounded text-xs font-mono">
+                                  <code
+                                    key={i}
+                                    className="px-2 py-1 bg-background rounded text-xs font-mono cursor-pointer hover:bg-muted transition-colors"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(ns);
+                                      toast.success(`Copied: ${ns}`);
+                                    }}
+                                    title="Click to copy"
+                                  >
                                     {ns}
                                   </code>
                                 ))}

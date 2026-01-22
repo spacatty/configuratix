@@ -405,15 +405,15 @@ func (h *DNSHandler) GetExpectedNameservers(w http.ResponseWriter, r *http.Reque
 // ==================== Domain DNS Settings ====================
 
 type UpdateDomainDNSRequest struct {
-	DNSAccountID       *uuid.UUID `json:"dns_account_id"`
-	DNSMode            *string    `json:"dns_mode"` // managed, external
-	IsWildcard         *bool      `json:"is_wildcard"`
-	IPAddress          *string    `json:"ip_address"`
-	HTTPSSendProxy     *bool      `json:"https_send_proxy"`
-	HTTPIncomingPorts  []int      `json:"http_incoming_ports"`
-	HTTPOutgoingPorts  []int      `json:"http_outgoing_ports"`
-	HTTPSIncomingPorts []int      `json:"https_incoming_ports"`
-	HTTPSOutgoingPorts []int      `json:"https_outgoing_ports"`
+	DNSAccountID       *string `json:"dns_account_id"` // Use string to detect null vs not-provided
+	DNSMode            *string `json:"dns_mode"`       // managed, external
+	IsWildcard         *bool   `json:"is_wildcard"`
+	IPAddress          *string `json:"ip_address"`
+	HTTPSSendProxy     *bool   `json:"https_send_proxy"`
+	HTTPIncomingPorts  []int   `json:"http_incoming_ports"`
+	HTTPOutgoingPorts  []int   `json:"http_outgoing_ports"`
+	HTTPSIncomingPorts []int   `json:"https_incoming_ports"`
+	HTTPSOutgoingPorts []int   `json:"https_outgoing_ports"`
 }
 
 // UpdateDomainDNS updates DNS settings for a domain
@@ -436,10 +436,22 @@ func (h *DNSHandler) UpdateDomainDNS(w http.ResponseWriter, r *http.Request) {
 	args := []interface{}{}
 	argNum := 1
 
+	// Handle dns_account_id - can be set to NULL explicitly
 	if req.DNSAccountID != nil {
-		updates = append(updates, fmt.Sprintf("dns_account_id = $%d", argNum))
-		args = append(args, *req.DNSAccountID)
-		argNum++
+		if *req.DNSAccountID == "" {
+			// Explicitly set to NULL
+			updates = append(updates, "dns_account_id = NULL")
+		} else {
+			// Parse and set the UUID
+			accountID, err := uuid.Parse(*req.DNSAccountID)
+			if err != nil {
+				http.Error(w, "Invalid dns_account_id", http.StatusBadRequest)
+				return
+			}
+			updates = append(updates, fmt.Sprintf("dns_account_id = $%d", argNum))
+			args = append(args, accountID)
+			argNum++
+		}
 	}
 	if req.DNSMode != nil {
 		updates = append(updates, fmt.Sprintf("dns_mode = $%d", argNum))
