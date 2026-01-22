@@ -16,30 +16,54 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// structuredConfig is used for parsing the structured JSON
+type structuredConfig struct {
+	IsPassthrough     bool   `json:"is_passthrough"`
+	PassthroughTarget string `json:"passthrough_target"`
+	SSLMode           string `json:"ssl_mode"`
+	AutoindexOff      *bool  `json:"autoindex_off"`
+	DenyAllCatchall   *bool  `json:"deny_all_catchall"`
+	Locations         []struct {
+		Path       string `json:"path"`
+		MatchType  string `json:"match_type"`
+		Type       string `json:"type"`
+		StaticType string `json:"static_type"`
+		ProxyURL   string `json:"proxy_url"`
+		Root       string `json:"root"`
+		Index      string `json:"index"`
+		LandingID  string `json:"landing_id"`
+		UsePHP     bool   `json:"use_php"`
+	} `json:"locations"`
+	CORS struct {
+		Enabled  bool `json:"enabled"`
+		AllowAll bool `json:"allow_all"`
+	} `json:"cors"`
+}
+
+// isPassthroughConfig checks if the structured JSON is a passthrough config
+func isPassthroughConfig(structuredJSON json.RawMessage) bool {
+	var cfg structuredConfig
+	json.Unmarshal(structuredJSON, &cfg)
+	return cfg.IsPassthrough
+}
+
+// getPassthroughTarget returns the passthrough target from structured JSON
+func getPassthroughTarget(structuredJSON json.RawMessage) string {
+	var cfg structuredConfig
+	json.Unmarshal(structuredJSON, &cfg)
+	return cfg.PassthroughTarget
+}
+
 // generateNginxFromStructured creates nginx config from structured JSON
 // phpVersion is optional - if provided, uses the specific PHP-FPM socket, otherwise uses default
 func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, phpVersion string) string {
-	var structured struct {
-		SSLMode          string `json:"ssl_mode"`
-		AutoindexOff     *bool  `json:"autoindex_off"`      // Deny directory listing (default: true)
-		DenyAllCatchall  *bool  `json:"deny_all_catchall"`  // Add deny all catch-all (default: true)
-		Locations        []struct {
-			Path       string `json:"path"`
-			MatchType  string `json:"match_type"` // prefix, exact, regex
-			Type       string `json:"type"`
-			StaticType string `json:"static_type"`
-			ProxyURL   string `json:"proxy_url"`
-			Root       string `json:"root"`
-			Index      string `json:"index"`
-			LandingID  string `json:"landing_id"`
-			UsePHP     bool   `json:"use_php"`
-		} `json:"locations"`
-		CORS struct {
-			Enabled  bool `json:"enabled"`
-			AllowAll bool `json:"allow_all"`
-		} `json:"cors"`
-	}
+	var structured structuredConfig
 	json.Unmarshal(structuredJSON, &structured)
+
+	// Passthrough configs don't generate HTTP server blocks
+	if structured.IsPassthrough {
+		return "" // Return empty - passthrough uses stream config instead
+	}
 
 	// Default values for security settings
 	autoindexOff := structured.AutoindexOff == nil || *structured.AutoindexOff
@@ -429,35 +453,52 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 		var newAgentID uuid.UUID
 		tx.Get(&newAgentID, "SELECT agent_id FROM machines WHERE id = $1", req.MachineID)
 		if newAgentID != uuid.Nil {
-			// Determine if SSL is enabled and get SSL email
-			sslEnabled := "true"
-			sslEmail := "admin@example.com"
-			var structured struct {
-				SSLMode  string `json:"ssl_mode"`
-				SSLEmail string `json:"ssl_email"`
-			}
-			json.Unmarshal(configJSON, &structured)
-			if structured.SSLMode == "disabled" {
-				sslEnabled = "false"
-			}
-			if structured.SSLEmail != "" {
-				sslEmail = structured.SSLEmail
-			}
+			// Check if this is a passthrough config
+			if isPassthroughConfig(configJSON) {
+				// Use passthrough template
+				passthroughTarget := getPassthroughTarget(configJSON)
+				applyCmd := templates.GetCommand("apply_passthrough_domain")
+				if applyCmd != nil {
+					payload := applyCmd.ToPayload(map[string]string{
+						"domain": domainFQDN,
+						"target": passthroughTarget,
+					})
+					tx.Exec(`
+						INSERT INTO jobs (agent_id, type, payload_json, status)
+						VALUES ($1, 'run', $2, 'pending')
+					`, newAgentID, payload)
+				}
+			} else {
+				// Regular HTTP config
+				// Determine if SSL is enabled and get SSL email
+				sslEnabled := "true"
+				sslEmail := "admin@example.com"
+				var structured struct {
+					SSLMode  string `json:"ssl_mode"`
+					SSLEmail string `json:"ssl_email"`
+				}
+				json.Unmarshal(configJSON, &structured)
+				if structured.SSLMode == "disabled" {
+					sslEnabled = "false"
+				}
+				if structured.SSLEmail != "" {
+					sslEmail = structured.SSLEmail
+				}
 
-			// Use template-based job
-			applyCmd := templates.GetCommand("apply_domain")
-			if applyCmd != nil {
-				payload := applyCmd.ToPayload(map[string]string{
-					"domain":       domainFQDN,
-					"nginx_config": nginxConfig,
-					"ssl_enabled":  sslEnabled,
-					"ssl_email":    sslEmail,
-				})
-				tx.Exec(`
-					INSERT INTO jobs (agent_id, type, payload_json, status)
-					VALUES ($1, 'run', $2, 'pending')
-				`, newAgentID, payload)
-			}
+				// Use template-based job
+				applyCmd := templates.GetCommand("apply_domain")
+				if applyCmd != nil {
+					payload := applyCmd.ToPayload(map[string]string{
+						"domain":       domainFQDN,
+						"nginx_config": nginxConfig,
+						"ssl_enabled":  sslEnabled,
+						"ssl_email":    sslEmail,
+					})
+					tx.Exec(`
+						INSERT INTO jobs (agent_id, type, payload_json, status)
+						VALUES ($1, 'run', $2, 'pending')
+					`, newAgentID, payload)
+				}
 
 			// Check for landing deployments in the config
 			var landingStructured struct {
@@ -518,6 +559,7 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 					`, newAgentID, deployPayload)
 				}
 			}
+			} // end of else block for non-passthrough
 		}
 	}
 

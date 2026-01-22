@@ -1,3 +1,4 @@
+//go:build linux || darwin
 // +build linux darwin
 
 package terminal
@@ -238,4 +239,3 @@ func RunTerminalLoop(serverURL, apiKey string) {
 		time.Sleep(2 * time.Second)
 	}
 }
-

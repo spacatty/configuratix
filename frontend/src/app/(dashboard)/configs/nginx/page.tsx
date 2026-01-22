@@ -31,6 +31,8 @@ export default function NginxConfigsPage() {
   
   const [formName, setFormName] = useState("");
   const [formMode, setFormMode] = useState("auto");
+  const [formIsPassthrough, setFormIsPassthrough] = useState(false);
+  const [formPassthroughTarget, setFormPassthroughTarget] = useState("");
   const [formSslMode, setFormSslMode] = useState("allow_http");
   const [formSslEmail, setFormSslEmail] = useState("");
   const [formCorsEnabled, setFormCorsEnabled] = useState(true);
@@ -63,6 +65,8 @@ export default function NginxConfigsPage() {
   const resetForm = () => {
     setFormName("");
     setFormMode("auto");
+    setFormIsPassthrough(false);
+    setFormPassthroughTarget("");
     setFormSslMode("allow_http");
     setFormSslEmail("");
     setFormCorsEnabled(true);
@@ -83,12 +87,14 @@ export default function NginxConfigsPage() {
         use_php: loc.type === "static" ? formEnablePHP : false,
       }));
       const structured: NginxConfigStructured = {
+        is_passthrough: formIsPassthrough,
+        passthrough_target: formIsPassthrough ? formPassthroughTarget : undefined,
         ssl_mode: formSslMode,
         ssl_email: formSslEmail || undefined,
-        locations: locationsWithPHP,
-        cors: { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
-        autoindex_off: formAutoindexOff,
-        deny_all_catchall: formDenyAllCatchall,
+        locations: formIsPassthrough ? [] : locationsWithPHP,
+        cors: formIsPassthrough ? null : { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
+        autoindex_off: formIsPassthrough ? undefined : formAutoindexOff,
+        deny_all_catchall: formIsPassthrough ? undefined : formDenyAllCatchall,
       };
       await api.createNginxConfig({
         name: formName,
@@ -115,12 +121,14 @@ export default function NginxConfigsPage() {
         use_php: loc.type === "static" ? formEnablePHP : false,
       }));
       const structured: NginxConfigStructured = {
+        is_passthrough: formIsPassthrough,
+        passthrough_target: formIsPassthrough ? formPassthroughTarget : undefined,
         ssl_mode: formSslMode,
         ssl_email: formSslEmail || undefined,
-        locations: locationsWithPHP,
-        cors: { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
-        autoindex_off: formAutoindexOff,
-        deny_all_catchall: formDenyAllCatchall,
+        locations: formIsPassthrough ? [] : locationsWithPHP,
+        cors: formIsPassthrough ? null : { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
+        autoindex_off: formIsPassthrough ? undefined : formAutoindexOff,
+        deny_all_catchall: formIsPassthrough ? undefined : formDenyAllCatchall,
       };
       await api.updateNginxConfig(selectedConfig.id, {
         name: formName,
@@ -160,6 +168,10 @@ export default function NginxConfigsPage() {
     setFormRawText(config.raw_text || "");
     if (config.structured_json) {
       const structured = config.structured_json as NginxConfigStructured;
+      // Passthrough settings
+      setFormIsPassthrough(structured.is_passthrough ?? false);
+      setFormPassthroughTarget(structured.passthrough_target || "");
+      // Standard settings
       setFormSslMode(structured.ssl_mode || "allow_http");
       setFormSslEmail(structured.ssl_email || "");
       setFormCorsEnabled(structured.cors?.enabled ?? true);
@@ -251,11 +263,39 @@ export default function NginxConfigsPage() {
       ),
     },
     {
+      accessorKey: "type",
+      header: "Type",
+      cell: ({ row }) => {
+        const structured = row.original.structured_json as NginxConfigStructured | null;
+        if (structured?.is_passthrough) {
+          return (
+            <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30 text-xs">
+              Passthrough
+            </Badge>
+          );
+        }
+        return (
+          <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30 text-xs">
+            HTTP
+          </Badge>
+        );
+      },
+    },
+    {
       accessorKey: "ssl",
       header: "SSL",
       cell: ({ row }) => {
         const structured = row.original.structured_json as NginxConfigStructured | null;
         if (!structured) return <span className="text-muted-foreground">—</span>;
+        
+        // Passthrough configs don't terminate SSL
+        if (structured.is_passthrough) {
+          return (
+            <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30 text-xs">
+              Backend
+            </Badge>
+          );
+        }
         
         const sslMode = structured.ssl_mode;
         if (sslMode === "disabled") {
@@ -482,78 +522,116 @@ export default function NginxConfigsPage() {
       
       {formMode === "auto" ? (
         <>
-          {/* SSL & CORS Row */}
-          <div className="grid grid-cols-2 gap-4">
-            <Card className="border-border/50 bg-card/30">
-              <CardContent className="p-4 space-y-3">
-                <Label className="text-sm font-medium">SSL Settings</Label>
-                <Select value={formSslMode} onValueChange={setFormSslMode}>
-                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="disabled">Disabled</SelectItem>
-                    <SelectItem value="allow_http">Allow HTTP</SelectItem>
-                    <SelectItem value="redirect_https">Force HTTPS</SelectItem>
-                  </SelectContent>
-                </Select>
-                {formSslMode !== "disabled" && (
-                  <Input type="email" placeholder="admin@example.com" value={formSslEmail} onChange={(e) => setFormSslEmail(e.target.value)} className="h-9" />
-                )}
-              </CardContent>
-            </Card>
-            <Card className="border-border/50 bg-card/30">
-              <CardContent className="p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <Label className="text-sm font-medium">CORS</Label>
-                  <Switch checked={formCorsEnabled} onCheckedChange={setFormCorsEnabled} />
+          {/* Passthrough Mode Toggle */}
+          <Card className={`border-2 transition-colors ${formIsPassthrough ? "border-amber-500/50 bg-amber-500/5" : "border-border/50 bg-card/30"}`}>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-sm font-medium">SSL Passthrough Mode</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Forward raw TCP/TLS traffic to backend without SSL termination. 
+                    Certificate must be configured on the target server.
+                  </p>
                 </div>
-                {formCorsEnabled && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Allow All Origins</span>
-                    <Switch checked={formCorsAllowAll} onCheckedChange={setFormCorsAllowAll} />
+                <Switch checked={formIsPassthrough} onCheckedChange={setFormIsPassthrough} />
+              </div>
+              
+              {formIsPassthrough && (
+                <div className="mt-4 pt-4 border-t border-border/50 space-y-3">
+                  <div className="space-y-2">
+                    <Label className="text-sm">Backend Target</Label>
+                    <Input 
+                      placeholder="192.168.1.10:443 or backend.example.com:443" 
+                      value={formPassthroughTarget} 
+                      onChange={(e) => setFormPassthroughTarget(e.target.value)} 
+                      className="h-9 font-mono"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      The server that handles SSL and serves the content. Format: host:port
+                    </p>
                   </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-          {/* Features & Security Row */}
-          <div className="grid grid-cols-3 gap-4">
-            <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/30">
-              <div>
-                <Label className="text-sm">PHP Support</Label>
-                <p className="text-xs text-muted-foreground">Process .php files</p>
+          {/* Only show standard config if NOT passthrough */}
+          {!formIsPassthrough && (
+            <>
+              {/* SSL & CORS Row */}
+              <div className="grid grid-cols-2 gap-4">
+                <Card className="border-border/50 bg-card/30">
+                  <CardContent className="p-4 space-y-3">
+                    <Label className="text-sm font-medium">SSL Settings</Label>
+                    <Select value={formSslMode} onValueChange={setFormSslMode}>
+                      <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="disabled">Disabled</SelectItem>
+                        <SelectItem value="allow_http">Allow HTTP</SelectItem>
+                        <SelectItem value="redirect_https">Force HTTPS</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {formSslMode !== "disabled" && (
+                      <Input type="email" placeholder="admin@example.com" value={formSslEmail} onChange={(e) => setFormSslEmail(e.target.value)} className="h-9" />
+                    )}
+                  </CardContent>
+                </Card>
+                <Card className="border-border/50 bg-card/30">
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm font-medium">CORS</Label>
+                      <Switch checked={formCorsEnabled} onCheckedChange={setFormCorsEnabled} />
+                    </div>
+                    {formCorsEnabled && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-muted-foreground">Allow All Origins</span>
+                        <Switch checked={formCorsAllowAll} onCheckedChange={setFormCorsAllowAll} />
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
               </div>
-              <Switch checked={formEnablePHP} onCheckedChange={setFormEnablePHP} />
-            </div>
-            <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/30">
-              <div>
-                <Label className="text-sm">No Directory List</Label>
-                <p className="text-xs text-muted-foreground">autoindex off</p>
-              </div>
-              <Switch checked={formAutoindexOff} onCheckedChange={setFormAutoindexOff} />
-            </div>
-            <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/30">
-              <div>
-                <Label className="text-sm">Deny Catch-all</Label>
-                <p className="text-xs text-muted-foreground">Block undefined paths</p>
-              </div>
-              <Switch checked={formDenyAllCatchall} onCheckedChange={setFormDenyAllCatchall} />
-            </div>
-          </div>
 
-          {/* Locations Section */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <Label className="text-base font-medium">Locations</Label>
-                <p className="text-xs text-muted-foreground">Order matters in Nginx - first match wins. Use arrows to reorder.</p>
+              {/* Features & Security Row */}
+              <div className="grid grid-cols-3 gap-4">
+                <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/30">
+                  <div>
+                    <Label className="text-sm">PHP Support</Label>
+                    <p className="text-xs text-muted-foreground">Process .php files</p>
+                  </div>
+                  <Switch checked={formEnablePHP} onCheckedChange={setFormEnablePHP} />
+                </div>
+                <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/30">
+                  <div>
+                    <Label className="text-sm">No Directory List</Label>
+                    <p className="text-xs text-muted-foreground">autoindex off</p>
+                  </div>
+                  <Switch checked={formAutoindexOff} onCheckedChange={setFormAutoindexOff} />
+                </div>
+                <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/30">
+                  <div>
+                    <Label className="text-sm">Deny Catch-all</Label>
+                    <p className="text-xs text-muted-foreground">Block undefined paths</p>
+                  </div>
+                  <Switch checked={formDenyAllCatchall} onCheckedChange={setFormDenyAllCatchall} />
+                </div>
               </div>
-              <Button type="button" variant="outline" size="sm" onClick={addLocation}>+ Add Location</Button>
-            </div>
-            <div className="space-y-3">
-              {formLocations.map((loc, index) => renderLocationFields(loc, index, "loc"))}
-            </div>
-          </div>
+
+              {/* Locations Section */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-base font-medium">Locations</Label>
+                    <p className="text-xs text-muted-foreground">Order matters in Nginx - first match wins. Use arrows to reorder.</p>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" onClick={addLocation}>+ Add Location</Button>
+                </div>
+                <div className="space-y-3">
+                  {formLocations.map((loc, index) => renderLocationFields(loc, index, "loc"))}
+                </div>
+              </div>
+            </>
+          )}
         </>
       ) : (
         <div className="space-y-2">

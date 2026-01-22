@@ -219,6 +219,11 @@ export interface NginxConfig {
 }
 
 export interface NginxConfigStructured {
+  // Passthrough mode - SSL passthrough proxy (Layer 4)
+  is_passthrough?: boolean;       // If true, use stream proxy (SSL passthrough)
+  passthrough_target?: string;    // Backend target for passthrough (host:port)
+
+  // Standard HTTP mode settings
   ssl_mode: string;
   ssl_email?: string; // Email for SSL certificate issuance
   locations: LocationConfig[];

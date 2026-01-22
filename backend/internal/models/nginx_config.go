@@ -20,6 +20,11 @@ type NginxConfig struct {
 
 // NginxConfigStructured represents the structured form data
 type NginxConfigStructured struct {
+	// Passthrough mode - SSL passthrough proxy (Layer 4)
+	IsPassthrough     bool   `json:"is_passthrough,omitempty"`     // If true, use stream proxy (SSL passthrough)
+	PassthroughTarget string `json:"passthrough_target,omitempty"` // Backend target for passthrough (host:port)
+
+	// Standard HTTP mode settings
 	SSLMode         string           `json:"ssl_mode"`                    // disabled, allow_http, redirect_https
 	SSLEmail        string           `json:"ssl_email,omitempty"`         // Email for SSL certificate issuance
 	Locations       []LocationConfig `json:"locations"`
