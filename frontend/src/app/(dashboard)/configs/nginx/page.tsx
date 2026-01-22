@@ -537,7 +537,7 @@ export default function NginxConfigsPage() {
               </div>
               
               {formIsPassthrough && (
-                <div className="mt-4 pt-4 border-t border-border/50 space-y-3">
+                <div className="mt-4 pt-4 border-t border-border/50 space-y-4">
                   <div className="space-y-2">
                     <Label className="text-sm">Backend Target</Label>
                     <Input 
@@ -549,6 +549,23 @@ export default function NginxConfigsPage() {
                     <p className="text-xs text-muted-foreground">
                       The server that handles SSL and serves the content. Format: host:port
                     </p>
+                  </div>
+                  
+                  <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm space-y-2">
+                    <p className="font-medium text-amber-400">⚠️ Backend Configuration Required</p>
+                    <p className="text-muted-foreground text-xs">
+                      PROXY Protocol is enabled to forward real client IPs. Your backend nginx must be configured:
+                    </p>
+                    <pre className="text-xs bg-black/30 p-2 rounded overflow-x-auto font-mono text-amber-300/80">{`server {
+    listen 443 ssl proxy_protocol;
+    
+    set_real_ip_from 0.0.0.0/0;  # Or proxy IP
+    real_ip_header proxy_protocol;
+    
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+    ...
+}`}</pre>
                   </div>
                 </div>
               )}
