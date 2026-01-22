@@ -751,6 +751,14 @@ function DNSSettingsDialog({
     provider: string;
   } | null>(null);
   const [loadingNS, setLoadingNS] = useState(false);
+  const [dnsLookupResult, setDnsLookupResult] = useState<{
+    domain: string;
+    subdomain: string;
+    lookup: string;
+    results: Record<string, { type: string; records: string[]; error?: string }>;
+  } | null>(null);
+  const [lookupSubdomain, setLookupSubdomain] = useState("@");
+  const [loadingLookup, setLoadingLookup] = useState(false);
 
   // Form state
   const [dnsMode, setDnsMode] = useState("external");
@@ -855,6 +863,19 @@ function DNSSettingsDialog({
       toast.error(err instanceof Error ? err.message : "Failed to check NS");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDNSLookup = async () => {
+    if (!domain) return;
+    setLoadingLookup(true);
+    try {
+      const result = await api.lookupDNS(domain.id, lookupSubdomain === "@" ? "" : lookupSubdomain);
+      setDnsLookupResult(result);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to lookup DNS");
+    } finally {
+      setLoadingLookup(false);
     }
   };
 
@@ -1113,6 +1134,48 @@ function DNSSettingsDialog({
                   )}
                 </div>
 
+                {/* DNS Lookup (Debug) */}
+                <div className="p-4 border rounded-lg bg-muted/20">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <Label className="text-sm font-medium">DNS Lookup (Debug)</Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">Query public DNS to see what records are resolving</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <Input
+                      className="h-9 w-32"
+                      placeholder="@ or subdomain"
+                      value={lookupSubdomain}
+                      onChange={(e) => setLookupSubdomain(e.target.value || "@")}
+                    />
+                    <span className="text-muted-foreground">.{domain?.fqdn}</span>
+                    <Button variant="outline" size="sm" onClick={handleDNSLookup} disabled={loadingLookup}>
+                      <RefreshCw className={`h-4 w-4 mr-2 ${loadingLookup ? "animate-spin" : ""}`} />
+                      Lookup
+                    </Button>
+                  </div>
+                  {dnsLookupResult && (
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      {Object.entries(dnsLookupResult.results).map(([type, data]) => (
+                        <div key={type} className="p-2 rounded bg-background/50 text-xs">
+                          <div className="font-medium text-muted-foreground mb-1">{type}</div>
+                          {data.records.length > 0 ? (
+                            <div className="space-y-0.5">
+                              {data.records.map((r, i) => (
+                                <code key={i} className="block font-mono text-foreground">{r}</code>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground/50">
+                              {data.error ? "lookup failed" : "no records"}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </>
             )}
 

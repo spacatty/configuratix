@@ -167,6 +167,7 @@ func main() {
 	apiRouter.HandleFunc("/domains/{id}/dns-sync", dnsHandler.CompareDNSRecords).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/dns-sync/apply", dnsHandler.ApplyDNSToRemote).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/dns-sync/import", dnsHandler.ImportDNSFromRemote).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/domains/{id}/dns-lookup", dnsHandler.LookupDNS).Methods("GET", "OPTIONS")
 
 	// Nginx Configs
 	nginxConfigsHandler := handlers.NewNginxConfigsHandler(db)

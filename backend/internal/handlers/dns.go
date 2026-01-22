@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"configuratix/backend/internal/auth"
@@ -649,16 +651,72 @@ func (h *DNSHandler) CreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 		ttl = 600
 	}
 
+	// Get domain and DNS account info
+	var domainInfo struct {
+		FQDN         string     `db:"fqdn"`
+		DNSAccountID *uuid.UUID `db:"dns_account_id"`
+	}
+	err = h.db.Get(&domainInfo, "SELECT fqdn, dns_account_id FROM domains WHERE id = $1", domainID)
+	if err != nil {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
+	}
+
+	// First, try to create on remote provider if account is set
+	var remoteRecordID string
+	syncStatus := "pending"
+	var syncError string
+
+	if domainInfo.DNSAccountID != nil {
+		var account models.DNSAccount
+		err = h.db.Get(&account, "SELECT * FROM dns_accounts WHERE id = $1", *domainInfo.DNSAccountID)
+		if err == nil {
+			apiID := ""
+			if account.ApiID != nil {
+				apiID = *account.ApiID
+			}
+			provider, _ := dns.NewProvider(account.Provider, apiID, account.ApiToken)
+
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			defer cancel()
+
+			priority := 0
+			if req.Priority != nil {
+				priority = *req.Priority
+			}
+			remoteRecord, err := provider.CreateRecord(ctx, domainInfo.FQDN, dns.Record{
+				Name:     req.Name,
+				Type:     req.RecordType,
+				Value:    req.Value,
+				TTL:      ttl,
+				Priority: priority,
+				Proxied:  req.Proxied,
+			})
+
+			if err != nil {
+				log.Printf("Failed to create record on provider: %v", err)
+				syncError = err.Error()
+				syncStatus = "error"
+			} else {
+				remoteRecordID = remoteRecord.ID
+				syncStatus = "synced"
+			}
+		}
+	}
+
+	// Save to database
 	var record models.DNSRecord
 	err = h.db.Get(&record, `
 		INSERT INTO dns_records (
 			domain_id, name, record_type, value, ttl, priority, proxied,
 			http_incoming_port, http_outgoing_port, https_incoming_port, https_outgoing_port,
-			sync_status
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending')
+			sync_status, sync_error, remote_record_id, last_synced_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 
+			CASE WHEN $12 = 'synced' THEN NOW() ELSE NULL END)
 		RETURNING *
 	`, domainID, req.Name, req.RecordType, req.Value, ttl, req.Priority, req.Proxied,
-		req.HTTPIncomingPort, req.HTTPOutgoingPort, req.HTTPSIncomingPort, req.HTTPSOutgoingPort)
+		req.HTTPIncomingPort, req.HTTPOutgoingPort, req.HTTPSIncomingPort, req.HTTPSOutgoingPort,
+		syncStatus, nullString(syncError), nullString(remoteRecordID))
 	if err != nil {
 		log.Printf("Failed to create DNS record: %v", err)
 		http.Error(w, "Failed to create record (may already exist)", http.StatusInternalServerError)
@@ -668,6 +726,14 @@ func (h *DNSHandler) CreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(record)
+}
+
+// nullString returns nil for empty strings, used for nullable DB fields
+func nullString(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // UpdateDNSRecord updates an existing DNS record
@@ -972,6 +1038,125 @@ func (h *DNSHandler) ImportDNSFromRemote(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"imported": imported,
 		"message":  "Records imported from provider",
+	})
+}
+
+// ==================== DNS Lookup (Debug) ====================
+
+type DNSLookupResult struct {
+	Type    string   `json:"type"`
+	Records []string `json:"records"`
+	Error   string   `json:"error,omitempty"`
+}
+
+// LookupDNS performs a public DNS lookup for debugging
+func (h *DNSHandler) LookupDNS(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	domainID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid domain ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get domain FQDN
+	var fqdn string
+	err = h.db.Get(&fqdn, "SELECT fqdn FROM domains WHERE id = $1", domainID)
+	if err != nil {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
+	}
+
+	// Optional subdomain query param
+	subdomain := r.URL.Query().Get("subdomain")
+	lookupName := fqdn
+	if subdomain != "" && subdomain != "@" {
+		lookupName = subdomain + "." + fqdn
+	}
+
+	results := make(map[string]DNSLookupResult)
+
+	// A records
+	aRecords, err := net.LookupHost(lookupName)
+	if err != nil {
+		results["A"] = DNSLookupResult{Type: "A", Records: []string{}, Error: err.Error()}
+	} else {
+		// Filter to only IPv4
+		var ipv4s []string
+		for _, ip := range aRecords {
+			if !strings.Contains(ip, ":") {
+				ipv4s = append(ipv4s, ip)
+			}
+		}
+		results["A"] = DNSLookupResult{Type: "A", Records: ipv4s}
+	}
+
+	// AAAA records
+	var ipv6s []string
+	for _, ip := range aRecords {
+		if strings.Contains(ip, ":") {
+			ipv6s = append(ipv6s, ip)
+		}
+	}
+	if len(ipv6s) > 0 {
+		results["AAAA"] = DNSLookupResult{Type: "AAAA", Records: ipv6s}
+	} else {
+		results["AAAA"] = DNSLookupResult{Type: "AAAA", Records: []string{}}
+	}
+
+	// CNAME record
+	cname, err := net.LookupCNAME(lookupName)
+	if err != nil {
+		results["CNAME"] = DNSLookupResult{Type: "CNAME", Records: []string{}, Error: err.Error()}
+	} else {
+		// LookupCNAME returns the canonical name, which might be the same as input
+		cname = strings.TrimSuffix(cname, ".")
+		if cname != lookupName {
+			results["CNAME"] = DNSLookupResult{Type: "CNAME", Records: []string{cname}}
+		} else {
+			results["CNAME"] = DNSLookupResult{Type: "CNAME", Records: []string{}}
+		}
+	}
+
+	// MX records
+	mxRecords, err := net.LookupMX(lookupName)
+	if err != nil {
+		results["MX"] = DNSLookupResult{Type: "MX", Records: []string{}, Error: err.Error()}
+	} else {
+		var mxStrs []string
+		for _, mx := range mxRecords {
+			mxStrs = append(mxStrs, fmt.Sprintf("%d %s", mx.Pref, strings.TrimSuffix(mx.Host, ".")))
+		}
+		results["MX"] = DNSLookupResult{Type: "MX", Records: mxStrs}
+	}
+
+	// TXT records
+	txtRecords, err := net.LookupTXT(lookupName)
+	if err != nil {
+		results["TXT"] = DNSLookupResult{Type: "TXT", Records: []string{}, Error: err.Error()}
+	} else {
+		results["TXT"] = DNSLookupResult{Type: "TXT", Records: txtRecords}
+	}
+
+	// NS records (only for root domain)
+	if subdomain == "" || subdomain == "@" {
+		nsRecords, err := net.LookupNS(fqdn)
+		if err != nil {
+			results["NS"] = DNSLookupResult{Type: "NS", Records: []string{}, Error: err.Error()}
+		} else {
+			var nsStrs []string
+			for _, ns := range nsRecords {
+				nsStrs = append(nsStrs, strings.TrimSuffix(ns.Host, "."))
+			}
+			results["NS"] = DNSLookupResult{Type: "NS", Records: nsStrs}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"domain":    fqdn,
+		"subdomain": subdomain,
+		"lookup":    lookupName,
+		"results":   results,
 	})
 }
 

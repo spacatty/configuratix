@@ -886,6 +886,16 @@ class ApiClient {
     });
   }
 
+  async lookupDNS(domainId: string, subdomain?: string): Promise<{
+    domain: string;
+    subdomain: string;
+    lookup: string;
+    results: Record<string, { type: string; records: string[]; error?: string }>;
+  }> {
+    const params = subdomain ? `?subdomain=${encodeURIComponent(subdomain)}` : "";
+    return this.request(`/api/domains/${domainId}/dns-lookup${params}`);
+  }
+
   // Nginx Configs
   async listNginxConfigs(): Promise<NginxConfig[]> {
     return this.request<NginxConfig[]>("/api/nginx-configs");
