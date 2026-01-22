@@ -20,9 +20,13 @@ tasks:
     cmds:
       - task --list
 
+  # ============================================
+  # DEVELOPMENT
+  # ============================================
   dev:
-    desc: Start development environment (backend + frontend)
+    desc: Start development environment (installs deps, runs backend + frontend)
     cmds:
+      - task: deps
       - task: db:check
       - task: dev:run
 
@@ -47,11 +51,19 @@ tasks:
       - echo "API URL {{.NEXT_PUBLIC_API_URL}}"
       - pnpm dev
 
-  db:check:
-    desc: Check database connection
-    dir: backend
+  # ============================================
+  # PRODUCTION
+  # ============================================
+  prod:
+    desc: Start production environment (installs deps, builds, runs backend + frontend)
     cmds:
-      - go run cmd/dbcheck/main.go
+      - task: deps
+      - task: db:check
+      - task: prod:run
+
+  prod:run:
+    desc: Run backend and frontend in parallel (production)
+    deps: [prod:backend, prod:frontend]
 
   prod:backend:
     desc: Build and run backend in production mode
@@ -73,21 +85,95 @@ tasks:
       - echo "Starting frontend in production mode..."
       - pnpm start
 
-  prod:
-    desc: Start production environment (backend + frontend)
+  # ============================================
+  # DEPENDENCY MANAGEMENT
+  # ============================================
+  deps:
+    desc: Install all dependencies (backend, frontend, agent)
+    cmds:
+      - task: deps:backend
+      - task: deps:frontend
+      - task: deps:agent
+
+  deps:backend:
+    desc: Install backend Go dependencies
+    dir: backend
+    cmds:
+      - echo "Installing backend dependencies..."
+      - go mod download
+      - go mod tidy
+    status:
+      - test -f go.sum
+
+  deps:frontend:
+    desc: Install frontend Node dependencies
+    dir: frontend
+    cmds:
+      - echo "Installing frontend dependencies..."
+      - pnpm install --frozen-lockfile
+    status:
+      - test -d node_modules
+
+  deps:agent:
+    desc: Install agent Go dependencies
+    dir: agent
+    cmds:
+      - echo "Installing agent dependencies..."
+      - go mod download
+      - go mod tidy
+    status:
+      - test -f go.sum
+
+  # ============================================
+  # SETUP (alias for deps, for backwards compatibility)
+  # ============================================
+  setup:
+    desc: Initial setup - install all dependencies
+    cmds:
+      - task: deps
+
+  setup:backend:
+    desc: Install backend dependencies (alias)
+    cmds:
+      - task: deps:backend
+
+  setup:frontend:
+    desc: Install frontend dependencies (alias)
+    cmds:
+      - task: deps:frontend
+
+  setup:agent:
+    desc: Install agent dependencies (alias)
+    cmds:
+      - task: deps:agent
+
+  # ============================================
+  # DATABASE
+  # ============================================
+  db:check:
+    desc: Check database connection
+    dir: backend
+    cmds:
+      - go run cmd/dbcheck/main.go
+
+  db:migrate:
+    desc: Run database migrations
+    dir: backend
     cmds:
       - task: db:check
-      - task: prod:run
+      - echo "Running migrations..."
+      - go run cmd/server/main.go
 
-  prod:run:
-    desc: Run backend and frontend in parallel (production)
-    deps: [prod:backend, prod:frontend]
-
+  # ============================================
+  # BUILD
+  # ============================================
   build:
-    desc: Build both backend and frontend
+    desc: Build all components (backend, frontend, agent)
     cmds:
+      - task: deps
       - task: build:backend
       - task: build:frontend
+      - task: build:agent
 
   build:backend:
     desc: Build backend binary
@@ -95,7 +181,7 @@ tasks:
     cmds:
       - echo "Building backend..."
       - go build -o bin/server.exe cmd/server/main.go
-      - echo "Backend built successfully at backend/bin/server.exe"
+      - echo "Backend built at backend/bin/server.exe"
 
   build:frontend:
     desc: Build frontend for production
@@ -107,37 +193,48 @@ tasks:
       - pnpm build
       - echo "Frontend built successfully"
 
-  db:migrate:
-    desc: Run database migrations
-    dir: backend
+  build:agent:
+    desc: Build agent binary for Linux
+    dir: agent
+    env:
+      GOOS: linux
+      GOARCH: amd64
     cmds:
-      - task: db:check
-      - echo "Running migrations..."
-      - go run cmd/server/main.go
+      - echo "Building agent for Linux..."
+      - go build -o bin/configuratix-agent ./cmd/agent
+      - echo "Agent built at agent/bin/configuratix-agent"
 
-  setup:
-    desc: Initial setup - install dependencies
+  build:agent:windows:
+    desc: Build agent binary for Windows (for testing)
+    dir: agent
     cmds:
-      - task: setup:backend
-      - task: setup:frontend
+      - echo "Building agent for Windows..."
+      - go build -o bin/configuratix-agent.exe ./cmd/agent
+      - echo "Agent built at agent/bin/configuratix-agent.exe"
 
-  setup:backend:
-    desc: Install backend dependencies
-    dir: backend
+  # ============================================
+  # DEPLOY AGENT
+  # ============================================
+  deploy:agent:
+    desc: Build and copy agent to a remote server
+    dir: agent
     cmds:
-      - echo "Installing backend dependencies..."
-      - go mod download
-      - go mod tidy
+      - task: build:agent
+      - echo "Agent binary ready at agent/bin/configuratix-agent"
+      - echo "Copy to server with: scp agent/bin/configuratix-agent user@server:/usr/local/bin/"
 
-  setup:frontend:
-    desc: Install frontend dependencies
-    dir: frontend
-    cmds:
-      - echo "Installing frontend dependencies..."
-      - pnpm install
-
+  # ============================================
+  # CLEAN
+  # ============================================
   clean:
-    desc: Clean build artifacts (Windows PowerShell)
+    desc: Clean build artifacts
     cmds:
-      - powershell -Command "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue backend\bin, frontend\.next, frontend\dist"
+      - powershell -Command "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue backend\bin, frontend\.next, frontend\dist, agent\bin"
       - echo "Clean complete"
+
+  clean:all:
+    desc: Clean build artifacts and node_modules
+    cmds:
+      - task: clean
+      - powershell -Command "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue frontend\node_modules"
+      - echo "Full clean complete"
