@@ -84,8 +84,20 @@ func (p *CloudflareProvider) doRequest(ctx context.Context, method, path string,
 }
 
 func (p *CloudflareProvider) ValidateCredentials(ctx context.Context) error {
+	// First try the standard token verification endpoint
 	_, err := p.doRequest(ctx, "GET", "/user/tokens/verify", nil)
-	return err
+	if err == nil {
+		return nil
+	}
+
+	// If that fails (e.g., token is account-scoped without User:Read permission),
+	// try listing zones as a fallback validation method
+	_, err = p.doRequest(ctx, "GET", "/zones?per_page=1", nil)
+	if err != nil {
+		return fmt.Errorf("token validation failed: unable to verify token or list zones")
+	}
+
+	return nil
 }
 
 func (p *CloudflareProvider) getZoneID(ctx context.Context, domain string) (string, error) {
