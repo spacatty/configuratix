@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { api } from "@/lib/api";
-import { Server, ShieldCheck } from "lucide-react";
+import { Logo } from "@/components/logo";
+import { ShieldCheck } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -96,14 +97,7 @@ export default function LoginPage() {
 
       <Card className="w-full max-w-md relative border-border/50 bg-card/80 backdrop-blur-sm">
         <CardHeader className="space-y-4 pb-6">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center">
-              <Server className="h-5 w-5 text-primary-foreground" />
-            </div>
-            <CardTitle className="text-2xl font-semibold tracking-tight">
-              Configuratix
-            </CardTitle>
-          </div>
+          <Logo size="lg" />
           <CardDescription className="text-muted-foreground">
             {requires2FA 
               ? "Enter your two-factor authentication code"

@@ -32,6 +32,7 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { api, User, Project } from "@/lib/api";
+import { Logo } from "@/components/logo";
 import { 
   LayoutDashboard, 
   Server, 
@@ -95,12 +96,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
   return (
     <Sidebar className="border-r border-sidebar-border">
       <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
-        <div className="flex items-center gap-3">
-          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center">
-            <Server className="h-4 w-4 text-primary-foreground" />
-          </div>
-          <span className="font-semibold text-lg tracking-tight">Configuratix</span>
-        </div>
+        <Logo size="md" />
       </SidebarHeader>
       <SidebarContent>
         {/* Overview */}

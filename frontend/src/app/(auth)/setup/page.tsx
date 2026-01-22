@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
+import { Logo } from "@/components/logo";
 
 export default function SetupPage() {
   const router = useRouter();
@@ -115,24 +116,8 @@ export default function SetupPage() {
       <Card className="w-full max-w-md relative border-border/50 bg-card/80 backdrop-blur-sm">
         <CardHeader className="space-y-4 pb-6">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center neon-glow">
-              <svg 
-                className="h-5 w-5 text-primary" 
-                fill="none" 
-                viewBox="0 0 24 24" 
-                stroke="currentColor"
-              >
-                <path 
-                  strokeLinecap="round" 
-                  strokeLinejoin="round" 
-                  strokeWidth={2} 
-                  d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" 
-                />
-              </svg>
-            </div>
-            <CardTitle className="text-2xl font-semibold tracking-tight">
-              Configuratix Setup
-            </CardTitle>
+            <Logo size="lg" showText={false} />
+            <span className="text-xl font-bold tracking-tight">Configuratix Setup</span>
           </div>
           <CardDescription className="text-muted-foreground">
             Create your admin account to get started
