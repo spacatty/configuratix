@@ -65,28 +65,40 @@ func (db *DB) RunMigrations() error {
 		"013_seed_php_templates.sql",
 	}
 
-	// Base paths to try
+	// Get current working directory for debugging
+	cwd, _ := os.Getwd()
+	
+	// Base paths to try - include absolute paths
 	basePaths := []string{
 		"migrations/",
 		"backend/migrations/",
+		"../migrations/",
 		filepath.Join(filepath.Dir(os.Args[0]), "migrations/"),
+		filepath.Join(filepath.Dir(os.Args[0]), "../migrations/"),
+		filepath.Join(cwd, "migrations/"),
+		filepath.Join(cwd, "backend/migrations/"),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	appliedCount := 0
 	for _, migration := range migrations {
 		var migrationSQL []byte
 		var err error
+		var foundPath string
 
 		for _, basePath := range basePaths {
-			migrationSQL, err = os.ReadFile(basePath + migration)
+			fullPath := basePath + migration
+			migrationSQL, err = os.ReadFile(fullPath)
 			if err == nil {
+				foundPath = fullPath
 				break
 			}
 		}
 		if err != nil {
-			// Skip missing migrations (may already be applied)
+			// Log warning but continue - might be deployed without migration files
+			fmt.Printf("Warning: Migration file not found: %s (cwd: %s)\n", migration, cwd)
 			continue
 		}
 
@@ -97,7 +109,14 @@ func (db *DB) RunMigrations() error {
 				!strings.Contains(err.Error(), "duplicate") {
 				return fmt.Errorf("failed to run migration %s: %w", migration, err)
 			}
+		} else {
+			fmt.Printf("Applied migration: %s (from %s)\n", migration, foundPath)
+			appliedCount++
 		}
+	}
+
+	if appliedCount > 0 {
+		fmt.Printf("Applied %d migrations\n", appliedCount)
 	}
 
 	return nil
