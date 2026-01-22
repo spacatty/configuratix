@@ -86,11 +86,14 @@ func (h *ConfigsHandler) ReadConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Poll for job completion (max 30 seconds)
-	content, err := h.waitForJobResult(jobID, 30*time.Second)
+	rawLogs, err := h.waitForJobResult(jobID, 30*time.Second)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Extract just the file content from job logs
+	content := extractFileContent(rawLogs)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -256,6 +259,42 @@ func nullStringToString(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// extractFileContent parses job logs to get just the file content
+// Job logs format:
+// Starting...
+// === Step 1: exec ===
+// $ cat /path/to/file
+// <actual content>
+// === All steps completed ===
+func extractFileContent(logs string) string {
+	lines := strings.Split(logs, "\n")
+	var content []string
+	inContent := false
+
+	for _, line := range lines {
+		// Start capturing after the "$ cat" or "$ " command line
+		if strings.HasPrefix(line, "$ ") {
+			inContent = true
+			continue
+		}
+		// Stop at the end marker or next step
+		if strings.HasPrefix(line, "===") {
+			inContent = false
+			continue
+		}
+		// Skip metadata lines
+		if line == "Starting..." || strings.HasPrefix(line, "ERROR:") {
+			continue
+		}
+		// Capture content
+		if inContent {
+			content = append(content, line)
+		}
+	}
+
+	return strings.Join(content, "\n")
 }
 
 // isAllowedConfigPath checks if a path is allowed for reading/writing
