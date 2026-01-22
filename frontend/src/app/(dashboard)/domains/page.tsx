@@ -45,6 +45,7 @@ export default function DomainsPage() {
   const [assignMachineId, setAssignMachineId] = useState<string>("");
   const [assignConfigId, setAssignConfigId] = useState<string>("");
   const [domainNotes, setDomainNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   // DNS Account form
   const [dnsAccountForm, setDnsAccountForm] = useState({
@@ -86,7 +87,8 @@ export default function DomainsPage() {
   }, []);
 
   const handleCreateDomain = async () => {
-    if (!newFqdn.trim()) return;
+    if (!newFqdn.trim() || submitting) return;
+    setSubmitting(true);
     try {
       await api.createDomain(newFqdn.trim());
       setNewFqdn("");
@@ -96,11 +98,14 @@ export default function DomainsPage() {
     } catch (err) {
       console.error("Failed to create domain:", err);
       toast.error("Failed to create domain");
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleAssignDomain = async () => {
-    if (!selectedDomain) return;
+    if (!selectedDomain || submitting) return;
+    setSubmitting(true);
     try {
       await api.assignDomain(
         selectedDomain.id,
@@ -114,11 +119,14 @@ export default function DomainsPage() {
     } catch (err) {
       console.error("Failed to assign domain:", err);
       toast.error("Failed to assign domain");
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleDeleteDomain = async () => {
-    if (!selectedDomain) return;
+    if (!selectedDomain || submitting) return;
+    setSubmitting(true);
     try {
       await api.deleteDomain(selectedDomain.id);
       setShowDeleteDialog(false);
@@ -128,6 +136,8 @@ export default function DomainsPage() {
     } catch (err) {
       console.error("Failed to delete domain:", err);
       toast.error("Failed to delete domain");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -155,7 +165,8 @@ export default function DomainsPage() {
   };
 
   const handleSaveNotes = async () => {
-    if (!selectedDomain) return;
+    if (!selectedDomain || submitting) return;
+    setSubmitting(true);
     try {
       await api.updateDomainNotes(selectedDomain.id, domainNotes);
       setShowNotesDialog(false);
@@ -164,10 +175,14 @@ export default function DomainsPage() {
     } catch (err) {
       console.error("Failed to save notes:", err);
       toast.error("Failed to save notes");
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleCreateDNSAccount = async () => {
+    if (submitting) return;
+    setSubmitting(true);
     try {
       await api.createDNSAccount({
         provider: dnsAccountForm.provider,
@@ -183,6 +198,8 @@ export default function DomainsPage() {
     } catch (err: unknown) {
       console.error("Failed to create DNS account:", err);
       toast.error(err instanceof Error ? err.message : "Failed to create DNS account");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -488,7 +505,9 @@ export default function DomainsPage() {
             <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
               Cancel
             </Button>
-            <Button onClick={handleCreateDomain}>Add Domain</Button>
+            <Button onClick={handleCreateDomain} disabled={submitting}>
+              {submitting ? "Adding..." : "Add Domain"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -540,7 +559,9 @@ export default function DomainsPage() {
             <Button variant="outline" onClick={() => setShowAssignDialog(false)}>
               Cancel
             </Button>
-            <Button onClick={handleAssignDomain}>Save</Button>
+            <Button onClick={handleAssignDomain} disabled={submitting}>
+              {submitting ? "Saving..." : "Save"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -579,7 +600,9 @@ export default function DomainsPage() {
             <Button variant="outline" onClick={() => setShowNotesDialog(false)}>
               Cancel
             </Button>
-            <Button onClick={handleSaveNotes}>Save Notes</Button>
+            <Button onClick={handleSaveNotes} disabled={submitting}>
+              {submitting ? "Saving..." : "Save Notes"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -673,7 +696,9 @@ export default function DomainsPage() {
             <Button variant="outline" onClick={() => setShowDNSAccountDialog(false)}>
               Cancel
             </Button>
-            <Button onClick={handleCreateDNSAccount}>Add Account</Button>
+            <Button onClick={handleCreateDNSAccount} disabled={submitting}>
+              {submitting ? "Adding..." : "Add Account"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -690,8 +715,8 @@ export default function DomainsPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteDomain} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Delete
+            <AlertDialogAction onClick={handleDeleteDomain} disabled={submitting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {submitting ? "Deleting..." : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
