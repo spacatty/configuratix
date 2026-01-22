@@ -159,16 +159,6 @@ export function AppSidebar({ user }: AppSidebarProps) {
                 </SidebarMenuItem>
               </Collapsible>
 
-              {/* Domains */}
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/domains")}>
-                  <a href="/domains" className="flex items-center gap-3">
-                    <Globe className="h-4 w-4" />
-                    <span>Domains</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-
               {/* Projects - Collapsible with subitems */}
               <Collapsible open={projectsOpen} onOpenChange={setProjectsOpen}>
                 <SidebarMenuItem>
@@ -208,6 +198,16 @@ export function AppSidebar({ user }: AppSidebarProps) {
                   </CollapsibleContent>
                 </SidebarMenuItem>
               </Collapsible>
+
+              {/* Domains */}
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/domains")}>
+                  <a href="/domains" className="flex items-center gap-3">
+                    <Globe className="h-4 w-4" />
+                    <span>Domains</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -220,10 +220,10 @@ export function AppSidebar({ user }: AppSidebarProps) {
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/commands")}>
-                  <a href="/commands" className="flex items-center gap-3">
-                    <Terminal className="h-4 w-4" />
-                    <span>Commands</span>
+                <SidebarMenuButton asChild isActive={isActive("/landings")}>
+                  <a href="/landings" className="flex items-center gap-3">
+                    <FileArchive className="h-4 w-4" />
+                    <span>Static</span>
                   </a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -236,10 +236,10 @@ export function AppSidebar({ user }: AppSidebarProps) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/landings")}>
-                  <a href="/landings" className="flex items-center gap-3">
-                    <FileArchive className="h-4 w-4" />
-                    <span>Static</span>
+                <SidebarMenuButton asChild isActive={isActive("/commands")}>
+                  <a href="/commands" className="flex items-center gap-3">
+                    <Terminal className="h-4 w-4" />
+                    <span>Commands</span>
                   </a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
