@@ -465,7 +465,7 @@ export default function DomainsPage() {
 
       {/* Create Domain Dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Add Domain</DialogTitle>
             <DialogDescription>
@@ -495,7 +495,7 @@ export default function DomainsPage() {
 
       {/* Assign Domain Dialog */}
       <Dialog open={showAssignDialog} onOpenChange={setShowAssignDialog}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Assign Domain</DialogTitle>
             <DialogDescription>
@@ -547,7 +547,7 @@ export default function DomainsPage() {
 
       {/* Notes Dialog */}
       <Dialog open={showNotesDialog} onOpenChange={setShowNotesDialog}>
-        <DialogContent className="max-w-4xl">
+        <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Domain Notes</DialogTitle>
             <DialogDescription>
@@ -598,7 +598,7 @@ export default function DomainsPage() {
 
       {/* Create DNS Account Dialog */}
       <Dialog open={showDNSAccountDialog} onOpenChange={setShowDNSAccountDialog}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Add DNS Account</DialogTitle>
             <DialogDescription>
@@ -891,7 +891,7 @@ function DNSSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Globe className="h-5 w-5" />
@@ -908,30 +908,32 @@ function DNSSettingsDialog({
 
           <TabsContent value="settings" className="space-y-6 mt-6">
             {/* DNS Mode Selection */}
-            <div className="grid grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <Label className="text-base font-medium">DNS Mode</Label>
-                <Select value={dnsMode} onValueChange={setDnsMode}>
-                  <SelectTrigger className="h-11">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="external">External (manage DNS elsewhere)</SelectItem>
-                    <SelectItem value="managed">Managed (use provider below)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  {dnsMode === "external" 
-                    ? "You manage DNS records outside of this system" 
-                    : "We will manage DNS records via the selected provider"}
-                </p>
-              </div>
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">DNS Mode</Label>
+              <Select value={dnsMode} onValueChange={setDnsMode}>
+                <SelectTrigger className="h-10 w-full sm:w-80">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="external">External (manage DNS elsewhere)</SelectItem>
+                  <SelectItem value="managed">Managed (use provider below)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {dnsMode === "external" 
+                  ? "You manage DNS records outside of this system" 
+                  : "We will manage DNS records via the selected provider"}
+              </p>
+            </div>
 
-              {dnsMode === "managed" && (
+            {/* Managed Mode Configuration */}
+            {dnsMode === "managed" && (
+              <>
+                {/* DNS Account */}
                 <div className="space-y-2">
-                  <Label className="text-base font-medium">DNS Account</Label>
+                  <Label className="text-sm font-medium">DNS Account</Label>
                   <Select value={dnsAccountId || "_none"} onValueChange={(v) => setDnsAccountId(v === "_none" ? "" : v)}>
-                    <SelectTrigger className="h-11">
+                    <SelectTrigger className="h-10 w-full sm:w-80">
                       <SelectValue placeholder="Select account" />
                     </SelectTrigger>
                     <SelectContent>
@@ -947,18 +949,13 @@ function DNSSettingsDialog({
                     <p className="text-xs text-muted-foreground">No DNS accounts configured. Add one from the main page.</p>
                   )}
                 </div>
-              )}
-            </div>
 
-            {/* Managed Mode Configuration */}
-            {dnsMode === "managed" && (
-              <>
                 {/* NS Status */}
-                <div className="p-5 border rounded-lg bg-muted/20 space-y-4">
+                <div className="p-4 border rounded-lg bg-muted/20">
                   <div className="flex items-center justify-between">
                     <div>
-                      <Label className="text-base font-medium">Nameserver Status</Label>
-                      <p className="text-xs text-muted-foreground mt-1">Check if domain nameservers point to the DNS provider</p>
+                      <Label className="text-sm font-medium">Nameserver Status</Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">Check if domain nameservers point to the DNS provider</p>
                     </div>
                     <Button variant="outline" size="sm" onClick={handleCheckNS} disabled={loading || !dnsAccountId}>
                       <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
@@ -966,7 +963,7 @@ function DNSSettingsDialog({
                     </Button>
                   </div>
                   {nsStatus && (
-                    <div className="p-3 rounded-md bg-background/50 space-y-2 text-sm">
+                    <div className="mt-3 p-3 rounded-md bg-background/50 space-y-2 text-sm">
                       <div className="flex items-center gap-2">
                         {nsStatus.status === "valid" ? (
                           <CheckCircle className="h-4 w-4 text-green-500" />
@@ -993,57 +990,57 @@ function DNSSettingsDialog({
                   )}
                 </div>
 
-                {/* IP and Options */}
-                <div className="grid grid-cols-3 gap-6">
-                  <div className="space-y-2">
-                    <Label className="text-base font-medium">IP Address</Label>
-                    <Input
-                      className="h-11"
-                      placeholder="192.168.1.100"
-                      value={ipAddress}
-                      onChange={(e) => setIpAddress(e.target.value)}
+                {/* IP Address */}
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">IP Address</Label>
+                  <Input
+                    className="h-10 w-full sm:w-60"
+                    placeholder="192.168.1.100"
+                    value={ipAddress}
+                    onChange={(e) => setIpAddress(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">Default IP for A records</p>
+                </div>
+
+                {/* Options Row */}
+                <div className="flex flex-wrap gap-6">
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="wildcard"
+                      checked={isWildcard}
+                      onCheckedChange={(checked) => setIsWildcard(!!checked)}
                     />
-                    <p className="text-xs text-muted-foreground">Default IP for A records</p>
+                    <Label htmlFor="wildcard" className="text-sm font-normal cursor-pointer">Wildcard (*.domain)</Label>
                   </div>
-                  <div className="space-y-4 pt-8">
-                    <div className="flex items-center space-x-3">
-                      <Checkbox
-                        id="wildcard"
-                        checked={isWildcard}
-                        onCheckedChange={(checked) => setIsWildcard(!!checked)}
-                      />
-                      <Label htmlFor="wildcard" className="font-normal cursor-pointer">Wildcard (*.domain)</Label>
-                    </div>
-                    <div className="flex items-center space-x-3">
-                      <Checkbox
-                        id="sendProxy"
-                        checked={httpsSendProxy}
-                        onCheckedChange={(checked) => setHttpsSendProxy(!!checked)}
-                      />
-                      <Label htmlFor="sendProxy" className="font-normal cursor-pointer">HTTPS: SEND-PROXY</Label>
-                    </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="sendProxy"
+                      checked={httpsSendProxy}
+                      onCheckedChange={(checked) => setHttpsSendProxy(!!checked)}
+                    />
+                    <Label htmlFor="sendProxy" className="text-sm font-normal cursor-pointer">HTTPS: SEND-PROXY</Label>
                   </div>
                 </div>
 
                 {/* Ports Configuration */}
                 <div className="space-y-3">
-                  <Label className="text-base font-medium">Port Configuration</Label>
-                  <div className="grid grid-cols-4 gap-4">
-                    <div className="space-y-2">
+                  <Label className="text-sm font-medium">Port Configuration</Label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="space-y-1.5">
                       <Label className="text-xs text-muted-foreground">HTTP Incoming</Label>
-                      <Input className="h-10" value={httpInPorts} onChange={(e) => setHttpInPorts(e.target.value)} placeholder="80" />
+                      <Input className="h-9" value={httpInPorts} onChange={(e) => setHttpInPorts(e.target.value)} placeholder="80" />
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       <Label className="text-xs text-muted-foreground">HTTP Outgoing</Label>
-                      <Input className="h-10" value={httpOutPorts} onChange={(e) => setHttpOutPorts(e.target.value)} placeholder="80" />
+                      <Input className="h-9" value={httpOutPorts} onChange={(e) => setHttpOutPorts(e.target.value)} placeholder="80" />
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       <Label className="text-xs text-muted-foreground">HTTPS Incoming</Label>
-                      <Input className="h-10" value={httpsInPorts} onChange={(e) => setHttpsInPorts(e.target.value)} placeholder="443" />
+                      <Input className="h-9" value={httpsInPorts} onChange={(e) => setHttpsInPorts(e.target.value)} placeholder="443" />
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       <Label className="text-xs text-muted-foreground">HTTPS Outgoing</Label>
-                      <Input className="h-10" value={httpsOutPorts} onChange={(e) => setHttpsOutPorts(e.target.value)} placeholder="443" />
+                      <Input className="h-9" value={httpsOutPorts} onChange={(e) => setHttpsOutPorts(e.target.value)} placeholder="443" />
                     </div>
                   </div>
                 </div>
@@ -1052,8 +1049,8 @@ function DNSSettingsDialog({
 
             {/* External Mode Message */}
             {dnsMode === "external" && (
-              <div className="p-8 text-center border rounded-lg bg-muted/10">
-                <Globe className="h-12 w-12 mx-auto mb-4 opacity-30" />
+              <div className="p-6 text-center border rounded-lg bg-muted/10">
+                <Globe className="h-10 w-10 mx-auto mb-3 opacity-30" />
                 <p className="text-muted-foreground">DNS is managed externally.</p>
                 <p className="text-sm text-muted-foreground mt-1">
                   Switch to &quot;Managed&quot; mode to configure DNS records through this interface.
