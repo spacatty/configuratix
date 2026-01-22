@@ -161,7 +161,16 @@ cd configuratix-agent-build
 cat > go.mod << 'EOF'
 module configuratix/agent
 go 1.21
+
+require (
+	github.com/creack/pty v1.1.21
+	github.com/gorilla/websocket v1.5.1
+)
+
+require golang.org/x/net v0.17.0 // indirect
 EOF
+
+go mod download
 
 mkdir -p cmd/agent
 
@@ -178,14 +187,20 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/creack/pty"
+	"github.com/gorilla/websocket"
 )
 
 const Version = "0.3.0"
@@ -413,6 +428,9 @@ func runAgent() {
 	if err != nil { log.Fatal("Run enroll first") }
 	log.Println("Starting agent v" + Version)
 	
+	// Start terminal WebSocket in background
+	go runTerminalWebSocket(cfg)
+	
 	client := &http.Client{Timeout: 30 * time.Second}
 	for {
 		stats := getStats()
@@ -439,6 +457,158 @@ func runAgent() {
 		}
 		time.Sleep(5 * time.Second)
 	}
+}
+
+// Terminal WebSocket client
+type TerminalMessage struct {
+	Type string ` + "`" + `json:"type"` + "`" + `
+	Data string ` + "`" + `json:"data,omitempty"` + "`" + `
+	Cols int    ` + "`" + `json:"cols,omitempty"` + "`" + `
+	Rows int    ` + "`" + `json:"rows,omitempty"` + "`" + `
+}
+
+func runTerminalWebSocket(cfg *Config) {
+	for {
+		connectTerminal(cfg)
+		time.Sleep(5 * time.Second) // Reconnect delay
+	}
+}
+
+func connectTerminal(cfg *Config) {
+	// Convert HTTP URL to WebSocket URL
+	wsURL := cfg.ServerURL
+	if strings.HasPrefix(wsURL, "https://") {
+		wsURL = "wss://" + strings.TrimPrefix(wsURL, "https://")
+	} else {
+		wsURL = "ws://" + strings.TrimPrefix(wsURL, "http://")
+	}
+	wsURL += "/api/agent/terminal"
+	
+	// Add API key as query parameter
+	u, err := url.Parse(wsURL)
+	if err != nil {
+		log.Printf("Terminal: invalid URL: %v", err)
+		return
+	}
+	q := u.Query()
+	q.Set("key", cfg.APIKey)
+	u.RawQuery = q.Encode()
+	
+	log.Printf("Terminal: connecting to %s", u.Host)
+	
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+	}
+	
+	conn, _, err := dialer.Dial(u.String(), nil)
+	if err != nil {
+		log.Printf("Terminal: connection failed: %v", err)
+		return
+	}
+	defer conn.Close()
+	
+	log.Println("Terminal: connected")
+	
+	// Start PTY shell
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/bash"
+	}
+	
+	cmd := exec.Command(shell)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		log.Printf("Terminal: failed to start PTY: %v", err)
+		conn.WriteJSON(TerminalMessage{Type: "output", Data: fmt.Sprintf("Failed to start shell: %v\r\n", err)})
+		return
+	}
+	defer func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+		ptmx.Close()
+	}()
+	
+	// Handle graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+	
+	// Read from PTY, send to WebSocket
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			
+			n, err := ptmx.Read(buf)
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("Terminal: PTY read error: %v", err)
+				}
+				return
+			}
+			
+			msg := TerminalMessage{Type: "output", Data: string(buf[:n])}
+			conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if err := conn.WriteJSON(msg); err != nil {
+				log.Printf("Terminal: WebSocket write error: %v", err)
+				return
+			}
+		}
+	}()
+	
+	// Read from WebSocket, write to PTY
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			
+			var msg TerminalMessage
+			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			if err := conn.ReadJSON(&msg); err != nil {
+				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					log.Printf("Terminal: WebSocket read error: %v", err)
+				}
+				return
+			}
+			
+			switch msg.Type {
+			case "input":
+				ptmx.Write([]byte(msg.Data))
+			case "resize":
+				if msg.Cols > 0 && msg.Rows > 0 {
+					pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(msg.Cols), Rows: uint16(msg.Rows)})
+				}
+			case "ping":
+				conn.WriteJSON(TerminalMessage{Type: "pong"})
+			}
+		}
+	}()
+	
+	// Wait for signal or goroutine exit
+	select {
+	case <-sigCh:
+		log.Println("Terminal: received shutdown signal")
+	case <-done:
+	}
+	
+	close(done)
+	conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	wg.Wait()
 }
 
 func processJob(cfg *Config, client *http.Client, id, jobType string, payload json.RawMessage) {

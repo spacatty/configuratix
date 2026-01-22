@@ -295,7 +295,11 @@ func (h *AgentHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 func AgentAuthMiddleware(db *database.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Check header first, then query parameter (for WebSocket connections)
 			apiKey := r.Header.Get("X-API-Key")
+			if apiKey == "" {
+				apiKey = r.URL.Query().Get("key")
+			}
 			if apiKey == "" {
 				http.Error(w, "Missing API key", http.StatusUnauthorized)
 				return

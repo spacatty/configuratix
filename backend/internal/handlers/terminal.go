@@ -1,13 +1,9 @@
 package handlers
 
 import (
-	"bufio"
-	"context"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
-	"os/exec"
 	"sync"
 	"time"
 
@@ -37,25 +33,21 @@ type TerminalHandler struct {
 type TerminalSession struct {
 	MachineID uuid.UUID
 	AgentID   uuid.UUID
-	UserID    uuid.UUID
 
-	// Pending commands from user
-	pendingCmds chan string
-	// Output from agent
-	outputChan chan string
-	// Active connections
+	// Agent WebSocket connection
+	agentConn     *websocket.Conn
+	agentConnLock sync.Mutex
+
+	// User WebSocket connections
 	userConns     []*websocket.Conn
 	userConnsLock sync.Mutex
-
-	ctx    context.Context
-	cancel context.CancelFunc
 }
 
 type TerminalMessage struct {
-	Type    string `json:"type"` // input, output, resize, ping
-	Data    string `json:"data,omitempty"`
-	Cols    int    `json:"cols,omitempty"`
-	Rows    int    `json:"rows,omitempty"`
+	Type string `json:"type"` // input, output, resize, ping, pong, status
+	Data string `json:"data,omitempty"`
+	Cols int    `json:"cols,omitempty"`
+	Rows int    `json:"rows,omitempty"`
 }
 
 func NewTerminalHandler(db *database.DB) *TerminalHandler {
@@ -119,14 +111,8 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 	h.sessionsLock.Lock()
 	session, exists := h.sessions[machineID]
 	if !exists {
-		ctx, cancel := context.WithCancel(context.Background())
 		session = &TerminalSession{
-			MachineID:   machineID,
-			UserID:      userID,
-			pendingCmds: make(chan string, 100),
-			outputChan:  make(chan string, 1000),
-			ctx:         ctx,
-			cancel:      cancel,
+			MachineID: machineID,
 		}
 		h.sessions[machineID] = session
 	}
@@ -148,13 +134,24 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 		session.userConnsLock.Unlock()
 	}()
 
-	// Send welcome message
-	conn.WriteJSON(TerminalMessage{
-		Type: "output",
-		Data: "\r\n\x1b[32mConnected to terminal session.\x1b[0m\r\n\x1b[33mWaiting for agent connection...\x1b[0m\r\n",
-	})
+	// Check if agent is connected
+	session.agentConnLock.Lock()
+	agentConnected := session.agentConn != nil
+	session.agentConnLock.Unlock()
 
-	// Handle incoming messages from user
+	if agentConnected {
+		conn.WriteJSON(TerminalMessage{
+			Type: "output",
+			Data: "\r\n\x1b[32mConnected to terminal session.\x1b[0m\r\n",
+		})
+	} else {
+		conn.WriteJSON(TerminalMessage{
+			Type: "output",
+			Data: "\r\n\x1b[32mConnected to terminal session.\x1b[0m\r\n\x1b[33mWaiting for agent connection...\x1b[0m\r\n",
+		})
+	}
+
+	// Handle incoming messages from user - relay to agent
 	for {
 		var msg TerminalMessage
 		if err := conn.ReadJSON(&msg); err != nil {
@@ -166,12 +163,14 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 		}
 
 		switch msg.Type {
-		case "input":
-			select {
-			case session.pendingCmds <- msg.Data:
-			default:
-				// Buffer full, drop input
+		case "input", "resize":
+			// Relay to agent
+			session.agentConnLock.Lock()
+			if session.agentConn != nil {
+				session.agentConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				session.agentConn.WriteJSON(msg)
 			}
+			session.agentConnLock.Unlock()
 		case "ping":
 			conn.WriteJSON(TerminalMessage{Type: "pong"})
 		}
@@ -202,111 +201,48 @@ func (h *TerminalHandler) AgentTerminalConnect(w http.ResponseWriter, r *http.Re
 	}
 	defer conn.Close()
 
+	log.Printf("Agent terminal connected for machine %s", machineID)
+
 	// Get or create session
 	h.sessionsLock.Lock()
 	session, exists := h.sessions[machineID]
 	if !exists {
-		ctx, cancel := context.WithCancel(context.Background())
 		session = &TerminalSession{
-			MachineID:   machineID,
-			AgentID:     agentID,
-			pendingCmds: make(chan string, 100),
-			outputChan:  make(chan string, 1000),
-			ctx:         ctx,
-			cancel:      cancel,
+			MachineID: machineID,
+			AgentID:   agentID,
 		}
 		h.sessions[machineID] = session
 	}
 	session.AgentID = agentID
 	h.sessionsLock.Unlock()
 
+	// Set agent connection
+	session.agentConnLock.Lock()
+	oldConn := session.agentConn
+	session.agentConn = conn
+	session.agentConnLock.Unlock()
+
+	// Close old connection if exists
+	if oldConn != nil {
+		oldConn.Close()
+	}
+
+	defer func() {
+		session.agentConnLock.Lock()
+		if session.agentConn == conn {
+			session.agentConn = nil
+		}
+		session.agentConnLock.Unlock()
+		log.Printf("Agent terminal disconnected for machine %s", machineID)
+	}()
+
 	// Notify users that agent connected
 	h.broadcastToUsers(session, TerminalMessage{
 		Type: "output",
-		Data: "\r\n\x1b[32mAgent connected. Terminal ready.\x1b[0m\r\n$ ",
+		Data: "\r\n\x1b[32mAgent connected. Terminal ready.\x1b[0m\r\n",
 	})
 
-	// Start bash shell
-	ctx, cancel := context.WithCancel(session.ctx)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "/bin/bash", "-i")
-	cmd.Env = append(cmd.Env, "TERM=xterm-256color", "PS1=\\u@\\h:\\w\\$ ")
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		log.Printf("Failed to get stdin: %v", err)
-		return
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Printf("Failed to get stdout: %v", err)
-		return
-	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		log.Printf("Failed to get stderr: %v", err)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("Failed to start shell: %v", err)
-		return
-	}
-
-	// Forward stdout to users
-	go func() {
-		reader := bufio.NewReader(stdout)
-		buf := make([]byte, 4096)
-		for {
-			n, err := reader.Read(buf)
-			if err != nil {
-				if err != io.EOF {
-					log.Printf("Stdout read error: %v", err)
-				}
-				return
-			}
-			h.broadcastToUsers(session, TerminalMessage{
-				Type: "output",
-				Data: string(buf[:n]),
-			})
-		}
-	}()
-
-	// Forward stderr to users
-	go func() {
-		reader := bufio.NewReader(stderr)
-		buf := make([]byte, 4096)
-		for {
-			n, err := reader.Read(buf)
-			if err != nil {
-				if err != io.EOF {
-					log.Printf("Stderr read error: %v", err)
-				}
-				return
-			}
-			h.broadcastToUsers(session, TerminalMessage{
-				Type: "output",
-				Data: string(buf[:n]),
-			})
-		}
-	}()
-
-	// Read commands from pendingCmds and send to shell
-	go func() {
-		for {
-			select {
-			case cmd := <-session.pendingCmds:
-				stdin.Write([]byte(cmd))
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// Read from WebSocket (agent may send terminal resize, etc)
+	// Read from agent WebSocket and relay to users
 	for {
 		var msg TerminalMessage
 		if err := conn.ReadJSON(&msg); err != nil {
@@ -318,14 +254,19 @@ func (h *TerminalHandler) AgentTerminalConnect(w http.ResponseWriter, r *http.Re
 		}
 
 		switch msg.Type {
+		case "output":
+			// Relay output to all users
+			h.broadcastToUsers(session, msg)
 		case "ping":
 			conn.WriteJSON(TerminalMessage{Type: "pong"})
 		}
 	}
 
-	// Cleanup
-	cmd.Process.Kill()
-	cmd.Wait()
+	// Notify users that agent disconnected
+	h.broadcastToUsers(session, TerminalMessage{
+		Type: "output",
+		Data: "\r\n\x1b[31mAgent disconnected.\x1b[0m\r\n",
+	})
 }
 
 func (h *TerminalHandler) broadcastToUsers(session *TerminalSession, msg TerminalMessage) {
@@ -354,13 +295,16 @@ func (h *TerminalHandler) GetTerminalStatus(w http.ResponseWriter, r *http.Reque
 	h.sessionsLock.RUnlock()
 
 	status := map[string]interface{}{
-		"has_session":    exists,
+		"has_session":     exists,
 		"agent_connected": false,
 		"users_connected": 0,
 	}
 
 	if exists {
-		status["agent_connected"] = session.AgentID != uuid.Nil
+		session.agentConnLock.Lock()
+		status["agent_connected"] = session.agentConn != nil
+		session.agentConnLock.Unlock()
+		
 		session.userConnsLock.Lock()
 		status["users_connected"] = len(session.userConns)
 		session.userConnsLock.Unlock()
@@ -369,4 +313,3 @@ func (h *TerminalHandler) GetTerminalStatus(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
 }
-
