@@ -471,28 +471,37 @@ var Commands = map[string]*CommandTemplate{
 		Steps: []Step{
 			// Create config directory
 			{Action: "exec", Command: "mkdir -p /etc/nginx/conf.d/configuratix", Timeout: 10},
-			// Issue SSL cert if needed (uses script for conditional logic)
+			// Issue SSL cert if needed - remove old config first to avoid PHP socket issues
 			{Action: "exec", Command: `
 DOMAIN="{{domain}}"
 SSL_ENABLED="{{ssl_enabled}}"
 SSL_EMAIL="{{ssl_email}}"
 CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+CONFIG_PATH="/etc/nginx/conf.d/configuratix/$DOMAIN.conf"
 
 if [ "$SSL_ENABLED" = "true" ] && [ ! -f "$CERT_PATH" ]; then
     echo "Issuing SSL certificate for $DOMAIN..."
+    # Backup and remove old config to prevent nginx start failures
+    if [ -f "$CONFIG_PATH" ]; then
+        mv "$CONFIG_PATH" "$CONFIG_PATH.bak" 2>/dev/null || true
+    fi
+    # Reload nginx without the problematic config, then stop for certbot
+    nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true
     systemctl stop nginx 2>/dev/null || true
+    # Issue certificate
     certbot certonly --standalone -d "$DOMAIN" \
         --non-interactive --agree-tos --no-eff-email \
         --email "$SSL_EMAIL" \
         --cert-name "$DOMAIN"
-    systemctl start nginx
+    # Don't start nginx yet - let the config write step handle it
+    echo "Certificate issued successfully"
 fi
-`, Timeout: 120},
+`, Timeout: 180},
 			// Write nginx config
 			{Action: "file", Op: "write", Path: "/etc/nginx/conf.d/configuratix/{{domain}}.conf", Content: "{{nginx_config}}", Mode: "0644", Log: "cat /etc/nginx/conf.d/configuratix/{{domain}}.conf"},
-			// Test and reload nginx
+			// Test and start/reload nginx
 			{Action: "exec", Command: "nginx -t", Timeout: 30},
-			{Action: "service", Name: "nginx", Op: "reload", Log: "ls -la /etc/nginx/conf.d/configuratix/"},
+			{Action: "exec", Command: "systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || systemctl start nginx", Timeout: 30, Log: "systemctl status nginx --no-pager | head -5"},
 		},
 	},
 
