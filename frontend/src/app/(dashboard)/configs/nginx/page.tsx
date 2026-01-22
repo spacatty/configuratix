@@ -556,15 +556,15 @@ export default function NginxConfigsPage() {
                     
                     <div>
                       <p className="text-muted-foreground text-xs mb-1">
-                        <strong>Step 1:</strong> Create initial HTTP config to get certificate:
+                        <strong>Step 1:</strong> Create simple HTTP config to test & get certificate:
                       </p>
                       <pre className="text-xs bg-black/30 p-2 rounded overflow-x-auto font-mono text-green-300/80">{`server {
     listen 80;
     server_name domain.com;
     
     location / {
-        root /var/www/html;
-        # Or proxy to your app
+        default_type text/plain;
+        return 200 "OK";
     }
 }`}</pre>
                     </div>
