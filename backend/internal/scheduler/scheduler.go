@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"crypto/tls"
 	"log"
 	"net"
 	"net/http"
@@ -67,7 +68,7 @@ func (s *Scheduler) checkDomains() {
 
 	for _, domain := range domains {
 		newStatus := s.checkDomainStatus(domain)
-		
+
 		if newStatus != domain.Status {
 			_, err := s.db.Exec(`
 				UPDATE domains SET status = $1, last_check_at = NOW(), updated_at = NOW()
@@ -101,15 +102,11 @@ func (s *Scheduler) checkDomainStatus(domain DomainCheck) string {
 		return "idle"
 	}
 
-	// Check DNS
-	ips, err := net.LookupIP(domain.FQDN)
-	if err != nil {
-		return "unhealthy"
-	}
-
-	// Check if DNS points to the assigned machine
+	// Check DNS first to determine if behind proxy
+	ips, dnsErr := net.LookupIP(domain.FQDN)
+	
 	dnsMatchesMachine := false
-	if domain.MachineIP != nil {
+	if dnsErr == nil && domain.MachineIP != nil {
 		for _, ip := range ips {
 			if ip.String() == *domain.MachineIP {
 				dnsMatchesMachine = true
@@ -118,32 +115,56 @@ func (s *Scheduler) checkDomainStatus(domain DomainCheck) string {
 		}
 	}
 
-	if !dnsMatchesMachine {
-		return "unhealthy"
-	}
-
-	// Try HTTP(S) connection
+	// Try HTTP(S) connection - this determines health regardless of DNS
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 15 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse // Don't follow redirects
 		},
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, // Allow self-signed certs
+			},
+		},
 	}
+
+	httpOK := false
 
 	// Try HTTPS first
 	resp, err := client.Get("https://" + domain.FQDN)
 	if err == nil {
 		resp.Body.Close()
+		// Any response (even 4xx/5xx) means server is responding
+		httpOK = true
+	}
+
+	// Try HTTP if HTTPS failed
+	if !httpOK {
+		resp, err = client.Get("http://" + domain.FQDN)
+		if err == nil {
+			resp.Body.Close()
+			httpOK = true
+		}
+	}
+
+	// Determine status based on HTTP result and DNS
+	if httpOK {
+		// Server responds - it's healthy (works for both direct and proxied)
 		return "healthy"
 	}
 
-	// Try HTTP
-	resp, err = client.Get("http://" + domain.FQDN)
-	if err == nil {
-		resp.Body.Close()
-		return "healthy"
+	// HTTP failed - now check why
+	if dnsErr != nil {
+		// DNS lookup failed entirely
+		return "unhealthy"
 	}
 
-	return "unhealthy"
+	if dnsMatchesMachine {
+		// DNS points to our server but HTTP fails - server is down
+		return "unhealthy"
+	}
+
+	// DNS points elsewhere (CDN/proxy) but HTTP fails
+	// Could be proxy issue, origin down, or firewall
+	return "proxied"
 }
-

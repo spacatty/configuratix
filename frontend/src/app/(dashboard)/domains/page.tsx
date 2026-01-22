@@ -147,6 +147,8 @@ export default function DomainsPage() {
         return <Badge variant="destructive">Unhealthy</Badge>;
       case "linked":
         return <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">Linked</Badge>;
+      case "proxied":
+        return <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30">Proxied</Badge>;
       default:
         return <Badge variant="secondary">Idle</Badge>;
     }
