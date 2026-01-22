@@ -223,6 +223,8 @@ export interface NginxConfigStructured {
   ssl_email?: string; // Email for SSL certificate issuance
   locations: LocationConfig[];
   cors: CORSConfig | null;
+  autoindex_off?: boolean;      // Deny directory listing (default: true)
+  deny_all_catchall?: boolean;  // Add deny all catch-all for unmatched paths (default: true)
 }
 
 export interface LocationConfig {
@@ -235,6 +237,7 @@ export interface LocationConfig {
   index?: string;
   landing_id?: string;  // UUID of landing page
   use_php?: boolean;    // Enable PHP-FPM for this location
+  replace_landing_content?: boolean; // Whether to replace landing content on redeploy (default: true)
 }
 
 export interface CORSConfig {

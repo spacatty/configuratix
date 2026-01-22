@@ -661,9 +661,12 @@ func processJob(cfg *Config, client *http.Client, id, jobType string, payload js
 			TargetPath string ` + "`" + `json:"target_path"` + "`" + `
 			IndexFile string ` + "`" + `json:"index_file"` + "`" + `
 			UsePHP bool ` + "`" + `json:"use_php"` + "`" + `
+			ReplaceContent *bool ` + "`" + `json:"replace_content"` + "`" + `
 		}
 		json.Unmarshal(payload, &p)
-		logs, err = deployLanding(cfg, client, p.LandingID, p.TargetPath, p.IndexFile)
+		// Default replace_content to true if not specified
+		replaceContent := p.ReplaceContent == nil || *p.ReplaceContent
+		logs, err = deployLanding(cfg, client, p.LandingID, p.TargetPath, p.IndexFile, replaceContent)
 	
 	default:
 		logs = "Unknown job type: " + jobType + ". Agent only supports 'run' and 'deploy_landing' types."
@@ -1111,9 +1114,21 @@ func ufwRule(port, protocol, action string) (string, error) {
 	return logs.String(), err
 }
 
-func deployLanding(cfg *Config, client *http.Client, landingID, targetPath, indexFile string) (string, error) {
+func deployLanding(cfg *Config, client *http.Client, landingID, targetPath, indexFile string, replaceContent bool) (string, error) {
 	var logs strings.Builder
 	logs.WriteString(fmt.Sprintf("Deploying landing %s to %s...\n", landingID, targetPath))
+	
+	// Check if content already exists and replaceContent is false
+	if !replaceContent {
+		// Check if the target directory exists and has content
+		entries, err := os.ReadDir(targetPath)
+		if err == nil && len(entries) > 0 {
+			logs.WriteString("Content already exists and replace_content=false, skipping extraction.\n")
+			logs.WriteString(fmt.Sprintf("Existing files: %d\n", len(entries)))
+			return logs.String(), nil
+		}
+		logs.WriteString("Directory empty or doesn't exist, will deploy content.\n")
+	}
 	
 	// Create target directory
 	logs.WriteString("Creating target directory...\n")
@@ -1123,9 +1138,11 @@ func deployLanding(cfg *Config, client *http.Client, landingID, targetPath, inde
 		return logs.String(), fmt.Errorf("failed to create target directory: %v", err)
 	}
 	
-	// Clear existing content
-	logs.WriteString("Clearing existing content...\n")
-	runCmd("rm", "-rf", targetPath+"/*")
+	// Clear existing content (only if replaceContent is true)
+	if replaceContent {
+		logs.WriteString("Clearing existing content...\n")
+		runCmd("rm", "-rf", targetPath+"/*")
+	}
 	
 	// Download landing from server
 	downloadURL := cfg.ServerURL + "/api/agent/landings/" + landingID + "/download"

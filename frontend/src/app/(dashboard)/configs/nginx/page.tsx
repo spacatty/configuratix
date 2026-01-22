@@ -36,6 +36,8 @@ export default function NginxConfigsPage() {
   const [formCorsEnabled, setFormCorsEnabled] = useState(true);
   const [formCorsAllowAll, setFormCorsAllowAll] = useState(true);
   const [formEnablePHP, setFormEnablePHP] = useState(false);
+  const [formAutoindexOff, setFormAutoindexOff] = useState(true);
+  const [formDenyAllCatchall, setFormDenyAllCatchall] = useState(true);
   const [formLocations, setFormLocations] = useState<LocationConfig[]>([{ path: "/", match_type: "prefix", type: "proxy", proxy_url: "" }]);
   const [formRawText, setFormRawText] = useState("");
   
@@ -66,6 +68,8 @@ export default function NginxConfigsPage() {
     setFormCorsEnabled(true);
     setFormCorsAllowAll(true);
     setFormEnablePHP(false);
+    setFormAutoindexOff(true);
+    setFormDenyAllCatchall(true);
     setFormLocations([{ path: "/", type: "proxy", proxy_url: "" }]);
     setFormRawText("");
   };
@@ -83,6 +87,8 @@ export default function NginxConfigsPage() {
         ssl_email: formSslEmail || undefined,
         locations: locationsWithPHP,
         cors: { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
+        autoindex_off: formAutoindexOff,
+        deny_all_catchall: formDenyAllCatchall,
       };
       await api.createNginxConfig({
         name: formName,
@@ -113,6 +119,8 @@ export default function NginxConfigsPage() {
         ssl_email: formSslEmail || undefined,
         locations: locationsWithPHP,
         cors: { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
+        autoindex_off: formAutoindexOff,
+        deny_all_catchall: formDenyAllCatchall,
       };
       await api.updateNginxConfig(selectedConfig.id, {
         name: formName,
@@ -156,6 +164,8 @@ export default function NginxConfigsPage() {
       setFormSslEmail(structured.ssl_email || "");
       setFormCorsEnabled(structured.cors?.enabled ?? true);
       setFormCorsAllowAll(structured.cors?.allow_all ?? true);
+      setFormAutoindexOff(structured.autoindex_off ?? true);
+      setFormDenyAllCatchall(structured.deny_all_catchall ?? true);
       setFormLocations(structured.locations || [{ path: "/", type: "proxy", proxy_url: "" }]);
       // Check if any static location has PHP enabled
       setFormEnablePHP(structured.locations?.some(loc => loc.use_php) ?? false);
@@ -361,6 +371,16 @@ export default function NginxConfigsPage() {
                 </Select>
                 <Input placeholder="/var/www/html/landing" value={loc.root || ""} onChange={(e) => updateLocation(index, { root: e.target.value })} />
                 <p className="text-xs text-muted-foreground">Target path where landing will be extracted</p>
+                <div className="flex items-center justify-between pt-2 border-t">
+                  <div>
+                    <Label className="text-sm">Replace Content</Label>
+                    <p className="text-xs text-muted-foreground">Overwrite existing files on redeploy</p>
+                  </div>
+                  <Switch 
+                    checked={loc.replace_landing_content ?? true} 
+                    onCheckedChange={(checked) => updateLocation(index, { replace_landing_content: checked })} 
+                  />
+                </div>
               </>
             ) : (
               <>
@@ -429,6 +449,23 @@ export default function NginxConfigsPage() {
                 <p className="text-xs text-muted-foreground mt-1">Process .php files via PHP-FPM (requires PHP runtime on target machine)</p>
               </div>
               <Switch checked={formEnablePHP} onCheckedChange={setFormEnablePHP} />
+            </div>
+          </div>
+          <div className="space-y-3 border-t pt-3">
+            <Label className="text-sm font-medium">Security Settings</Label>
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm">Disable Directory Listing</Label>
+                <p className="text-xs text-muted-foreground mt-1">Adds <code className="text-xs bg-muted px-1 rounded">autoindex off</code></p>
+              </div>
+              <Switch checked={formAutoindexOff} onCheckedChange={setFormAutoindexOff} />
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm">Deny All Catch-all</Label>
+                <p className="text-xs text-muted-foreground mt-1">Deny access to paths not explicitly defined in locations</p>
+              </div>
+              <Switch checked={formDenyAllCatchall} onCheckedChange={setFormDenyAllCatchall} />
             </div>
           </div>
           <div className="space-y-3">

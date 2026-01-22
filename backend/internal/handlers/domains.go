@@ -20,8 +20,10 @@ import (
 // phpVersion is optional - if provided, uses the specific PHP-FPM socket, otherwise uses default
 func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, phpVersion string) string {
 	var structured struct {
-		SSLMode   string `json:"ssl_mode"`
-		Locations []struct {
+		SSLMode          string `json:"ssl_mode"`
+		AutoindexOff     *bool  `json:"autoindex_off"`      // Deny directory listing (default: true)
+		DenyAllCatchall  *bool  `json:"deny_all_catchall"`  // Add deny all catch-all (default: true)
+		Locations        []struct {
 			Path       string `json:"path"`
 			MatchType  string `json:"match_type"` // prefix, exact, regex
 			Type       string `json:"type"`
@@ -39,6 +41,10 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 	}
 	json.Unmarshal(structuredJSON, &structured)
 
+	// Default values for security settings
+	autoindexOff := structured.AutoindexOff == nil || *structured.AutoindexOff
+	denyAllCatchall := structured.DenyAllCatchall == nil || *structured.DenyAllCatchall
+
 	config := "server {\n"
 	config += "    listen 80;\n"
 	if structured.SSLMode != "disabled" {
@@ -50,6 +56,12 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 		config += "    ssl_certificate /etc/letsencrypt/live/" + domain + "/fullchain.pem;\n"
 		config += "    ssl_certificate_key /etc/letsencrypt/live/" + domain + "/privkey.pem;\n"
 		config += "    ssl_protocols TLSv1.2 TLSv1.3;\n\n"
+	}
+
+	// Security settings
+	if autoindexOff {
+		config += "    # Deny directory listing\n"
+		config += "    autoindex off;\n\n"
 	}
 
 	if structured.CORS.Enabled && structured.CORS.AllowAll {
@@ -67,6 +79,23 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 	// Track if we need a global PHP handler and what root to use
 	var phpEnabled bool
 	var phpRoot string
+
+	// Check if user has a root "/" location defined
+	hasRootLocation := false
+	for _, loc := range structured.Locations {
+		if loc.Path == "/" && (loc.MatchType == "" || loc.MatchType == "prefix") {
+			hasRootLocation = true
+			break
+		}
+	}
+
+	// Add deny all catch-all first if enabled and user doesn't have root location
+	if denyAllCatchall && !hasRootLocation {
+		config += "    # Deny all by default\n"
+		config += "    location / {\n"
+		config += "        deny all;\n"
+		config += "    }\n\n"
+	}
 
 	for _, loc := range structured.Locations {
 		// Build location directive based on match type
@@ -433,11 +462,12 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 			// Check for landing deployments in the config
 			var landingStructured struct {
 				Locations []struct {
-					StaticType string `json:"static_type"`
-					LandingID  string `json:"landing_id"`
-					Root       string `json:"root"`
-					Index      string `json:"index"`
-					UsePHP     bool   `json:"use_php"`
+					StaticType            string `json:"static_type"`
+					LandingID             string `json:"landing_id"`
+					Root                  string `json:"root"`
+					Index                 string `json:"index"`
+					UsePHP                bool   `json:"use_php"`
+					ReplaceLandingContent *bool  `json:"replace_landing_content"` // default true
 				} `json:"locations"`
 			}
 			json.Unmarshal(configJSON, &landingStructured)
@@ -471,12 +501,16 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 
+					// Default replace_content to true if not specified
+					replaceContent := loc.ReplaceLandingContent == nil || *loc.ReplaceLandingContent
+
 					deployPayload, _ := json.Marshal(map[string]interface{}{
-						"landing_id":   loc.LandingID,
-						"storage_path": landing.StoragePath,
-						"target_path":  loc.Root,
-						"index_file":   index,
-						"use_php":      loc.UsePHP,
+						"landing_id":      loc.LandingID,
+						"storage_path":    landing.StoragePath,
+						"target_path":     loc.Root,
+						"index_file":      index,
+						"use_php":         loc.UsePHP,
+						"replace_content": replaceContent,
 					})
 					tx.Exec(`
 						INSERT INTO jobs (agent_id, type, payload_json, status)
