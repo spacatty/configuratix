@@ -465,18 +465,19 @@ export default function DomainsPage() {
 
       {/* Create Domain Dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Add Domain</DialogTitle>
             <DialogDescription>
               Enter the fully qualified domain name (FQDN) to add.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label htmlFor="fqdn">Domain Name</Label>
               <Input
                 id="fqdn"
+                className="h-11"
                 placeholder="example.com"
                 value={newFqdn}
                 onChange={(e) => setNewFqdn(e.target.value)}
@@ -494,18 +495,18 @@ export default function DomainsPage() {
 
       {/* Assign Domain Dialog */}
       <Dialog open={showAssignDialog} onOpenChange={setShowAssignDialog}>
-        <DialogContent>
+        <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Assign Domain</DialogTitle>
             <DialogDescription>
               Assign {selectedDomain?.fqdn} to a machine and select a configuration.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label>Machine</Label>
               <Select value={assignMachineId || "_none"} onValueChange={(v) => setAssignMachineId(v === "_none" ? "" : v)}>
-                <SelectTrigger>
+                <SelectTrigger className="h-11">
                   <SelectValue placeholder="Select a machine" />
                 </SelectTrigger>
                 <SelectContent>
@@ -521,7 +522,7 @@ export default function DomainsPage() {
             <div className="space-y-2">
               <Label>Nginx Configuration</Label>
               <Select value={assignConfigId || "_none"} onValueChange={(v) => setAssignConfigId(v === "_none" ? "" : v)}>
-                <SelectTrigger>
+                <SelectTrigger className="h-11">
                   <SelectValue placeholder="Select a configuration" />
                 </SelectTrigger>
                 <SelectContent>
@@ -546,7 +547,7 @@ export default function DomainsPage() {
 
       {/* Notes Dialog */}
       <Dialog open={showNotesDialog} onOpenChange={setShowNotesDialog}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-4xl">
           <DialogHeader>
             <DialogTitle>Domain Notes</DialogTitle>
             <DialogDescription>
@@ -597,41 +598,45 @@ export default function DomainsPage() {
 
       {/* Create DNS Account Dialog */}
       <Dialog open={showDNSAccountDialog} onOpenChange={setShowDNSAccountDialog}>
-        <DialogContent>
+        <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Add DNS Account</DialogTitle>
             <DialogDescription>
               Connect a DNS provider account to manage records.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Provider</Label>
-              <Select
-                value={dnsAccountForm.provider}
-                onValueChange={(v) => setDnsAccountForm({ ...dnsAccountForm, provider: v })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="dnspod">DNSPod</SelectItem>
-                  <SelectItem value="cloudflare">Cloudflare</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Account Name</Label>
-              <Input
-                placeholder="My DNSPod Account"
-                value={dnsAccountForm.name}
-                onChange={(e) => setDnsAccountForm({ ...dnsAccountForm, name: e.target.value })}
-              />
+          <div className="space-y-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Provider</Label>
+                <Select
+                  value={dnsAccountForm.provider}
+                  onValueChange={(v) => setDnsAccountForm({ ...dnsAccountForm, provider: v })}
+                >
+                  <SelectTrigger className="h-11">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="dnspod">🌐 DNSPod</SelectItem>
+                    <SelectItem value="cloudflare">☁️ Cloudflare</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Account Name</Label>
+                <Input
+                  className="h-11"
+                  placeholder="My DNSPod Account"
+                  value={dnsAccountForm.name}
+                  onChange={(e) => setDnsAccountForm({ ...dnsAccountForm, name: e.target.value })}
+                />
+              </div>
             </div>
             {dnsAccountForm.provider === "dnspod" && (
               <div className="space-y-2">
                 <Label>API ID (Token ID)</Label>
                 <Input
+                  className="h-11"
                   placeholder="123456"
                   value={dnsAccountForm.api_id}
                   onChange={(e) => setDnsAccountForm({ ...dnsAccountForm, api_id: e.target.value })}
@@ -641,19 +646,25 @@ export default function DomainsPage() {
             <div className="space-y-2">
               <Label>{dnsAccountForm.provider === "cloudflare" ? "API Token" : "API Token (Secret)"}</Label>
               <Input
+                className="h-11"
                 type="password"
                 placeholder="••••••••••••••••"
                 value={dnsAccountForm.api_token}
                 onChange={(e) => setDnsAccountForm({ ...dnsAccountForm, api_token: e.target.value })}
               />
+              <p className="text-xs text-muted-foreground">
+                {dnsAccountForm.provider === "cloudflare" 
+                  ? "Get this from Cloudflare Dashboard → My Profile → API Tokens"
+                  : "Get this from DNSPod Console → Account → API Token"}
+              </p>
             </div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-2 pt-2">
               <Checkbox
                 id="is_default"
                 checked={dnsAccountForm.is_default}
                 onCheckedChange={(checked) => setDnsAccountForm({ ...dnsAccountForm, is_default: !!checked })}
               />
-              <Label htmlFor="is_default" className="text-sm font-normal">
+              <Label htmlFor="is_default" className="text-sm font-normal cursor-pointer">
                 Set as default for this provider
               </Label>
             </div>
@@ -880,7 +891,7 @@ function DNSSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Globe className="h-5 w-5" />
@@ -891,55 +902,71 @@ function DNSSettingsDialog({
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="settings">Settings</TabsTrigger>
-            <TabsTrigger value="records">Records</TabsTrigger>
-            <TabsTrigger value="sync">Sync</TabsTrigger>
+            <TabsTrigger value="records" disabled={dnsMode !== "managed"}>Records</TabsTrigger>
+            <TabsTrigger value="sync" disabled={dnsMode !== "managed"}>Sync</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="settings" className="space-y-4 mt-4">
-            {/* DNS Mode */}
-            <div className="space-y-2">
-              <Label>DNS Mode</Label>
-              <Select value={dnsMode} onValueChange={setDnsMode}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="external">External (manage DNS elsewhere)</SelectItem>
-                  <SelectItem value="managed">Managed (use provider below)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+          <TabsContent value="settings" className="space-y-6 mt-6">
+            {/* DNS Mode Selection */}
+            <div className="grid grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <Label className="text-base font-medium">DNS Mode</Label>
+                <Select value={dnsMode} onValueChange={setDnsMode}>
+                  <SelectTrigger className="h-11">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="external">External (manage DNS elsewhere)</SelectItem>
+                    <SelectItem value="managed">Managed (use provider below)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {dnsMode === "external" 
+                    ? "You manage DNS records outside of this system" 
+                    : "We will manage DNS records via the selected provider"}
+                </p>
+              </div>
 
-            {dnsMode === "managed" && (
-              <>
+              {dnsMode === "managed" && (
                 <div className="space-y-2">
-                  <Label>DNS Account</Label>
+                  <Label className="text-base font-medium">DNS Account</Label>
                   <Select value={dnsAccountId || "_none"} onValueChange={(v) => setDnsAccountId(v === "_none" ? "" : v)}>
-                    <SelectTrigger>
+                    <SelectTrigger className="h-11">
                       <SelectValue placeholder="Select account" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="_none">None</SelectItem>
                       {dnsAccounts.map((acc) => (
                         <SelectItem key={acc.id} value={acc.id}>
-                          {acc.provider === "cloudflare" ? "CF" : "DNSPod"}: {acc.name}
+                          {acc.provider === "cloudflare" ? "☁️ Cloudflare" : "🌐 DNSPod"}: {acc.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  {dnsAccounts.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No DNS accounts configured. Add one from the main page.</p>
+                  )}
                 </div>
+              )}
+            </div>
 
+            {/* Managed Mode Configuration */}
+            {dnsMode === "managed" && (
+              <>
                 {/* NS Status */}
-                <div className="p-4 border rounded-lg bg-muted/30 space-y-3">
+                <div className="p-5 border rounded-lg bg-muted/20 space-y-4">
                   <div className="flex items-center justify-between">
-                    <Label>Nameserver Status</Label>
+                    <div>
+                      <Label className="text-base font-medium">Nameserver Status</Label>
+                      <p className="text-xs text-muted-foreground mt-1">Check if domain nameservers point to the DNS provider</p>
+                    </div>
                     <Button variant="outline" size="sm" onClick={handleCheckNS} disabled={loading || !dnsAccountId}>
                       <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
                       Check Now
                     </Button>
                   </div>
                   {nsStatus && (
-                    <div className="space-y-2 text-sm">
+                    <div className="p-3 rounded-md bg-background/50 space-y-2 text-sm">
                       <div className="flex items-center gap-2">
                         {nsStatus.status === "valid" ? (
                           <CheckCircle className="h-4 w-4 text-green-500" />
@@ -948,141 +975,162 @@ function DNSSettingsDialog({
                         ) : (
                           <XCircle className="h-4 w-4 text-red-500" />
                         )}
-                        <span>{nsStatus.message}</span>
+                        <span className="font-medium">{nsStatus.message}</span>
                       </div>
                       {nsStatus.expected && nsStatus.expected.length > 0 && (
-                        <div>
+                        <div className="text-xs">
                           <span className="text-muted-foreground">Expected: </span>
-                          {nsStatus.expected.join(", ")}
+                          <code className="bg-muted px-1 py-0.5 rounded">{nsStatus.expected.join(", ")}</code>
                         </div>
                       )}
                       {nsStatus.actual && nsStatus.actual.length > 0 && (
-                        <div>
+                        <div className="text-xs">
                           <span className="text-muted-foreground">Current: </span>
-                          {nsStatus.actual.join(", ")}
+                          <code className="bg-muted px-1 py-0.5 rounded">{nsStatus.actual.join(", ")}</code>
                         </div>
                       )}
                     </div>
                   )}
                 </div>
+
+                {/* IP and Options */}
+                <div className="grid grid-cols-3 gap-6">
+                  <div className="space-y-2">
+                    <Label className="text-base font-medium">IP Address</Label>
+                    <Input
+                      className="h-11"
+                      placeholder="192.168.1.100"
+                      value={ipAddress}
+                      onChange={(e) => setIpAddress(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">Default IP for A records</p>
+                  </div>
+                  <div className="space-y-4 pt-8">
+                    <div className="flex items-center space-x-3">
+                      <Checkbox
+                        id="wildcard"
+                        checked={isWildcard}
+                        onCheckedChange={(checked) => setIsWildcard(!!checked)}
+                      />
+                      <Label htmlFor="wildcard" className="font-normal cursor-pointer">Wildcard (*.domain)</Label>
+                    </div>
+                    <div className="flex items-center space-x-3">
+                      <Checkbox
+                        id="sendProxy"
+                        checked={httpsSendProxy}
+                        onCheckedChange={(checked) => setHttpsSendProxy(!!checked)}
+                      />
+                      <Label htmlFor="sendProxy" className="font-normal cursor-pointer">HTTPS: SEND-PROXY</Label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Ports Configuration */}
+                <div className="space-y-3">
+                  <Label className="text-base font-medium">Port Configuration</Label>
+                  <div className="grid grid-cols-4 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">HTTP Incoming</Label>
+                      <Input className="h-10" value={httpInPorts} onChange={(e) => setHttpInPorts(e.target.value)} placeholder="80" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">HTTP Outgoing</Label>
+                      <Input className="h-10" value={httpOutPorts} onChange={(e) => setHttpOutPorts(e.target.value)} placeholder="80" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">HTTPS Incoming</Label>
+                      <Input className="h-10" value={httpsInPorts} onChange={(e) => setHttpsInPorts(e.target.value)} placeholder="443" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">HTTPS Outgoing</Label>
+                      <Input className="h-10" value={httpsOutPorts} onChange={(e) => setHttpsOutPorts(e.target.value)} placeholder="443" />
+                    </div>
+                  </div>
+                </div>
               </>
             )}
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>IP Address</Label>
-                <Input
-                  placeholder="192.168.1.100"
-                  value={ipAddress}
-                  onChange={(e) => setIpAddress(e.target.value)}
-                />
+            {/* External Mode Message */}
+            {dnsMode === "external" && (
+              <div className="p-8 text-center border rounded-lg bg-muted/10">
+                <Globe className="h-12 w-12 mx-auto mb-4 opacity-30" />
+                <p className="text-muted-foreground">DNS is managed externally.</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Switch to &quot;Managed&quot; mode to configure DNS records through this interface.
+                </p>
               </div>
-              <div className="space-y-2 flex items-end gap-4">
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="wildcard"
-                    checked={isWildcard}
-                    onCheckedChange={(checked) => setIsWildcard(!!checked)}
-                  />
-                  <Label htmlFor="wildcard" className="text-sm font-normal">Wildcard</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="sendProxy"
-                    checked={httpsSendProxy}
-                    onCheckedChange={(checked) => setHttpsSendProxy(!!checked)}
-                  />
-                  <Label htmlFor="sendProxy" className="text-sm font-normal">HTTPS: SEND-PROXY</Label>
-                </div>
-              </div>
-            </div>
+            )}
 
-            <div className="grid grid-cols-4 gap-4">
-              <div className="space-y-2">
-                <Label>HTTP Inc. Ports</Label>
-                <Input value={httpInPorts} onChange={(e) => setHttpInPorts(e.target.value)} placeholder="80" />
-              </div>
-              <div className="space-y-2">
-                <Label>HTTP Out. Ports</Label>
-                <Input value={httpOutPorts} onChange={(e) => setHttpOutPorts(e.target.value)} placeholder="80" />
-              </div>
-              <div className="space-y-2">
-                <Label>HTTPS Inc. Ports</Label>
-                <Input value={httpsInPorts} onChange={(e) => setHttpsInPorts(e.target.value)} placeholder="443" />
-              </div>
-              <div className="space-y-2">
-                <Label>HTTPS Out. Ports</Label>
-                <Input value={httpsOutPorts} onChange={(e) => setHttpsOutPorts(e.target.value)} placeholder="443" />
-              </div>
-            </div>
-
-            <DialogFooter>
+            <DialogFooter className="pt-4 border-t">
               <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
               <Button onClick={handleSaveSettings} disabled={loading}>Save Settings</Button>
             </DialogFooter>
           </TabsContent>
 
-          <TabsContent value="records" className="space-y-4 mt-4">
+          <TabsContent value="records" className="space-y-6 mt-6">
             {dnsMode !== "managed" ? (
-              <div className="p-8 text-center text-muted-foreground">
-                <Globe className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>DNS records management requires managed DNS mode.</p>
-                <p className="text-sm">Switch to &quot;Managed&quot; in Settings tab and select a DNS account.</p>
+              <div className="p-12 text-center border rounded-lg bg-muted/10">
+                <Globe className="h-12 w-12 mx-auto mb-4 opacity-30" />
+                <p className="text-muted-foreground">DNS records management requires managed DNS mode.</p>
+                <p className="text-sm text-muted-foreground mt-1">Switch to &quot;Managed&quot; in Settings tab and select a DNS account.</p>
               </div>
             ) : (
               <>
                 {/* Add Record Form */}
-                <Card className="border-dashed">
-                  <CardContent className="pt-4">
-                    <div className="grid grid-cols-6 gap-2 items-end">
-                      <div className="space-y-1">
-                        <Label className="text-xs">Name</Label>
-                        <Input
-                          placeholder="@, www, *"
-                          value={newRecord.name}
-                          onChange={(e) => setNewRecord({ ...newRecord, name: e.target.value })}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Type</Label>
-                        <Select
-                          value={newRecord.record_type}
-                          onValueChange={(v) => setNewRecord({ ...newRecord, record_type: v })}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="A">A</SelectItem>
-                            <SelectItem value="AAAA">AAAA</SelectItem>
-                            <SelectItem value="CNAME">CNAME</SelectItem>
-                            <SelectItem value="TXT">TXT</SelectItem>
-                            <SelectItem value="MX">MX</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="col-span-2 space-y-1">
-                        <Label className="text-xs">Value</Label>
-                        <Input
-                          placeholder="IP or target"
-                          value={newRecord.value}
-                          onChange={(e) => setNewRecord({ ...newRecord, value: e.target.value })}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">TTL</Label>
-                        <Input
-                          type="number"
-                          value={newRecord.ttl}
-                          onChange={(e) => setNewRecord({ ...newRecord, ttl: parseInt(e.target.value) || 600 })}
-                        />
-                      </div>
-                      <Button onClick={handleAddRecord} disabled={!newRecord.name || !newRecord.value}>
-                        <Plus className="h-4 w-4" />
-                      </Button>
+                <div className="p-4 border rounded-lg bg-muted/10">
+                  <Label className="text-sm font-medium mb-3 block">Add New Record</Label>
+                  <div className="flex gap-3 items-end">
+                    <div className="w-32 space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Name</Label>
+                      <Input
+                        className="h-10"
+                        placeholder="@, www, *"
+                        value={newRecord.name}
+                        onChange={(e) => setNewRecord({ ...newRecord, name: e.target.value })}
+                      />
                     </div>
-                  </CardContent>
-                </Card>
+                    <div className="w-28 space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Type</Label>
+                      <Select
+                        value={newRecord.record_type}
+                        onValueChange={(v) => setNewRecord({ ...newRecord, record_type: v })}
+                      >
+                        <SelectTrigger className="h-10">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="A">A</SelectItem>
+                          <SelectItem value="AAAA">AAAA</SelectItem>
+                          <SelectItem value="CNAME">CNAME</SelectItem>
+                          <SelectItem value="TXT">TXT</SelectItem>
+                          <SelectItem value="MX">MX</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex-1 space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Value</Label>
+                      <Input
+                        className="h-10"
+                        placeholder="IP address or target hostname"
+                        value={newRecord.value}
+                        onChange={(e) => setNewRecord({ ...newRecord, value: e.target.value })}
+                      />
+                    </div>
+                    <div className="w-24 space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">TTL</Label>
+                      <Input
+                        className="h-10"
+                        type="number"
+                        value={newRecord.ttl}
+                        onChange={(e) => setNewRecord({ ...newRecord, ttl: parseInt(e.target.value) || 600 })}
+                      />
+                    </div>
+                    <Button className="h-10 px-4" onClick={handleAddRecord} disabled={!newRecord.name || !newRecord.value}>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add
+                    </Button>
+                  </div>
+                </div>
 
                 {/* Records Table */}
                 <div className="border rounded-lg overflow-hidden">
