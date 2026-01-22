@@ -57,16 +57,23 @@ export default function DomainsPage() {
 
   const loadData = async () => {
     try {
-      const [domainsData, machinesData, configsData, accountsData] = await Promise.all([
+      const [domainsData, machinesData, configsData] = await Promise.all([
         api.listDomains(),
         api.listMachines(),
         api.listNginxConfigs(),
-        api.listDNSAccounts(),
       ]);
       setDomains(domainsData);
       setMachines(machinesData);
       setConfigs(configsData);
-      setDnsAccounts(accountsData);
+      
+      // Load DNS accounts separately - might fail if migration not run yet
+      try {
+        const accountsData = await api.listDNSAccounts();
+        setDnsAccounts(accountsData);
+      } catch {
+        console.log("DNS accounts not available (migration may not be run yet)");
+        setDnsAccounts([]);
+      }
     } catch (err) {
       console.error("Failed to load data:", err);
     } finally {
@@ -287,7 +294,7 @@ export default function DomainsPage() {
                   <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
-              {domain.dns_mode === "managed" && getNSStatusBadge(domain.ns_status)}
+              {domain.dns_mode === "managed" && domain.ns_status && getNSStatusBadge(domain.ns_status)}
             </div>
           </div>
         );

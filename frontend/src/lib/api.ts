@@ -206,22 +206,22 @@ export interface Domain {
   machine_ip: string | null;
   config_id: string | null;
   config_name: string | null;
-  // DNS settings
-  dns_account_id: string | null;
-  dns_mode: string; // managed, external
-  ns_status: string; // unknown, pending, valid, invalid
-  ns_last_check: string | null;
-  ns_expected: string[] | null;
-  ns_actual: string[] | null;
-  is_wildcard: boolean;
-  ip_address: string | null;
-  https_send_proxy: boolean;
-  http_incoming_ports: number[];
-  http_outgoing_ports: number[];
-  https_incoming_ports: number[];
-  https_outgoing_ports: number[];
-  dns_account_name: string | null;
-  dns_account_provider: string | null;
+  // DNS settings (all nullable for backwards compatibility)
+  dns_account_id?: string | null;
+  dns_mode?: string; // managed, external
+  ns_status?: string; // unknown, pending, valid, invalid
+  ns_last_check?: string | null;
+  ns_expected?: string[] | null;
+  ns_actual?: string[] | null;
+  is_wildcard?: boolean;
+  ip_address?: string | null;
+  https_send_proxy?: boolean;
+  http_incoming_ports?: number[] | null;
+  http_outgoing_ports?: number[] | null;
+  https_incoming_ports?: number[] | null;
+  https_outgoing_ports?: number[] | null;
+  dns_account_name?: string | null;
+  dns_account_provider?: string | null;
 }
 
 export interface DNSAccount {
