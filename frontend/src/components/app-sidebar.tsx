@@ -129,46 +129,6 @@ export function AppSidebar({ user }: AppSidebarProps) {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {/* Projects - Collapsible with subitems */}
-              <Collapsible open={projectsOpen} onOpenChange={setProjectsOpen}>
-                <SidebarMenuItem>
-                  <CollapsibleTrigger asChild>
-                    <SidebarMenuButton isActive={isActive("/projects")}>
-                      <FolderKanban className="h-4 w-4" />
-                      <span className="flex-1">Projects</span>
-                      <ChevronRight className={`h-4 w-4 transition-transform ${projectsOpen ? "rotate-90" : ""}`} />
-                    </SidebarMenuButton>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <SidebarMenuSub>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild isActive={pathname === "/projects"}>
-                          <a href="/projects">All Projects</a>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      {projects.slice(0, 5).map((project) => (
-                        <SidebarMenuSubItem key={project.id}>
-                          <SidebarMenuSubButton asChild isActive={pathname === `/projects/${project.id}`}>
-                            <a href={`/projects/${project.id}`} className="truncate">
-                              {project.name}
-                            </a>
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                      ))}
-                      {projects.length > 5 && (
-                        <SidebarMenuSubItem>
-                          <SidebarMenuSubButton asChild>
-                            <a href="/projects" className="text-muted-foreground">
-                              +{projects.length - 5} more...
-                            </a>
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                      )}
-                    </SidebarMenuSub>
-                  </CollapsibleContent>
-                </SidebarMenuItem>
-              </Collapsible>
-
               {/* Machines - Collapsible with Enrollment Tokens */}
               <Collapsible open={machinesOpen} onOpenChange={setMachinesOpen} defaultOpen>
                 <SidebarMenuItem>
@@ -208,6 +168,46 @@ export function AppSidebar({ user }: AppSidebarProps) {
                   </a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+
+              {/* Projects - Collapsible with subitems */}
+              <Collapsible open={projectsOpen} onOpenChange={setProjectsOpen}>
+                <SidebarMenuItem>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton isActive={isActive("/projects")}>
+                      <FolderKanban className="h-4 w-4" />
+                      <span className="flex-1">Projects</span>
+                      <ChevronRight className={`h-4 w-4 transition-transform ${projectsOpen ? "rotate-90" : ""}`} />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild isActive={pathname === "/projects"}>
+                          <a href="/projects">All Projects</a>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
+                      {projects.slice(0, 5).map((project) => (
+                        <SidebarMenuSubItem key={project.id}>
+                          <SidebarMenuSubButton asChild isActive={pathname === `/projects/${project.id}`}>
+                            <a href={`/projects/${project.id}`} className="truncate">
+                              {project.name}
+                            </a>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
+                      {projects.length > 5 && (
+                        <SidebarMenuSubItem>
+                          <SidebarMenuSubButton asChild>
+                            <a href="/projects" className="text-muted-foreground">
+                              +{projects.length - 5} more...
+                            </a>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      )}
+                    </SidebarMenuSub>
+                  </CollapsibleContent>
+                </SidebarMenuItem>
+              </Collapsible>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
