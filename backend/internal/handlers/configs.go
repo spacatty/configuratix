@@ -295,14 +295,26 @@ func parseConfigList(output string) []ConfigFile {
 			continue
 		}
 		if inSiteConfigs && strings.HasSuffix(strings.TrimSpace(line), ".conf") {
-			// Extract filename from ls -la output
+			// Extract filename from ls -la output (last field is the filename/path)
 			parts := strings.Fields(line)
 			if len(parts) > 0 {
-				filename := parts[len(parts)-1]
-				if strings.HasSuffix(filename, ".conf") {
+				lastPart := parts[len(parts)-1]
+				if strings.HasSuffix(lastPart, ".conf") {
+					// lastPart might be full path or just filename
+					var filename, fullPath string
+					if strings.HasPrefix(lastPart, "/") {
+						// Full path - extract just the filename
+						fullPath = lastPart
+						pathParts := strings.Split(lastPart, "/")
+						filename = pathParts[len(pathParts)-1]
+					} else {
+						// Just filename - construct full path
+						filename = lastPart
+						fullPath = "/etc/nginx/conf.d/configuratix/" + filename
+					}
 					configs = append(configs, ConfigFile{
 						Name:     filename,
-						Path:     "/etc/nginx/conf.d/configuratix/" + filename,
+						Path:     fullPath,
 						Type:     "nginx_site",
 						Readonly: false,
 					})
