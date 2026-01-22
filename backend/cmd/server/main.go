@@ -154,6 +154,7 @@ func main() {
 	apiRouter.HandleFunc("/dns-accounts/{id}", dnsHandler.UpdateDNSAccount).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/dns-accounts/{id}", dnsHandler.DeleteDNSAccount).Methods("DELETE", "OPTIONS")
 	apiRouter.HandleFunc("/dns-accounts/{id}/test", dnsHandler.TestDNSAccount).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns-accounts/{id}/nameservers", dnsHandler.GetExpectedNameservers).Methods("GET", "OPTIONS")
 	// Domain DNS settings
 	apiRouter.HandleFunc("/domains/{id}/dns", dnsHandler.UpdateDomainDNS).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/ns-check", dnsHandler.CheckDomainNS).Methods("POST", "OPTIONS")

@@ -345,6 +345,62 @@ func (h *DNSHandler) TestDNSAccount(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetExpectedNameservers returns the expected nameservers for a domain from a DNS account
+func (h *DNSHandler) GetExpectedNameservers(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
+	vars := mux.Vars(r)
+	accountID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid account ID", http.StatusBadRequest)
+		return
+	}
+
+	domain := r.URL.Query().Get("domain")
+	if domain == "" {
+		http.Error(w, "domain query parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	var account models.DNSAccount
+	err = h.db.Get(&account, "SELECT * FROM dns_accounts WHERE id = $1 AND owner_id = $2", accountID, userID)
+	if err != nil {
+		http.Error(w, "Account not found", http.StatusNotFound)
+		return
+	}
+
+	apiID := ""
+	if account.ApiID != nil {
+		apiID = *account.ApiID
+	}
+
+	provider, _ := dns.NewProvider(account.Provider, apiID, account.ApiToken)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	nameservers, err := provider.GetExpectedNameservers(ctx, domain)
+	if err != nil {
+		// Zone might not exist yet - return helpful message
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"found":       false,
+			"nameservers": []string{},
+			"message":     fmt.Sprintf("Zone not found in %s. Add the domain to your %s account first.", account.Provider, account.Provider),
+			"provider":    account.Provider,
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"found":       true,
+		"nameservers": nameservers,
+		"message":     fmt.Sprintf("Point your domain to these %s nameservers", account.Provider),
+		"provider":    account.Provider,
+	})
+}
+
 // ==================== Domain DNS Settings ====================
 
 type UpdateDomainDNSRequest struct {

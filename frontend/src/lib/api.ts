@@ -791,6 +791,15 @@ class ApiClient {
     });
   }
 
+  async getExpectedNameservers(accountId: string, domain: string): Promise<{
+    found: boolean;
+    nameservers: string[];
+    message: string;
+    provider: string;
+  }> {
+    return this.request(`/api/dns-accounts/${accountId}/nameservers?domain=${encodeURIComponent(domain)}`);
+  }
+
   // Domain DNS settings
   async updateDomainDNS(id: string, data: {
     dns_account_id?: string | null;
