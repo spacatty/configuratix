@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { DataTable } from "@/components/ui/data-table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api, NginxConfig, NginxConfigStructured, LocationConfig, Landing } from "@/lib/api";
-import { MoreHorizontal, Pencil, Trash, Copy, FileCode, Cog, Lock, LockOpen, Shield, ShieldOff } from "lucide-react";
+import { MoreHorizontal, Pencil, Trash, Copy, FileCode, Cog, Lock, LockOpen, Shield, ShieldOff, GripVertical, ChevronUp, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
 
@@ -198,6 +198,24 @@ export default function NginxConfigsPage() {
     setFormLocations(prev => prev.map((loc, i) => i === index ? { ...loc, ...updates } : loc));
   }, []);
 
+  const moveLocationUp = useCallback((index: number) => {
+    if (index === 0) return;
+    setFormLocations(prev => {
+      const newLocs = [...prev];
+      [newLocs[index - 1], newLocs[index]] = [newLocs[index], newLocs[index - 1]];
+      return newLocs;
+    });
+  }, []);
+
+  const moveLocationDown = useCallback((index: number) => {
+    setFormLocations(prev => {
+      if (index === prev.length - 1) return prev;
+      const newLocs = [...prev];
+      [newLocs[index], newLocs[index + 1]] = [newLocs[index + 1], newLocs[index]];
+      return newLocs;
+    });
+  }, []);
+
   const columns: ColumnDef<NginxConfig>[] = [
     {
       accessorKey: "name",
@@ -321,11 +339,46 @@ export default function NginxConfigsPage() {
   ];
 
   const renderLocationFields = (loc: LocationConfig, index: number, keyPrefix: string) => (
-    <Card key={`${keyPrefix}-${index}`} className="border-border/50">
-      <CardContent className="p-3 space-y-3">
+    <Card key={`${keyPrefix}-${index}`} className="border-border/50 bg-card/30">
+      <CardContent className="p-4 space-y-4">
+        {/* Header row with order controls */}
         <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-0.5">
+            <Button 
+              type="button" 
+              variant="ghost" 
+              size="icon" 
+              className="h-5 w-5" 
+              onClick={() => moveLocationUp(index)}
+              disabled={index === 0}
+            >
+              <ChevronUp className="h-3 w-3" />
+            </Button>
+            <Button 
+              type="button" 
+              variant="ghost" 
+              size="icon" 
+              className="h-5 w-5" 
+              onClick={() => moveLocationDown(index)}
+              disabled={index === formLocations.length - 1}
+            >
+              <ChevronDown className="h-3 w-3" />
+            </Button>
+          </div>
+          <GripVertical className="h-4 w-4 text-muted-foreground" />
+          <Badge variant="outline" className="font-mono text-xs">#{index + 1}</Badge>
+          <div className="flex-1" />
+          {formLocations.length > 1 && (
+            <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => removeLocation(index)}>
+              <Trash className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+
+        {/* Location path config */}
+        <div className="grid grid-cols-[100px_1fr_120px] gap-2">
           <Select value={loc.match_type || "prefix"} onValueChange={(value) => updateLocation(index, { match_type: value })}>
-            <SelectTrigger className="w-24" title="Match Type">
+            <SelectTrigger className="h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -334,59 +387,72 @@ export default function NginxConfigsPage() {
               <SelectItem value="regex">Regex ~</SelectItem>
             </SelectContent>
           </Select>
-          <Input placeholder="/" value={loc.path} onChange={(e) => updateLocation(index, { path: e.target.value })} className="flex-1" />
+          <Input placeholder="/" value={loc.path} onChange={(e) => updateLocation(index, { path: e.target.value })} className="h-9 font-mono" />
           <Select value={loc.type} onValueChange={(value) => updateLocation(index, { type: value })}>
-            <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="proxy">Proxy</SelectItem>
               <SelectItem value="static">Static</SelectItem>
             </SelectContent>
           </Select>
-          {formLocations.length > 1 && (
-            <Button type="button" variant="ghost" size="sm" onClick={() => removeLocation(index)}>×</Button>
-          )}
         </div>
+
+        {/* Type-specific config */}
         {loc.type === "proxy" ? (
-          <Input placeholder="http://localhost:3000" value={loc.proxy_url || ""} onChange={(e) => updateLocation(index, { proxy_url: e.target.value })} />
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">Proxy URL</Label>
+            <Input placeholder="http://localhost:3000" value={loc.proxy_url || ""} onChange={(e) => updateLocation(index, { proxy_url: e.target.value })} className="h-9 font-mono" />
+          </div>
         ) : (
-          <div className="space-y-2">
-            <Select value={loc.static_type || "local"} onValueChange={(value) => updateLocation(index, { static_type: value })}>
-              <SelectTrigger><SelectValue placeholder="Source type" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="local">Local Path</SelectItem>
-                <SelectItem value="landing">Static Content</SelectItem>
-              </SelectContent>
-            </Select>
-            {loc.static_type === "landing" ? (
-              <>
-                <Select value={loc.landing_id || ""} onValueChange={(value) => updateLocation(index, { landing_id: value })}>
-                  <SelectTrigger><SelectValue placeholder="Select static content" /></SelectTrigger>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Source</Label>
+                <Select value={loc.static_type || "local"} onValueChange={(value) => updateLocation(index, { static_type: value })}>
+                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {landings.length === 0 ? (
-                      <SelectItem value="" disabled>No content available</SelectItem>
-                    ) : landings.map((l) => (
-                      <SelectItem key={l.id} value={l.id}>{l.name} ({l.type.toUpperCase()})</SelectItem>
-                    ))}
+                    <SelectItem value="local">Local Path</SelectItem>
+                    <SelectItem value="landing">Static Content</SelectItem>
                   </SelectContent>
                 </Select>
-                <Input placeholder="/var/www/html/site" value={loc.root || ""} onChange={(e) => updateLocation(index, { root: e.target.value })} />
-                <p className="text-xs text-muted-foreground">Target path where content will be extracted</p>
-                <div className="flex items-center justify-between pt-2 border-t">
-                  <div>
-                    <Label className="text-sm">Replace Content</Label>
-                    <p className="text-xs text-muted-foreground">Overwrite existing files on redeploy</p>
-                  </div>
-                  <Switch 
-                    checked={loc.replace_landing_content ?? true} 
-                    onCheckedChange={(checked) => updateLocation(index, { replace_landing_content: checked })} 
-                  />
+              </div>
+              {loc.static_type === "landing" && (
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Content</Label>
+                  <Select value={loc.landing_id || ""} onValueChange={(value) => updateLocation(index, { landing_id: value })}>
+                    <SelectTrigger className="h-9"><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectContent>
+                      {landings.length === 0 ? (
+                        <SelectItem value="" disabled>No content</SelectItem>
+                      ) : landings.map((l) => (
+                        <SelectItem key={l.id} value={l.id}>{l.name} ({l.type.toUpperCase()})</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-              </>
-            ) : (
-              <>
-                <Input placeholder="/var/www/html" value={loc.root || ""} onChange={(e) => updateLocation(index, { root: e.target.value })} />
-                <Input placeholder="index.html" value={loc.index || ""} onChange={(e) => updateLocation(index, { index: e.target.value })} />
-              </>
+              )}
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Root Path</Label>
+              <Input placeholder="/var/www/html" value={loc.root || ""} onChange={(e) => updateLocation(index, { root: e.target.value })} className="h-9 font-mono" />
+            </div>
+            {loc.static_type !== "landing" && (
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Index Files</Label>
+                <Input placeholder="index.html index.htm" value={loc.index || ""} onChange={(e) => updateLocation(index, { index: e.target.value })} className="h-9 font-mono" />
+              </div>
+            )}
+            {loc.static_type === "landing" && (
+              <div className="flex items-center justify-between p-2 rounded-md bg-muted/50">
+                <div>
+                  <Label className="text-sm">Replace on Deploy</Label>
+                  <p className="text-xs text-muted-foreground">Overwrite files when redeploying</p>
+                </div>
+                <Switch 
+                  checked={loc.replace_landing_content ?? true} 
+                  onCheckedChange={(checked) => updateLocation(index, { replace_landing_content: checked })} 
+                />
+              </div>
             )}
           </div>
         )}
@@ -395,85 +461,98 @@ export default function NginxConfigsPage() {
   );
 
   const renderFormContent = () => (
-    <div ref={scrollContainerRef} className="space-y-4 max-h-[65vh] overflow-y-auto pr-2">
-      <div className="space-y-2">
-        <Label>Configuration Name</Label>
-        <Input placeholder="My Proxy Config" value={formName} onChange={(e) => setFormName(e.target.value)} />
+    <div ref={scrollContainerRef} className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
+      {/* Basic Settings */}
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>Configuration Name</Label>
+          <Input placeholder="My Nginx Config" value={formName} onChange={(e) => setFormName(e.target.value)} className="h-9" />
+        </div>
+        <div className="space-y-2">
+          <Label>Mode</Label>
+          <Select value={formMode} onValueChange={setFormMode}>
+            <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">Auto (UI Builder)</SelectItem>
+              <SelectItem value="manual">Manual (Raw Config)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
-      <div className="space-y-2">
-        <Label>Mode</Label>
-        <Select value={formMode} onValueChange={setFormMode}>
-          <SelectTrigger><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="auto">Auto (UI Builder)</SelectItem>
-            <SelectItem value="manual">Manual (Raw Config)</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+      
       {formMode === "auto" ? (
         <>
-          <div className="space-y-2">
-            <Label>SSL Mode</Label>
-            <Select value={formSslMode} onValueChange={setFormSslMode}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="disabled">Disabled</SelectItem>
-                <SelectItem value="allow_http">Allow Direct HTTP</SelectItem>
-                <SelectItem value="redirect_https">Auto-Redirect to HTTPS</SelectItem>
-              </SelectContent>
-            </Select>
+          {/* SSL & CORS Row */}
+          <div className="grid grid-cols-2 gap-4">
+            <Card className="border-border/50 bg-card/30">
+              <CardContent className="p-4 space-y-3">
+                <Label className="text-sm font-medium">SSL Settings</Label>
+                <Select value={formSslMode} onValueChange={setFormSslMode}>
+                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="disabled">Disabled</SelectItem>
+                    <SelectItem value="allow_http">Allow HTTP</SelectItem>
+                    <SelectItem value="redirect_https">Force HTTPS</SelectItem>
+                  </SelectContent>
+                </Select>
+                {formSslMode !== "disabled" && (
+                  <Input type="email" placeholder="admin@example.com" value={formSslEmail} onChange={(e) => setFormSslEmail(e.target.value)} className="h-9" />
+                )}
+              </CardContent>
+            </Card>
+            <Card className="border-border/50 bg-card/30">
+              <CardContent className="p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm font-medium">CORS</Label>
+                  <Switch checked={formCorsEnabled} onCheckedChange={setFormCorsEnabled} />
+                </div>
+                {formCorsEnabled && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">Allow All Origins</span>
+                    <Switch checked={formCorsAllowAll} onCheckedChange={setFormCorsAllowAll} />
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </div>
-          {formSslMode !== "disabled" && (
-            <div className="space-y-2">
-              <Label>SSL Certificate Email</Label>
-              <Input type="email" placeholder="admin@yourdomain.com" value={formSslEmail} onChange={(e) => setFormSslEmail(e.target.value)} />
-              <p className="text-xs text-muted-foreground">Required for Let&apos;s Encrypt certificate issuance</p>
-            </div>
-          )}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <Label>CORS</Label>
-              <Switch checked={formCorsEnabled} onCheckedChange={setFormCorsEnabled} />
-            </div>
-            {formCorsEnabled && (
-              <div className="flex items-center justify-between pl-4">
-                <Label className="text-sm text-muted-foreground">Allow All Origins (*)</Label>
-                <Switch checked={formCorsAllowAll} onCheckedChange={setFormCorsAllowAll} />
-              </div>
-            )}
-          </div>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
+
+          {/* Features & Security Row */}
+          <div className="grid grid-cols-3 gap-4">
+            <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/30">
               <div>
-                <Label>Enable PHP</Label>
-                <p className="text-xs text-muted-foreground mt-1">Process .php files via PHP-FPM (requires PHP runtime on target machine)</p>
+                <Label className="text-sm">PHP Support</Label>
+                <p className="text-xs text-muted-foreground">Process .php files</p>
               </div>
               <Switch checked={formEnablePHP} onCheckedChange={setFormEnablePHP} />
             </div>
-          </div>
-          <div className="space-y-3 border-t pt-3">
-            <Label className="text-sm font-medium">Security Settings</Label>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/30">
               <div>
-                <Label className="text-sm">Disable Directory Listing</Label>
-                <p className="text-xs text-muted-foreground mt-1">Adds <code className="text-xs bg-muted px-1 rounded">autoindex off</code></p>
+                <Label className="text-sm">No Directory List</Label>
+                <p className="text-xs text-muted-foreground">autoindex off</p>
               </div>
               <Switch checked={formAutoindexOff} onCheckedChange={setFormAutoindexOff} />
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/30">
               <div>
-                <Label className="text-sm">Deny All Catch-all</Label>
-                <p className="text-xs text-muted-foreground mt-1">Deny access to paths not explicitly defined in locations</p>
+                <Label className="text-sm">Deny Catch-all</Label>
+                <p className="text-xs text-muted-foreground">Block undefined paths</p>
               </div>
               <Switch checked={formDenyAllCatchall} onCheckedChange={setFormDenyAllCatchall} />
             </div>
           </div>
+
+          {/* Locations Section */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <Label>Locations</Label>
-              <Button type="button" variant="outline" size="sm" onClick={addLocation}>Add Location</Button>
+              <div>
+                <Label className="text-base font-medium">Locations</Label>
+                <p className="text-xs text-muted-foreground">Order matters in Nginx - first match wins. Use arrows to reorder.</p>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={addLocation}>+ Add Location</Button>
             </div>
-            {formLocations.map((loc, index) => renderLocationFields(loc, index, "loc"))}
+            <div className="space-y-3">
+              {formLocations.map((loc, index) => renderLocationFields(loc, index, "loc"))}
+            </div>
           </div>
         </>
       ) : (
@@ -520,7 +599,7 @@ export default function NginxConfigsPage() {
 
       {/* Create Dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="max-w-5xl">
+        <DialogContent className="max-w-4xl max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>Create Nginx Configuration</DialogTitle>
             <DialogDescription>Configure nginx settings for your domains.</DialogDescription>
@@ -535,7 +614,7 @@ export default function NginxConfigsPage() {
 
       {/* Edit Dialog */}
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="max-w-5xl">
+        <DialogContent className="max-w-4xl max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>Edit Nginx Configuration</DialogTitle>
             <DialogDescription>Update nginx settings.</DialogDescription>
