@@ -205,8 +205,8 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
     <div className="relative h-full">
       <div 
         ref={terminalRef} 
-        className="h-full w-full rounded-lg overflow-hidden"
-        style={{ minHeight: "400px" }}
+        className="h-full w-full rounded-lg overflow-hidden p-4"
+        style={{ minHeight: "400px", backgroundColor: "#0a0a0a" }}
       />
       {error && (
         <div className="absolute top-2 right-2 bg-red-500/20 text-red-400 px-3 py-1 rounded text-sm">
