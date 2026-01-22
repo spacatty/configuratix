@@ -62,6 +62,7 @@ func (db *DB) RunMigrations() error {
 		"005_landings.sql",
 		"006_ufw_rules.sql",
 		"012_php_runtimes.sql",
+		"013_seed_php_templates.sql",
 	}
 
 	// Base paths to try
