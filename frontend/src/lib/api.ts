@@ -896,6 +896,22 @@ class ApiClient {
     return this.request(`/api/domains/${domainId}/dns-lookup${params}`);
   }
 
+  async listRemoteRecords(domainId: string): Promise<{
+    domain: string;
+    provider: string;
+    records: Array<{
+      id: string;
+      name: string;
+      type: string;
+      value: string;
+      ttl: number;
+      priority: number;
+      proxied: boolean;
+    }>;
+  }> {
+    return this.request(`/api/domains/${domainId}/dns-remote`);
+  }
+
   // Nginx Configs
   async listNginxConfigs(): Promise<NginxConfig[]> {
     return this.request<NginxConfig[]>("/api/nginx-configs");

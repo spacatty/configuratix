@@ -1041,6 +1041,63 @@ func (h *DNSHandler) ImportDNSFromRemote(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// ==================== List Remote Records ====================
+
+// ListRemoteRecords fetches all records directly from the DNS provider
+func (h *DNSHandler) ListRemoteRecords(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	domainID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid domain ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get domain with DNS account
+	var domain struct {
+		FQDN         string     `db:"fqdn"`
+		DNSAccountID *uuid.UUID `db:"dns_account_id"`
+	}
+	err = h.db.Get(&domain, "SELECT fqdn, dns_account_id FROM domains WHERE id = $1", domainID)
+	if err != nil {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
+	}
+
+	if domain.DNSAccountID == nil {
+		http.Error(w, "No DNS account configured for this domain", http.StatusBadRequest)
+		return
+	}
+
+	var account models.DNSAccount
+	err = h.db.Get(&account, "SELECT * FROM dns_accounts WHERE id = $1", *domain.DNSAccountID)
+	if err != nil {
+		http.Error(w, "DNS account not found", http.StatusNotFound)
+		return
+	}
+
+	apiID := ""
+	if account.ApiID != nil {
+		apiID = *account.ApiID
+	}
+	provider, _ := dns.NewProvider(account.Provider, apiID, account.ApiToken)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	remoteRecords, err := provider.ListRecords(ctx, domain.FQDN)
+	if err != nil {
+		http.Error(w, "Failed to fetch records from provider: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"domain":   domain.FQDN,
+		"provider": account.Provider,
+		"records":  remoteRecords,
+	})
+}
+
 // ==================== DNS Lookup (Debug) ====================
 
 type DNSLookupResult struct {

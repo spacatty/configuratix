@@ -759,29 +759,37 @@ function DNSSettingsDialog({
   } | null>(null);
   const [lookupSubdomain, setLookupSubdomain] = useState("@");
   const [loadingLookup, setLoadingLookup] = useState(false);
+  const [providerRecords, setProviderRecords] = useState<Array<{
+    name: string;
+    type: string;
+    value: string;
+    ttl: number;
+    proxied?: boolean;
+  }> | null>(null);
+  const [loadingProviderRecords, setLoadingProviderRecords] = useState(false);
 
   // Form state
   const [dnsMode, setDnsMode] = useState("external");
   const [dnsAccountId, setDnsAccountId] = useState<string>("");
 
-  // New record form
+  // Get selected account provider
+  const selectedAccount = dnsAccounts.find(a => a.id === dnsAccountId);
+  const isCloudflare = selectedAccount?.provider === "cloudflare";
+
+  // New record form - proxied defaults to true for Cloudflare
   const [newRecord, setNewRecord] = useState({
     name: "",
     record_type: "A",
     value: "",
     ttl: 600,
     priority: 10,
-    proxied: false,
+    proxied: true, // Default to proxied for CF
     customPorts: false,
     httpInPort: 80,
     httpOutPort: 80,
     httpsInPort: 443,
     httpsOutPort: 443,
   });
-  
-  // Get selected account provider
-  const selectedAccount = dnsAccounts.find(a => a.id === dnsAccountId);
-  const isCloudflare = selectedAccount?.provider === "cloudflare";
 
   useEffect(() => {
     if (domain && open) {
@@ -876,6 +884,19 @@ function DNSSettingsDialog({
       toast.error(err instanceof Error ? err.message : "Failed to lookup DNS");
     } finally {
       setLoadingLookup(false);
+    }
+  };
+
+  const handleListProviderRecords = async () => {
+    if (!domain) return;
+    setLoadingProviderRecords(true);
+    try {
+      const result = await api.listRemoteRecords(domain.id);
+      setProviderRecords(result.records);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to fetch provider records");
+    } finally {
+      setLoadingProviderRecords(false);
     }
   };
 
@@ -1134,47 +1155,92 @@ function DNSSettingsDialog({
                   )}
                 </div>
 
-                {/* DNS Lookup (Debug) */}
-                <div className="p-4 border rounded-lg bg-muted/20">
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <Label className="text-sm font-medium">DNS Lookup (Debug)</Label>
-                      <p className="text-xs text-muted-foreground mt-0.5">Query public DNS to see what records are resolving</p>
-                    </div>
+                {/* DNS Debug Tools */}
+                <div className="p-4 border rounded-lg bg-muted/20 space-y-4">
+                  <div>
+                    <Label className="text-sm font-medium">DNS Debug Tools</Label>
+                    <p className="text-xs text-muted-foreground mt-0.5">Query DNS records for debugging</p>
                   </div>
-                  <div className="flex gap-2 items-center">
-                    <Input
-                      className="h-9 w-32"
-                      placeholder="@ or subdomain"
-                      value={lookupSubdomain}
-                      onChange={(e) => setLookupSubdomain(e.target.value || "@")}
-                    />
-                    <span className="text-muted-foreground">.{domain?.fqdn}</span>
-                    <Button variant="outline" size="sm" onClick={handleDNSLookup} disabled={loadingLookup}>
-                      <RefreshCw className={`h-4 w-4 mr-2 ${loadingLookup ? "animate-spin" : ""}`} />
-                      Lookup
-                    </Button>
-                  </div>
-                  {dnsLookupResult && (
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      {Object.entries(dnsLookupResult.results).map(([type, data]) => (
-                        <div key={type} className="p-2 rounded bg-background/50 text-xs">
-                          <div className="font-medium text-muted-foreground mb-1">{type}</div>
-                          {data.records.length > 0 ? (
-                            <div className="space-y-0.5">
-                              {data.records.map((r, i) => (
-                                <code key={i} className="block font-mono text-foreground">{r}</code>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground/50">
-                              {data.error ? "lookup failed" : "no records"}
-                            </span>
-                          )}
-                        </div>
-                      ))}
+
+                  {/* List all from provider */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={handleListProviderRecords} disabled={loadingProviderRecords || !dnsAccountId}>
+                        <RefreshCw className={`h-4 w-4 mr-2 ${loadingProviderRecords ? "animate-spin" : ""}`} />
+                        List All from Provider
+                      </Button>
+                      <span className="text-xs text-muted-foreground">Fetch all records from {isCloudflare ? "Cloudflare" : "DNSPod"}</span>
                     </div>
-                  )}
+                    {providerRecords && (
+                      <div className="mt-2 border rounded overflow-hidden">
+                        <table className="w-full text-xs">
+                          <thead className="bg-muted/50">
+                            <tr>
+                              <th className="text-left p-1.5 font-medium">Name</th>
+                              <th className="text-left p-1.5 font-medium">Type</th>
+                              <th className="text-left p-1.5 font-medium">Value</th>
+                              <th className="text-left p-1.5 font-medium">TTL</th>
+                              {isCloudflare && <th className="text-left p-1.5 font-medium">Proxy</th>}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {providerRecords.length === 0 ? (
+                              <tr><td colSpan={isCloudflare ? 5 : 4} className="p-2 text-center text-muted-foreground">No records on provider</td></tr>
+                            ) : (
+                              providerRecords.map((r, i) => (
+                                <tr key={i} className="border-t">
+                                  <td className="p-1.5 font-mono">{r.name}</td>
+                                  <td className="p-1.5"><Badge variant="outline" className="text-xs py-0">{r.type}</Badge></td>
+                                  <td className="p-1.5 font-mono max-w-[200px] truncate" title={r.value}>{r.value}</td>
+                                  <td className="p-1.5">{r.ttl}</td>
+                                  {isCloudflare && (
+                                    <td className="p-1.5">
+                                      <Cloud className={`h-3 w-3 ${r.proxied ? "text-orange-400" : "text-muted-foreground/30"}`} />
+                                    </td>
+                                  )}
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Public DNS Lookup */}
+                  <div className="border-t pt-4 space-y-2">
+                    <div className="flex gap-2 items-center">
+                      <Input
+                        className="h-8 w-28 text-sm"
+                        placeholder="@ or www"
+                        value={lookupSubdomain}
+                        onChange={(e) => setLookupSubdomain(e.target.value || "@")}
+                      />
+                      <span className="text-xs text-muted-foreground">.{domain?.fqdn}</span>
+                      <Button variant="outline" size="sm" onClick={handleDNSLookup} disabled={loadingLookup}>
+                        <RefreshCw className={`h-4 w-4 mr-2 ${loadingLookup ? "animate-spin" : ""}`} />
+                        Public Lookup
+                      </Button>
+                    </div>
+                    {dnsLookupResult && (
+                      <div className="grid grid-cols-3 gap-2">
+                        {Object.entries(dnsLookupResult.results).map(([type, data]) => (
+                          <div key={type} className="p-2 rounded bg-background/50 text-xs">
+                            <div className="font-medium text-muted-foreground mb-1">{type}</div>
+                            {data.records.length > 0 ? (
+                              <div className="space-y-0.5">
+                                {data.records.map((r, i) => (
+                                  <code key={i} className="block font-mono text-foreground truncate" title={r}>{r}</code>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground/50">—</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </>
             )}
