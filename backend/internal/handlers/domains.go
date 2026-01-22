@@ -20,6 +20,7 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string) 
 		SSLMode   string `json:"ssl_mode"`
 		Locations []struct {
 			Path       string `json:"path"`
+			MatchType  string `json:"match_type"` // prefix, exact, regex
 			Type       string `json:"type"`
 			StaticType string `json:"static_type"`
 			ProxyURL   string `json:"proxy_url"`
@@ -38,13 +39,14 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string) 
 	config := "server {\n"
 	config += "    listen 80;\n"
 	if structured.SSLMode != "disabled" {
-		config += "    listen 443 ssl;\n"
+		config += "    listen 443 ssl http2;\n"
 	}
 	config += "    server_name " + domain + ";\n\n"
 
 	if structured.SSLMode != "disabled" {
 		config += "    ssl_certificate /etc/letsencrypt/live/" + domain + "/fullchain.pem;\n"
-		config += "    ssl_certificate_key /etc/letsencrypt/live/" + domain + "/privkey.pem;\n\n"
+		config += "    ssl_certificate_key /etc/letsencrypt/live/" + domain + "/privkey.pem;\n"
+		config += "    ssl_protocols TLSv1.2 TLSv1.3;\n\n"
 	}
 
 	if structured.CORS.Enabled && structured.CORS.AllowAll {
@@ -54,7 +56,17 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string) 
 	}
 
 	for _, loc := range structured.Locations {
-		config += "    location " + loc.Path + " {\n"
+		// Build location directive based on match type
+		locationDirective := "    location "
+		switch loc.MatchType {
+		case "exact":
+			locationDirective += "= "
+		case "regex":
+			locationDirective += "~ "
+		// "prefix" or empty = default prefix match (no modifier)
+		}
+		locationDirective += loc.Path + " {\n"
+		config += locationDirective
 		if loc.Type == "proxy" && loc.ProxyURL != "" {
 			config += "        proxy_pass " + loc.ProxyURL + ";\n"
 			config += "        proxy_set_header Host $host;\n"

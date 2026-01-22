@@ -28,6 +28,7 @@ type NginxConfigStructured struct {
 
 type LocationConfig struct {
 	Path       string `json:"path"`
+	MatchType  string `json:"match_type"`  // prefix (default), exact, regex
 	Type       string `json:"type"`        // proxy, static
 	StaticType string `json:"static_type"` // local, landing (only for static type)
 	ProxyURL   string `json:"proxy_url,omitempty"`

@@ -227,6 +227,7 @@ export interface NginxConfigStructured {
 
 export interface LocationConfig {
   path: string;
+  match_type?: string;  // prefix (default), exact, regex
   type: string;        // proxy, static
   static_type?: string; // local, landing (for static type)
   proxy_url?: string;

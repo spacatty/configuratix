@@ -35,7 +35,7 @@ export default function NginxConfigsPage() {
   const [formSslEmail, setFormSslEmail] = useState("");
   const [formCorsEnabled, setFormCorsEnabled] = useState(true);
   const [formCorsAllowAll, setFormCorsAllowAll] = useState(true);
-  const [formLocations, setFormLocations] = useState<LocationConfig[]>([{ path: "/", type: "proxy", proxy_url: "" }]);
+  const [formLocations, setFormLocations] = useState<LocationConfig[]>([{ path: "/", match_type: "prefix", type: "proxy", proxy_url: "" }]);
   const [formRawText, setFormRawText] = useState("");
   
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -283,9 +283,19 @@ export default function NginxConfigsPage() {
     <Card key={`${keyPrefix}-${index}`} className="border-border/50">
       <CardContent className="p-3 space-y-3">
         <div className="flex items-center gap-2">
+          <Select value={loc.match_type || "prefix"} onValueChange={(value) => updateLocation(index, { match_type: value })}>
+            <SelectTrigger className="w-24" title="Match Type">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="prefix">Prefix</SelectItem>
+              <SelectItem value="exact">Exact =</SelectItem>
+              <SelectItem value="regex">Regex ~</SelectItem>
+            </SelectContent>
+          </Select>
           <Input placeholder="/" value={loc.path} onChange={(e) => updateLocation(index, { path: e.target.value })} className="flex-1" />
           <Select value={loc.type} onValueChange={(value) => updateLocation(index, { type: value })}>
-            <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="proxy">Proxy</SelectItem>
               <SelectItem value="static">Static</SelectItem>
