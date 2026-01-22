@@ -76,7 +76,7 @@ func (h *ConfigsHandler) ReadConfig(w http.ResponseWriter, r *http.Request) {
 
 	jobID := uuid.New()
 	_, err = h.db.Exec(`
-		INSERT INTO jobs (id, agent_id, type, payload, status, created_at, updated_at)
+		INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
 		VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
 	`, jobID, agentID, payload)
 	if err != nil {
@@ -148,7 +148,7 @@ func (h *ConfigsHandler) WriteConfig(w http.ResponseWriter, r *http.Request) {
 
 	jobID := uuid.New()
 	_, err = h.db.Exec(`
-		INSERT INTO jobs (id, agent_id, type, payload, status, created_at, updated_at)
+		INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
 		VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
 	`, jobID, agentID, payload)
 	if err != nil {
@@ -195,7 +195,7 @@ func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 
 	jobID := uuid.New()
 	_, err = h.db.Exec(`
-		INSERT INTO jobs (id, agent_id, type, payload, status, created_at, updated_at)
+		INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
 		VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
 	`, jobID, agentID, payload)
 	if err != nil {
