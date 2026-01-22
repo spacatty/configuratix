@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -17,11 +17,22 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
   const termRef = useRef<Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const mountedRef = useRef(true);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!terminalRef.current) return;
+  const connect = useCallback(() => {
+    if (!terminalRef.current || !mountedRef.current) return;
+
+    // Clean up existing terminal/websocket
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    if (termRef.current) {
+      termRef.current.dispose();
+      termRef.current = null;
+    }
 
     // Create terminal
     const term = new Terminal({
@@ -60,7 +71,13 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
     term.open(terminalRef.current);
-    fitAddon.fit();
+    
+    // Small delay to ensure DOM is ready
+    setTimeout(() => {
+      if (mountedRef.current) {
+        fitAddon.fit();
+      }
+    }, 50);
 
     termRef.current = term;
     fitAddonRef.current = fitAddon;
@@ -73,6 +90,10 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
     const ws = new WebSocket(`${wsUrl}/api/machines/${machineId}/terminal?token=${token}`);
 
     ws.onopen = () => {
+      if (!mountedRef.current) {
+        ws.close();
+        return;
+      }
       setConnected(true);
       setError(null);
       term.writeln("\x1b[32m● Connected!\x1b[0m");
@@ -87,6 +108,7 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
     };
 
     ws.onmessage = (event) => {
+      if (!mountedRef.current) return;
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === "output") {
@@ -108,20 +130,24 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
     };
 
     ws.onerror = () => {
+      if (!mountedRef.current) return;
       setError("WebSocket connection failed");
       term.writeln("\x1b[31m● Connection error\x1b[0m");
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      if (!mountedRef.current) return;
       setConnected(false);
-      term.writeln("");
-      term.writeln("\x1b[31m● Disconnected\x1b[0m");
+      if (event.wasClean) {
+        term.writeln("");
+        term.writeln("\x1b[31m● Disconnected\x1b[0m");
+      }
     };
 
     wsRef.current = ws;
 
     // Handle input
-    term.onData((data) => {
+    const inputHandler = term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
           type: "input",
@@ -132,6 +158,7 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
 
     // Handle resize
     const handleResize = () => {
+      if (!mountedRef.current) return;
       fitAddon.fit();
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
@@ -146,10 +173,33 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
 
     return () => {
       window.removeEventListener("resize", handleResize);
-      ws.close();
-      term.dispose();
+      inputHandler.dispose();
     };
   }, [machineId, apiUrl, token]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    
+    // Small delay to avoid React Strict Mode double-mount issues
+    const timeoutId = setTimeout(() => {
+      if (mountedRef.current) {
+        connect();
+      }
+    }, 100);
+
+    return () => {
+      mountedRef.current = false;
+      clearTimeout(timeoutId);
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      if (termRef.current) {
+        termRef.current.dispose();
+        termRef.current = null;
+      }
+    };
+  }, [connect]);
 
   return (
     <div className="relative h-full">
@@ -172,4 +222,3 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
     </div>
   );
 }
-
