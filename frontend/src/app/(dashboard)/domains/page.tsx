@@ -755,13 +755,6 @@ function DNSSettingsDialog({
   // Form state
   const [dnsMode, setDnsMode] = useState("external");
   const [dnsAccountId, setDnsAccountId] = useState<string>("");
-  const [ipAddress, setIpAddress] = useState("");
-  const [isWildcard, setIsWildcard] = useState(false);
-  const [httpsSendProxy, setHttpsSendProxy] = useState(false);
-  const [httpInPorts, setHttpInPorts] = useState("80");
-  const [httpOutPorts, setHttpOutPorts] = useState("80");
-  const [httpsInPorts, setHttpsInPorts] = useState("443");
-  const [httpsOutPorts, setHttpsOutPorts] = useState("443");
 
   // New record form
   const [newRecord, setNewRecord] = useState({
@@ -771,19 +764,21 @@ function DNSSettingsDialog({
     ttl: 600,
     priority: 10,
     proxied: false,
+    customPorts: false,
+    httpInPort: 80,
+    httpOutPort: 80,
+    httpsInPort: 443,
+    httpsOutPort: 443,
   });
+  
+  // Get selected account provider
+  const selectedAccount = dnsAccounts.find(a => a.id === dnsAccountId);
+  const isCloudflare = selectedAccount?.provider === "cloudflare";
 
   useEffect(() => {
     if (domain && open) {
       setDnsMode(domain.dns_mode || "external");
       setDnsAccountId(domain.dns_account_id || "");
-      setIpAddress(domain.ip_address || "");
-      setIsWildcard(domain.is_wildcard || false);
-      setHttpsSendProxy(domain.https_send_proxy || false);
-      setHttpInPorts((domain.http_incoming_ports || [80]).join(", "));
-      setHttpOutPorts((domain.http_outgoing_ports || [80]).join(", "));
-      setHttpsInPorts((domain.https_incoming_ports || [443]).join(", "));
-      setHttpsOutPorts((domain.https_outgoing_ports || [443]).join(", "));
       setExpectedNS(null);
       setNsStatus(null);
       loadRecords();
@@ -832,24 +827,13 @@ function DNSSettingsDialog({
     }
   };
 
-  const parsePorts = (str: string): number[] => {
-    return str.split(",").map((p) => parseInt(p.trim())).filter((p) => !isNaN(p) && p > 0);
-  };
-
   const handleSaveSettings = async () => {
     if (!domain) return;
     setLoading(true);
     try {
       await api.updateDomainDNS(domain.id, {
         dns_mode: dnsMode,
-        dns_account_id: dnsAccountId || "", // Empty string to unlink, not null
-        ip_address: ipAddress || undefined,
-        is_wildcard: isWildcard,
-        https_send_proxy: httpsSendProxy,
-        http_incoming_ports: parsePorts(httpInPorts),
-        http_outgoing_ports: parsePorts(httpOutPorts),
-        https_incoming_ports: parsePorts(httpsInPorts),
-        https_outgoing_ports: parsePorts(httpsOutPorts),
+        dns_account_id: dnsAccountId || "", // Empty string to unlink
       });
       toast.success("DNS settings saved");
       onSave();
@@ -883,9 +867,25 @@ function DNSSettingsDialog({
         value: newRecord.value,
         ttl: newRecord.ttl,
         priority: newRecord.record_type === "MX" ? newRecord.priority : undefined,
-        proxied: newRecord.proxied,
+        proxied: isCloudflare ? newRecord.proxied : false,
+        http_incoming_port: newRecord.customPorts ? newRecord.httpInPort : undefined,
+        http_outgoing_port: newRecord.customPorts ? newRecord.httpOutPort : undefined,
+        https_incoming_port: newRecord.customPorts ? newRecord.httpsInPort : undefined,
+        https_outgoing_port: newRecord.customPorts ? newRecord.httpsOutPort : undefined,
       });
-      setNewRecord({ name: "", record_type: "A", value: "", ttl: 600, priority: 10, proxied: false });
+      setNewRecord({ 
+        name: "", 
+        record_type: "A", 
+        value: "", 
+        ttl: 600, 
+        priority: 10, 
+        proxied: false, 
+        customPorts: false,
+        httpInPort: 80,
+        httpOutPort: 80,
+        httpsInPort: 443,
+        httpsOutPort: 443,
+      });
       loadRecords();
       toast.success("Record added");
     } catch (err: unknown) {
@@ -1113,60 +1113,6 @@ function DNSSettingsDialog({
                   )}
                 </div>
 
-                {/* IP Address */}
-                <div className="space-y-2">
-                  <Label className="text-sm font-medium">IP Address</Label>
-                  <Input
-                    className="h-10 w-full sm:w-60"
-                    placeholder="192.168.1.100"
-                    value={ipAddress}
-                    onChange={(e) => setIpAddress(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">Default IP for A records</p>
-                </div>
-
-                {/* Options Row */}
-                <div className="flex flex-wrap gap-6">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox
-                      id="wildcard"
-                      checked={isWildcard}
-                      onCheckedChange={(checked) => setIsWildcard(!!checked)}
-                    />
-                    <Label htmlFor="wildcard" className="text-sm font-normal cursor-pointer">Wildcard (*.domain)</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Checkbox
-                      id="sendProxy"
-                      checked={httpsSendProxy}
-                      onCheckedChange={(checked) => setHttpsSendProxy(!!checked)}
-                    />
-                    <Label htmlFor="sendProxy" className="text-sm font-normal cursor-pointer">HTTPS: SEND-PROXY</Label>
-                  </div>
-                </div>
-
-                {/* Ports Configuration */}
-                <div className="space-y-3">
-                  <Label className="text-sm font-medium">Port Configuration</Label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">HTTP Incoming</Label>
-                      <Input className="h-9" value={httpInPorts} onChange={(e) => setHttpInPorts(e.target.value)} placeholder="80" />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">HTTP Outgoing</Label>
-                      <Input className="h-9" value={httpOutPorts} onChange={(e) => setHttpOutPorts(e.target.value)} placeholder="80" />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">HTTPS Incoming</Label>
-                      <Input className="h-9" value={httpsInPorts} onChange={(e) => setHttpsInPorts(e.target.value)} placeholder="443" />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">HTTPS Outgoing</Label>
-                      <Input className="h-9" value={httpsOutPorts} onChange={(e) => setHttpsOutPorts(e.target.value)} placeholder="443" />
-                    </div>
-                  </div>
-                </div>
               </>
             )}
 
@@ -1197,10 +1143,12 @@ function DNSSettingsDialog({
             ) : (
               <>
                 {/* Add Record Form */}
-                <div className="p-4 border rounded-lg bg-muted/10">
-                  <Label className="text-sm font-medium mb-3 block">Add New Record</Label>
-                  <div className="flex gap-3 items-end">
-                    <div className="w-32 space-y-1.5">
+                <div className="p-4 border rounded-lg bg-muted/10 space-y-4">
+                  <Label className="text-sm font-medium">Add New Record</Label>
+                  
+                  {/* Main fields row */}
+                  <div className="grid grid-cols-12 gap-3 items-end">
+                    <div className="col-span-2 space-y-1.5">
                       <Label className="text-xs text-muted-foreground">Name</Label>
                       <Input
                         className="h-10"
@@ -1209,7 +1157,7 @@ function DNSSettingsDialog({
                         onChange={(e) => setNewRecord({ ...newRecord, name: e.target.value })}
                       />
                     </div>
-                    <div className="w-28 space-y-1.5">
+                    <div className="col-span-2 space-y-1.5">
                       <Label className="text-xs text-muted-foreground">Type</Label>
                       <Select
                         value={newRecord.record_type}
@@ -1227,7 +1175,7 @@ function DNSSettingsDialog({
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="flex-1 space-y-1.5">
+                    <div className="col-span-4 space-y-1.5">
                       <Label className="text-xs text-muted-foreground">Value</Label>
                       <Input
                         className="h-10"
@@ -1236,7 +1184,7 @@ function DNSSettingsDialog({
                         onChange={(e) => setNewRecord({ ...newRecord, value: e.target.value })}
                       />
                     </div>
-                    <div className="w-24 space-y-1.5">
+                    <div className="col-span-2 space-y-1.5">
                       <Label className="text-xs text-muted-foreground">TTL</Label>
                       <Input
                         className="h-10"
@@ -1245,10 +1193,80 @@ function DNSSettingsDialog({
                         onChange={(e) => setNewRecord({ ...newRecord, ttl: parseInt(e.target.value) || 600 })}
                       />
                     </div>
-                    <Button className="h-10 px-4" onClick={handleAddRecord} disabled={!newRecord.name || !newRecord.value}>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Add
-                    </Button>
+                    <div className="col-span-2">
+                      <Button className="h-10 w-full" onClick={handleAddRecord} disabled={!newRecord.name || !newRecord.value}>
+                        <Plus className="h-4 w-4 mr-2" />
+                        Add
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Options row */}
+                  <div className="flex flex-wrap items-center gap-6 pt-2 border-t border-border/50">
+                    {/* Proxied toggle - Cloudflare only */}
+                    {isCloudflare && (
+                      <div className="flex items-center space-x-2">
+                        <Checkbox
+                          id="newRecordProxied"
+                          checked={newRecord.proxied}
+                          onCheckedChange={(checked) => setNewRecord({ ...newRecord, proxied: !!checked })}
+                        />
+                        <Label htmlFor="newRecordProxied" className="text-sm font-normal cursor-pointer flex items-center gap-1">
+                          <Cloud className={`h-4 w-4 ${newRecord.proxied ? "text-orange-400" : "text-muted-foreground"}`} />
+                          Proxied (CF)
+                        </Label>
+                      </div>
+                    )}
+
+                    {/* Custom Ports toggle */}
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id="newRecordCustomPorts"
+                        checked={newRecord.customPorts}
+                        onCheckedChange={(checked) => setNewRecord({ ...newRecord, customPorts: !!checked })}
+                      />
+                      <Label htmlFor="newRecordCustomPorts" className="text-sm font-normal cursor-pointer">
+                        Custom Ports
+                      </Label>
+                    </div>
+
+                    {/* Port inputs - only show if customPorts enabled */}
+                    {newRecord.customPorts && (
+                      <div className="flex items-center gap-3 ml-4">
+                        <div className="flex items-center gap-1">
+                          <Label className="text-xs text-muted-foreground whitespace-nowrap">HTTP:</Label>
+                          <Input
+                            className="h-8 w-16 text-xs"
+                            type="number"
+                            value={newRecord.httpInPort}
+                            onChange={(e) => setNewRecord({ ...newRecord, httpInPort: parseInt(e.target.value) || 80 })}
+                          />
+                          <span className="text-muted-foreground">→</span>
+                          <Input
+                            className="h-8 w-16 text-xs"
+                            type="number"
+                            value={newRecord.httpOutPort}
+                            onChange={(e) => setNewRecord({ ...newRecord, httpOutPort: parseInt(e.target.value) || 80 })}
+                          />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Label className="text-xs text-muted-foreground whitespace-nowrap">HTTPS:</Label>
+                          <Input
+                            className="h-8 w-16 text-xs"
+                            type="number"
+                            value={newRecord.httpsInPort}
+                            onChange={(e) => setNewRecord({ ...newRecord, httpsInPort: parseInt(e.target.value) || 443 })}
+                          />
+                          <span className="text-muted-foreground">→</span>
+                          <Input
+                            className="h-8 w-16 text-xs"
+                            type="number"
+                            value={newRecord.httpsOutPort}
+                            onChange={(e) => setNewRecord({ ...newRecord, httpsOutPort: parseInt(e.target.value) || 443 })}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1261,6 +1279,8 @@ function DNSSettingsDialog({
                         <th className="text-left p-2 font-medium">Type</th>
                         <th className="text-left p-2 font-medium">Value</th>
                         <th className="text-left p-2 font-medium">TTL</th>
+                        {isCloudflare && <th className="text-left p-2 font-medium">Proxy</th>}
+                        <th className="text-left p-2 font-medium">Ports</th>
                         <th className="text-left p-2 font-medium">Status</th>
                         <th className="w-10"></th>
                       </tr>
@@ -1268,45 +1288,66 @@ function DNSSettingsDialog({
                     <tbody>
                       {records.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="p-8 text-center text-muted-foreground">
+                          <td colSpan={isCloudflare ? 8 : 7} className="p-8 text-center text-muted-foreground">
                             No records yet. Add one above or import from provider.
                           </td>
                         </tr>
                       ) : (
-                        records.map((record) => (
-                          <tr key={record.id} className="border-t hover:bg-muted/30">
-                            <td className="p-2 font-mono">{record.name}</td>
-                            <td className="p-2">
-                              <Badge variant="outline">{record.record_type}</Badge>
-                            </td>
-                            <td className="p-2 font-mono text-xs max-w-[200px] truncate">{record.value}</td>
-                            <td className="p-2">{record.ttl}</td>
-                            <td className="p-2">
-                              {record.sync_status === "synced" && (
-                                <Badge className="bg-green-500/20 text-green-400 text-xs">Synced</Badge>
+                        records.map((record) => {
+                          const hasCustomPorts = record.http_incoming_port || record.https_incoming_port;
+                          return (
+                            <tr key={record.id} className="border-t hover:bg-muted/30">
+                              <td className="p-2 font-mono">{record.name}</td>
+                              <td className="p-2">
+                                <Badge variant="outline">{record.record_type}</Badge>
+                              </td>
+                              <td className="p-2 font-mono text-xs max-w-[180px] truncate" title={record.value}>{record.value}</td>
+                              <td className="p-2">{record.ttl}</td>
+                              {isCloudflare && (
+                                <td className="p-2">
+                                  {record.proxied ? (
+                                    <Cloud className="h-4 w-4 text-orange-400" title="Proxied" />
+                                  ) : (
+                                    <Cloud className="h-4 w-4 text-muted-foreground/30" title="DNS only" />
+                                  )}
+                                </td>
                               )}
-                              {record.sync_status === "pending" && (
-                                <Badge className="bg-yellow-500/20 text-yellow-400 text-xs">Pending</Badge>
-                              )}
-                              {record.sync_status === "conflict" && (
-                                <Badge className="bg-red-500/20 text-red-400 text-xs">Conflict</Badge>
-                              )}
-                              {record.sync_status === "local_only" && (
-                                <Badge className="bg-blue-500/20 text-blue-400 text-xs">Local Only</Badge>
-                              )}
-                            </td>
-                            <td className="p-2">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 w-6 p-0 hover:text-destructive"
-                                onClick={() => handleDeleteRecord(record.id)}
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
-                            </td>
-                          </tr>
-                        ))
+                              <td className="p-2 text-xs text-muted-foreground">
+                                {hasCustomPorts ? (
+                                  <span title={`HTTP: ${record.http_incoming_port || 80}→${record.http_outgoing_port || 80}, HTTPS: ${record.https_incoming_port || 443}→${record.https_outgoing_port || 443}`}>
+                                    {record.http_incoming_port || 80}/{record.https_incoming_port || 443}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground/50">default</span>
+                                )}
+                              </td>
+                              <td className="p-2">
+                                {record.sync_status === "synced" && (
+                                  <Badge className="bg-green-500/20 text-green-400 text-xs">Synced</Badge>
+                                )}
+                                {record.sync_status === "pending" && (
+                                  <Badge className="bg-yellow-500/20 text-yellow-400 text-xs">Pending</Badge>
+                                )}
+                                {record.sync_status === "conflict" && (
+                                  <Badge className="bg-red-500/20 text-red-400 text-xs">Conflict</Badge>
+                                )}
+                                {record.sync_status === "local_only" && (
+                                  <Badge className="bg-blue-500/20 text-blue-400 text-xs">Local Only</Badge>
+                                )}
+                              </td>
+                              <td className="p-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 w-6 p-0 hover:text-destructive"
+                                  onClick={() => handleDeleteRecord(record.id)}
+                                >
+                                  <X className="h-4 w-4" />
+                                </Button>
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
