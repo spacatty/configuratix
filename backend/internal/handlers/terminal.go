@@ -30,6 +30,12 @@ type TerminalHandler struct {
 	sessionsLock sync.RWMutex
 }
 
+// connWithLock wraps a websocket connection with its own write mutex
+type connWithLock struct {
+	conn      *websocket.Conn
+	writeLock sync.Mutex
+}
+
 type TerminalSession struct {
 	MachineID uuid.UUID
 	AgentID   uuid.UUID
@@ -38,8 +44,8 @@ type TerminalSession struct {
 	agentConn     *websocket.Conn
 	agentConnLock sync.Mutex
 
-	// User WebSocket connections
-	userConns     []*websocket.Conn
+	// User WebSocket connections (use connWithLock for safe concurrent writes)
+	userConns     []*connWithLock
 	userConnsLock sync.Mutex
 }
 
@@ -118,15 +124,16 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 	}
 	h.sessionsLock.Unlock()
 
-	// Add this connection to session
+	// Add this connection to session with its own write lock
+	userConn := &connWithLock{conn: conn}
 	session.userConnsLock.Lock()
-	session.userConns = append(session.userConns, conn)
+	session.userConns = append(session.userConns, userConn)
 	session.userConnsLock.Unlock()
 
 	defer func() {
 		session.userConnsLock.Lock()
 		for i, c := range session.userConns {
-			if c == conn {
+			if c.conn == conn {
 				session.userConns = append(session.userConns[:i], session.userConns[i+1:]...)
 				break
 			}
@@ -139,6 +146,8 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 	agentConnected := session.agentConn != nil
 	session.agentConnLock.Unlock()
 
+	// Send initial status message
+	userConn.writeLock.Lock()
 	if agentConnected {
 		conn.WriteJSON(TerminalMessage{
 			Type: "output",
@@ -150,6 +159,7 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 			Data: "\r\n\x1b[32mConnected to terminal session.\x1b[0m\r\n\x1b[33mWaiting for agent connection...\x1b[0m\r\n",
 		})
 	}
+	userConn.writeLock.Unlock()
 
 	// Keepalive ping goroutine
 	done := make(chan struct{})
@@ -161,8 +171,11 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 			case <-done:
 				return
 			case <-ticker.C:
+				userConn.writeLock.Lock()
 				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				if err := conn.WriteJSON(TerminalMessage{Type: "ping"}); err != nil {
+				err := conn.WriteJSON(TerminalMessage{Type: "ping"})
+				userConn.writeLock.Unlock()
+				if err != nil {
 					return
 				}
 			}
@@ -191,7 +204,9 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 			}
 			session.agentConnLock.Unlock()
 		case "ping":
+			userConn.writeLock.Lock()
 			conn.WriteJSON(TerminalMessage{Type: "pong"})
+			userConn.writeLock.Unlock()
 		case "pong":
 			// Keepalive response, ignore
 		}
@@ -273,8 +288,16 @@ func (h *TerminalHandler) AgentTerminalConnect(w http.ResponseWriter, r *http.Re
 			case <-agentDone:
 				return
 			case <-ticker.C:
-				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				if err := conn.WriteJSON(TerminalMessage{Type: "ping"}); err != nil {
+				session.agentConnLock.Lock()
+				if session.agentConn != nil {
+					session.agentConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+					err := session.agentConn.WriteJSON(TerminalMessage{Type: "ping"})
+					session.agentConnLock.Unlock()
+					if err != nil {
+						return
+					}
+				} else {
+					session.agentConnLock.Unlock()
 					return
 				}
 			}
@@ -298,7 +321,11 @@ func (h *TerminalHandler) AgentTerminalConnect(w http.ResponseWriter, r *http.Re
 			// Relay output to all users
 			h.broadcastToUsers(session, msg)
 		case "ping":
-			conn.WriteJSON(TerminalMessage{Type: "pong"})
+			session.agentConnLock.Lock()
+			if session.agentConn != nil {
+				session.agentConn.WriteJSON(TerminalMessage{Type: "pong"})
+			}
+			session.agentConnLock.Unlock()
 		case "pong":
 			// Keepalive response, ignore
 		}
@@ -316,11 +343,13 @@ func (h *TerminalHandler) broadcastToUsers(session *TerminalSession, msg Termina
 	defer session.userConnsLock.Unlock()
 
 	data, _ := json.Marshal(msg)
-	for _, conn := range session.userConns {
-		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+	for _, userConn := range session.userConns {
+		userConn.writeLock.Lock()
+		userConn.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if err := userConn.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 			log.Printf("Failed to write to user conn: %v", err)
 		}
+		userConn.writeLock.Unlock()
 	}
 }
 
