@@ -20,22 +20,25 @@ type NginxConfig struct {
 
 // NginxConfigStructured represents the structured form data
 type NginxConfigStructured struct {
-	SSLMode   string             `json:"ssl_mode"`   // disabled, allow_http, redirect_https
-	SSLEmail  string             `json:"ssl_email,omitempty"` // Email for SSL certificate issuance
-	Locations []LocationConfig   `json:"locations"`
-	CORS      *CORSConfig        `json:"cors"`
+	SSLMode         string           `json:"ssl_mode"`                    // disabled, allow_http, redirect_https
+	SSLEmail        string           `json:"ssl_email,omitempty"`         // Email for SSL certificate issuance
+	Locations       []LocationConfig `json:"locations"`
+	CORS            *CORSConfig      `json:"cors"`
+	AutoindexOff    *bool            `json:"autoindex_off,omitempty"`     // Deny directory listing (default: true)
+	DenyAllCatchall *bool            `json:"deny_all_catchall,omitempty"` // Add deny all catch-all (default: true)
 }
 
 type LocationConfig struct {
-	Path       string `json:"path"`
-	MatchType  string `json:"match_type"`  // prefix (default), exact, regex
-	Type       string `json:"type"`        // proxy, static
-	StaticType string `json:"static_type"` // local, static (deploy static content from uploaded archive)
-	ProxyURL   string `json:"proxy_url,omitempty"`
-	Root       string `json:"root,omitempty"`
-	Index      string `json:"index,omitempty"`
-	LandingID  string `json:"landing_id,omitempty"` // UUID of landing page
-	UsePHP     bool   `json:"use_php"`              // Enable PHP-FPM for this location
+	Path                  string `json:"path"`
+	MatchType             string `json:"match_type"`                        // prefix (default), exact, regex
+	Type                  string `json:"type"`                              // proxy, static
+	StaticType            string `json:"static_type"`                       // local, static (deploy static content from uploaded archive)
+	ProxyURL              string `json:"proxy_url,omitempty"`
+	Root                  string `json:"root,omitempty"`
+	Index                 string `json:"index,omitempty"`
+	LandingID             string `json:"landing_id,omitempty"`              // UUID of static content
+	UsePHP                bool   `json:"use_php"`                           // Enable PHP-FPM for this location
+	ReplaceLandingContent *bool  `json:"replace_landing_content,omitempty"` // Replace content on redeploy (default: true)
 }
 
 type CORSConfig struct {
