@@ -63,6 +63,7 @@ func (db *DB) RunMigrations() error {
 		"006_ufw_rules.sql",
 		"012_php_runtimes.sql",
 		"013_seed_php_templates.sql",
+		"014_dns_providers.sql",
 	}
 
 	// Get current working directory for debugging
