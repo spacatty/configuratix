@@ -35,6 +35,7 @@ export default function NginxConfigsPage() {
   const [formSslEmail, setFormSslEmail] = useState("");
   const [formCorsEnabled, setFormCorsEnabled] = useState(true);
   const [formCorsAllowAll, setFormCorsAllowAll] = useState(true);
+  const [formEnablePHP, setFormEnablePHP] = useState(false);
   const [formLocations, setFormLocations] = useState<LocationConfig[]>([{ path: "/", match_type: "prefix", type: "proxy", proxy_url: "" }]);
   const [formRawText, setFormRawText] = useState("");
   
@@ -64,6 +65,7 @@ export default function NginxConfigsPage() {
     setFormSslEmail("");
     setFormCorsEnabled(true);
     setFormCorsAllowAll(true);
+    setFormEnablePHP(false);
     setFormLocations([{ path: "/", type: "proxy", proxy_url: "" }]);
     setFormRawText("");
   };
@@ -71,10 +73,15 @@ export default function NginxConfigsPage() {
   const handleCreateConfig = async () => {
     if (!formName.trim()) return;
     try {
+      // Apply PHP setting to all static locations
+      const locationsWithPHP = formLocations.map(loc => ({
+        ...loc,
+        use_php: loc.type === "static" ? formEnablePHP : false,
+      }));
       const structured: NginxConfigStructured = {
         ssl_mode: formSslMode,
         ssl_email: formSslEmail || undefined,
-        locations: formLocations,
+        locations: locationsWithPHP,
         cors: { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
       };
       await api.createNginxConfig({
@@ -96,10 +103,15 @@ export default function NginxConfigsPage() {
   const handleUpdateConfig = async () => {
     if (!selectedConfig || !formName.trim()) return;
     try {
+      // Apply PHP setting to all static locations
+      const locationsWithPHP = formLocations.map(loc => ({
+        ...loc,
+        use_php: loc.type === "static" ? formEnablePHP : false,
+      }));
       const structured: NginxConfigStructured = {
         ssl_mode: formSslMode,
         ssl_email: formSslEmail || undefined,
-        locations: formLocations,
+        locations: locationsWithPHP,
         cors: { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
       };
       await api.updateNginxConfig(selectedConfig.id, {
@@ -145,6 +157,8 @@ export default function NginxConfigsPage() {
       setFormCorsEnabled(structured.cors?.enabled ?? true);
       setFormCorsAllowAll(structured.cors?.allow_all ?? true);
       setFormLocations(structured.locations || [{ path: "/", type: "proxy", proxy_url: "" }]);
+      // Check if any static location has PHP enabled
+      setFormEnablePHP(structured.locations?.some(loc => loc.use_php) ?? false);
     }
     setShowEditDialog(true);
   };
@@ -251,6 +265,23 @@ export default function NginxConfigsPage() {
       },
     },
     {
+      accessorKey: "php",
+      header: "PHP",
+      cell: ({ row }) => {
+        const structured = row.original.structured_json as NginxConfigStructured | null;
+        const hasPHP = structured?.locations?.some(loc => loc.use_php);
+        return hasPHP ? (
+          <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30 text-xs">
+            Enabled
+          </Badge>
+        ) : (
+          <Badge className="bg-zinc-500/20 text-zinc-400 border-zinc-500/30 text-xs">
+            —
+          </Badge>
+        );
+      },
+    },
+    {
       id: "actions",
       cell: ({ row }) => {
         const config = row.original;
@@ -337,10 +368,6 @@ export default function NginxConfigsPage() {
                 <Input placeholder="index.html" value={loc.index || ""} onChange={(e) => updateLocation(index, { index: e.target.value })} />
               </>
             )}
-            <div className="flex items-center justify-between pt-2 border-t">
-              <Label className="text-sm">Enable PHP</Label>
-              <Switch checked={loc.use_php || false} onCheckedChange={(checked) => updateLocation(index, { use_php: checked })} />
-            </div>
           </div>
         )}
       </CardContent>
@@ -394,6 +421,15 @@ export default function NginxConfigsPage() {
                 <Switch checked={formCorsAllowAll} onCheckedChange={setFormCorsAllowAll} />
               </div>
             )}
+          </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label>Enable PHP</Label>
+                <p className="text-xs text-muted-foreground mt-1">Process .php files via PHP-FPM (requires PHP runtime on target machine)</p>
+              </div>
+              <Switch checked={formEnablePHP} onCheckedChange={setFormEnablePHP} />
+            </div>
           </div>
           <div className="space-y-3">
             <div className="flex items-center justify-between">
