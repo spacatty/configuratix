@@ -221,7 +221,7 @@ tasks:
     cmds:
       - task: build:agent
       - echo "Agent binary ready at agent/bin/configuratix-agent"
-      - echo "Copy to server with: scp agent/bin/configuratix-agent user@server:/usr/local/bin/"
+      - 'echo "Copy to server with: scp agent/bin/configuratix-agent user@server:/usr/local/bin/"'
 
   # ============================================
   # CLEAN
