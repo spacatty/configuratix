@@ -554,18 +554,26 @@ export default function NginxConfigsPage() {
                   <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm space-y-2">
                     <p className="font-medium text-amber-400">⚠️ Backend Configuration Required</p>
                     <p className="text-muted-foreground text-xs">
-                      PROXY Protocol is enabled to forward real client IPs. Your backend nginx must be configured:
+                      Both HTTP (for certbot) and HTTPS (passthrough) are proxied. Your backend nginx:
                     </p>
                     <pre className="text-xs bg-black/30 p-2 rounded overflow-x-auto font-mono text-amber-300/80">{`server {
-    listen 443 ssl proxy_protocol;
+    listen 80;                      # HTTP for certbot
+    listen 443 ssl proxy_protocol; # HTTPS with PROXY Protocol
     
-    set_real_ip_from 0.0.0.0/0;  # Or proxy IP
+    set_real_ip_from 0.0.0.0/0;
     real_ip_header proxy_protocol;
     
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-    ...
+    ssl_certificate /etc/letsencrypt/live/domain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/domain/privkey.pem;
+    
+    # Certbot will work, redirect HTTP->HTTPS here
+    if ($scheme = http) {
+        return 301 https://$host$request_uri;
+    }
 }`}</pre>
+                    <p className="text-muted-foreground text-xs">
+                      Run <code className="bg-black/30 px-1 rounded">certbot --nginx</code> on the backend to issue certificates.
+                    </p>
                   </div>
                 </div>
               )}
