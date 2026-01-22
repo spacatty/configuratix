@@ -52,7 +52,7 @@ export default function LandingsPage() {
       setLandings(data);
     } catch (err) {
       console.error("Failed to load landings:", err);
-      toast.error("Failed to load landings");
+      toast.error("Failed to load content");
     } finally {
       setLoading(false);
     }
@@ -75,14 +75,14 @@ export default function LandingsPage() {
     setUploading(true);
     try {
       await api.uploadLanding(landingName, selectedFile);
-      toast.success("Landing page uploaded successfully");
+      toast.success("Static content uploaded successfully");
       setShowUploadDialog(false);
       setLandingName("");
       setSelectedFile(null);
       loadLandings();
     } catch (err) {
       console.error("Failed to upload landing:", err);
-      toast.error("Failed to upload landing page");
+      toast.error("Failed to upload static content");
     } finally {
       setUploading(false);
     }
@@ -97,13 +97,13 @@ export default function LandingsPage() {
     if (!landingToDelete) return;
     try {
       await api.deleteLanding(landingToDelete.id);
-      toast.success("Landing page deleted");
+      toast.success("Static content deleted");
       setShowDeleteDialog(false);
       setLandingToDelete(null);
       loadLandings();
     } catch (err) {
       console.error("Failed to delete landing:", err);
-      toast.error("Failed to delete landing page");
+      toast.error("Failed to delete content");
     }
   };
 
@@ -135,11 +135,19 @@ export default function LandingsPage() {
     {
       accessorKey: "type",
       header: "Type",
-      cell: ({ row }) => (
-        <Badge className={row.original.type === "php" ? "bg-purple-500/20 text-purple-400 border-purple-500/30" : "bg-blue-500/20 text-blue-400 border-blue-500/30"}>
-          {row.original.type.toUpperCase()}
-        </Badge>
-      ),
+      cell: ({ row }) => {
+        const type = row.original.type;
+        const badgeClass = type === "php" 
+          ? "bg-purple-500/20 text-purple-400 border-purple-500/30"
+          : type === "asset"
+          ? "bg-orange-500/20 text-orange-400 border-orange-500/30"
+          : "bg-blue-500/20 text-blue-400 border-blue-500/30";
+        return (
+          <Badge className={badgeClass}>
+            {type.toUpperCase()}
+          </Badge>
+        );
+      },
     },
     {
       accessorKey: "file_size",
@@ -223,22 +231,22 @@ export default function LandingsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Landing Pages</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">Static Content</h1>
           <p className="text-muted-foreground mt-1">
-            Upload and manage static HTML/PHP landing pages for your domains.
+            Upload and manage static files, HTML pages, or PHP apps for your domains.
           </p>
         </div>
         <Button onClick={() => setShowUploadDialog(true)}>
           <Plus className="mr-2 h-4 w-4" />
-          Upload Landing
+          Upload Content
         </Button>
       </div>
 
       {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-4">
         <Card className="border-border/50 bg-card/50">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Landings</CardTitle>
+            <CardTitle className="text-sm font-medium">Total</CardTitle>
             <FileArchive className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -247,7 +255,7 @@ export default function LandingsPage() {
         </Card>
         <Card className="border-border/50 bg-card/50">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">HTML Pages</CardTitle>
+            <CardTitle className="text-sm font-medium">HTML</CardTitle>
             <FileArchive className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
@@ -258,7 +266,7 @@ export default function LandingsPage() {
         </Card>
         <Card className="border-border/50 bg-card/50">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">PHP Pages</CardTitle>
+            <CardTitle className="text-sm font-medium">PHP</CardTitle>
             <FileArchive className="h-4 w-4 text-purple-500" />
           </CardHeader>
           <CardContent>
@@ -267,14 +275,25 @@ export default function LandingsPage() {
             </div>
           </CardContent>
         </Card>
+        <Card className="border-border/50 bg-card/50">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Assets</CardTitle>
+            <FileArchive className="h-4 w-4 text-orange-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-orange-500">
+              {landings.filter(l => l.type === "asset").length}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Landings Table */}
+      {/* Static Content Table */}
       <Card className="border-border/50 bg-card/50">
         <CardHeader>
-          <CardTitle className="text-lg">Your Landing Pages</CardTitle>
+          <CardTitle className="text-lg">Your Static Content</CardTitle>
           <CardDescription>
-            Upload ZIP files containing your landing pages. They can be assigned to nginx locations.
+            Upload ZIP files with your content. Type is auto-detected: PHP → HTML → Asset.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -282,7 +301,7 @@ export default function LandingsPage() {
             columns={columns} 
             data={landings}
             searchKey="name"
-            searchPlaceholder="Search landings..."
+            searchPlaceholder="Search content..."
           />
         </CardContent>
       </Card>
@@ -291,17 +310,17 @@ export default function LandingsPage() {
       <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Upload Landing Page</DialogTitle>
+            <DialogTitle>Upload Static Content</DialogTitle>
             <DialogDescription>
-              Upload a ZIP file containing your landing page files.
+              Upload a ZIP file with your static content (HTML, PHP, or assets).
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="landing-name">Name</Label>
+              <Label htmlFor="content-name">Name</Label>
               <Input
-                id="landing-name"
-                placeholder="e.g., Marketing Page v2"
+                id="content-name"
+                placeholder="e.g., Marketing Site v2"
                 value={landingName}
                 onChange={(e) => setLandingName(e.target.value)}
               />
@@ -309,7 +328,7 @@ export default function LandingsPage() {
             <div className="space-y-2">
               <Label>Type</Label>
               <p className="text-sm text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
-                Auto-detected from ZIP contents (PHP if .php files found, otherwise HTML)
+                Auto-detected: PHP → HTML → Asset (files for download)
               </p>
             </div>
             <div className="space-y-2">
@@ -362,7 +381,7 @@ export default function LandingsPage() {
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Landing Page</AlertDialogTitle>
+            <AlertDialogTitle>Delete Static Content</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete &quot;{landingToDelete?.name}&quot;? 
               This will also remove it from any nginx configurations using it.

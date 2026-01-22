@@ -176,7 +176,10 @@ func (h *LandingsHandler) UploadLanding(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(landing)
 }
 
-// detectLandingType scans a zip file and returns "php" if any PHP files are found, otherwise "html"
+// detectLandingType scans a zip file and returns:
+// - "php" if any PHP files are found
+// - "html" if any HTML files are found (but no PHP)
+// - "asset" if neither PHP nor HTML files are found (static assets for download)
 func detectLandingType(zipPath string) string {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -185,16 +188,34 @@ func detectLandingType(zipPath string) string {
 	}
 	defer r.Close()
 
+	hasPHP := false
+	hasHTML := false
+
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
+		
+		// Check for PHP files
 		if ext == ".php" || ext == ".phtml" || ext == ".php3" || ext == ".php4" || ext == ".php5" {
-			return "php"
+			hasPHP = true
+			break // PHP takes priority, no need to continue
+		}
+		
+		// Check for HTML files
+		if ext == ".html" || ext == ".htm" {
+			hasHTML = true
 		}
 	}
-	return "html"
+
+	if hasPHP {
+		return "php"
+	}
+	if hasHTML {
+		return "html"
+	}
+	return "asset" // Static files for download (no index page)
 }
 
 // extractZipForPreview extracts zip file to preview directory with security measures

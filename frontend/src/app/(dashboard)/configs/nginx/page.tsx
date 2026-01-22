@@ -351,26 +351,26 @@ export default function NginxConfigsPage() {
         ) : (
           <div className="space-y-2">
             <Select value={loc.static_type || "local"} onValueChange={(value) => updateLocation(index, { static_type: value })}>
-              <SelectTrigger><SelectValue placeholder="Static type" /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder="Source type" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="local">Local Path</SelectItem>
-                <SelectItem value="landing">Landing Page</SelectItem>
+                <SelectItem value="landing">Static Content</SelectItem>
               </SelectContent>
             </Select>
             {loc.static_type === "landing" ? (
               <>
                 <Select value={loc.landing_id || ""} onValueChange={(value) => updateLocation(index, { landing_id: value })}>
-                  <SelectTrigger><SelectValue placeholder="Select a landing page" /></SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="Select static content" /></SelectTrigger>
                   <SelectContent>
                     {landings.length === 0 ? (
-                      <SelectItem value="" disabled>No landings available</SelectItem>
+                      <SelectItem value="" disabled>No content available</SelectItem>
                     ) : landings.map((l) => (
                       <SelectItem key={l.id} value={l.id}>{l.name} ({l.type.toUpperCase()})</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                <Input placeholder="/var/www/html/landing" value={loc.root || ""} onChange={(e) => updateLocation(index, { root: e.target.value })} />
-                <p className="text-xs text-muted-foreground">Target path where landing will be extracted</p>
+                <Input placeholder="/var/www/html/site" value={loc.root || ""} onChange={(e) => updateLocation(index, { root: e.target.value })} />
+                <p className="text-xs text-muted-foreground">Target path where content will be extracted</p>
                 <div className="flex items-center justify-between pt-2 border-t">
                   <div>
                     <Label className="text-sm">Replace Content</Label>

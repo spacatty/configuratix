@@ -239,7 +239,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
                 <SidebarMenuButton asChild isActive={isActive("/landings")}>
                   <a href="/landings" className="flex items-center gap-3">
                     <FileArchive className="h-4 w-4" />
-                    <span>Landings</span>
+                    <span>Static</span>
                   </a>
                 </SidebarMenuButton>
               </SidebarMenuItem>

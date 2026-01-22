@@ -16,7 +16,7 @@ type Landing struct {
 	ID          uuid.UUID  `db:"id" json:"id"`
 	Name        string     `db:"name" json:"name"`
 	OwnerID     uuid.UUID  `db:"owner_id" json:"owner_id"`
-	Type        string     `db:"type" json:"type"` // html, php
+	Type        string     `db:"type" json:"type"` // html, php, asset
 	FileName    string     `db:"file_name" json:"file_name"`
 	FileSize    int64      `db:"file_size" json:"file_size"`
 	StoragePath string     `db:"storage_path" json:"-"` // Internal path, not exposed
