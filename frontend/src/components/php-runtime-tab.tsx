@@ -39,7 +39,7 @@ const AVAILABLE_EXTENSIONS = [
 ];
 
 export function PHPRuntimeTab({ machineId }: PHPRuntimeTabProps) {
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [installing, setInstalling] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [runtime, setRuntime] = useState<PHPRuntime | null>(null);
@@ -51,22 +51,35 @@ export function PHPRuntimeTab({ machineId }: PHPRuntimeTabProps) {
   const [selectedExtensions, setSelectedExtensions] = useState<string[]>(["mysqli", "curl", "mbstring", "xml", "zip"]);
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
 
-  const loadRuntime = useCallback(async () => {
+  // Load runtime without affecting loading state (for polling)
+  const refreshRuntime = useCallback(async () => {
     try {
-      setLoading(true);
       const response = await api.getPHPRuntime(machineId);
       setInstalled(response.installed);
       if (response.runtime) {
         setRuntime(response.runtime);
-        setSelectedVersion(response.runtime.version);
-        setSelectedExtensions(response.runtime.extensions || []);
+        // Only update form state if not currently editing (runtime is installing/removing)
+        if (response.runtime.status === "installing" || response.runtime.status === "removing" || response.runtime.status === "installed") {
+          setSelectedVersion(response.runtime.version);
+          setSelectedExtensions(response.runtime.extensions || []);
+        }
+      } else {
+        setRuntime(null);
       }
     } catch (error) {
       console.error("Failed to load PHP runtime:", error);
-    } finally {
-      setLoading(false);
     }
   }, [machineId]);
+
+  // Initial load with loading state
+  const loadRuntime = useCallback(async () => {
+    try {
+      setInitialLoading(true);
+      await refreshRuntime();
+    } finally {
+      setInitialLoading(false);
+    }
+  }, [refreshRuntime]);
 
   const loadTemplates = useCallback(async () => {
     try {
@@ -82,20 +95,20 @@ export function PHPRuntimeTab({ machineId }: PHPRuntimeTabProps) {
     loadTemplates();
   }, [loadRuntime, loadTemplates]);
 
-  // Reload runtime status periodically when installing/removing
+  // Reload runtime status periodically when installing/removing (no loading flash)
   useEffect(() => {
     if (runtime?.status === "installing" || runtime?.status === "removing") {
-      const interval = setInterval(loadRuntime, 5000);
+      const interval = setInterval(refreshRuntime, 3000);
       return () => clearInterval(interval);
     }
-  }, [runtime?.status, loadRuntime]);
+  }, [runtime?.status, refreshRuntime]);
 
   const handleInstall = async () => {
     try {
       setInstalling(true);
       await api.installPHPRuntime(machineId, selectedVersion, selectedExtensions);
       toast.success("PHP installation started");
-      await loadRuntime();
+      await refreshRuntime();
     } catch (error) {
       toast.error("Failed to start PHP installation: " + (error instanceof Error ? error.message : "Unknown error"));
     } finally {
@@ -108,7 +121,7 @@ export function PHPRuntimeTab({ machineId }: PHPRuntimeTabProps) {
       setInstalling(true);
       await api.updatePHPRuntime(machineId, selectedVersion, selectedExtensions);
       toast.success("PHP update started");
-      await loadRuntime();
+      await refreshRuntime();
     } catch (error) {
       toast.error("Failed to start PHP update: " + (error instanceof Error ? error.message : "Unknown error"));
     } finally {
@@ -121,7 +134,7 @@ export function PHPRuntimeTab({ machineId }: PHPRuntimeTabProps) {
       setRemoving(true);
       await api.removePHPRuntime(machineId);
       toast.success("PHP removal started");
-      await loadRuntime();
+      await refreshRuntime();
     } catch (error) {
       toast.error("Failed to start PHP removal: " + (error instanceof Error ? error.message : "Unknown error"));
     } finally {
@@ -165,7 +178,7 @@ export function PHPRuntimeTab({ machineId }: PHPRuntimeTabProps) {
     }
   };
 
-  if (loading) {
+  if (initialLoading) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -197,7 +210,7 @@ export function PHPRuntimeTab({ machineId }: PHPRuntimeTabProps) {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={loadRuntime}>
+                <Button variant="outline" size="sm" onClick={refreshRuntime}>
                   <RefreshCw className="h-4 w-4 mr-2" />
                   Refresh
                 </Button>
