@@ -170,7 +170,6 @@ require (
 require golang.org/x/net v0.17.0 // indirect
 EOF
 
-go mod download
 
 mkdir -p cmd/agent
 
@@ -1335,6 +1334,10 @@ func getOS() string {
 	return strings.TrimSpace(string(out))
 }
 MAINEOF
+
+# Download dependencies
+echo "Downloading Go dependencies..."
+go mod tidy
 
 go build -o /opt/configuratix/bin/configuratix-agent ./cmd/agent
 cd / && rm -rf /tmp/configuratix-agent-build
