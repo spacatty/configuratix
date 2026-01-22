@@ -395,6 +395,12 @@ const WebSocketTerminal = dynamic(
   { ssr: false, loading: () => <div className="h-[400px] bg-black rounded-lg animate-pulse" /> }
 );
 
+// Dynamically import PHP runtime tab
+const PHPRuntimeTab = dynamic(
+  () => import("@/components/php-runtime-tab").then((mod) => mod.PHPRuntimeTab),
+  { ssr: false, loading: () => <div className="h-[300px] bg-muted/30 rounded-lg animate-pulse" /> }
+);
+
 // Dynamically import Monaco Editor
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { 
   ssr: false, 
@@ -1128,6 +1134,7 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
           <TabsTrigger value="terminal">Terminal</TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
           <TabsTrigger value="configs">Configs</TabsTrigger>
+          <TabsTrigger value="runtimes">Runtimes</TabsTrigger>
           <TabsTrigger value="jobs">Jobs</TabsTrigger>
         </TabsList>
 
@@ -1471,6 +1478,11 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
         {/* Configs Tab */}
         <TabsContent value="configs" className="mt-6">
           <ConfigEditorTab machineId={machine.id} />
+        </TabsContent>
+
+        {/* Runtimes Tab */}
+        <TabsContent value="runtimes" className="space-y-4 mt-6">
+          <PHPRuntimeTab machineId={machine.id} />
         </TabsContent>
 
         {/* Jobs Tab */}

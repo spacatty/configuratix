@@ -122,6 +122,16 @@ func main() {
 	apiRouter.HandleFunc("/machines/{id}/configs/read", configsHandler.ReadConfig).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/configs/write", configsHandler.WriteConfig).Methods("POST", "OPTIONS")
 
+	// PHP Runtimes
+	phpHandler := handlers.NewPHPRuntimeHandler(db)
+	apiRouter.HandleFunc("/machines/{id}/php", phpHandler.GetPHPRuntime).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/php", phpHandler.InstallPHPRuntime).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/php", phpHandler.UpdatePHPRuntime).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/php", phpHandler.RemovePHPRuntime).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/php/info", phpHandler.GetPHPRuntimeInfo).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/php/extensions", phpHandler.ListAvailableExtensions).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/php/templates", phpHandler.ListExtensionTemplates).Methods("GET", "OPTIONS")
+
 	// Enrollment Tokens
 	apiRouter.HandleFunc("/enrollment-tokens", machinesHandler.ListEnrollmentTokens).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/enrollment-tokens", machinesHandler.CreateEnrollmentToken).Methods("POST", "OPTIONS")

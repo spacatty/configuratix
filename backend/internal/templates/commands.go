@@ -510,6 +510,188 @@ fi
 			{Action: "service", Name: "nginx", Op: "reload"},
 		},
 	},
+
+	// ==================== PHP RUNTIME TEMPLATES ====================
+
+	"install_php_runtime": {
+		ID:          "install_php_runtime",
+		Name:        "Install PHP Runtime",
+		Description: "Install PHP-FPM with Ondřej Surý's PPA for specific version and extensions",
+		Category:    "php",
+		Variables: []VariableDef{
+			{Name: "version", Type: "string", Required: true, Description: "PHP version (8.0, 8.1, 8.2, 8.3, 8.4)"},
+			{Name: "extensions", Type: "text", Required: false, Default: "mysqli,curl,mbstring,xml,zip", Description: "Comma-separated list of extensions"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			// Add Ondřej's PPA
+			{Action: "exec", Command: "apt-get update && apt-get install -y software-properties-common", Timeout: 120},
+			{Action: "exec", Command: "add-apt-repository -y ppa:ondrej/php", Timeout: 60},
+			{Action: "exec", Command: "apt-get update", Timeout: 120},
+			// Install PHP-FPM and CLI
+			{Action: "exec", Command: "apt-get install -y php{{version}}-fpm php{{version}}-cli php{{version}}-common", Timeout: 300},
+			// Install extensions
+			{Action: "exec", Command: `
+VERSION="{{version}}"
+EXTENSIONS="{{extensions}}"
+
+# Parse comma-separated extensions and install
+for ext in $(echo "$EXTENSIONS" | tr ',' ' '); do
+    ext=$(echo "$ext" | tr -d ' ')
+    if [ -n "$ext" ]; then
+        echo "Installing php${VERSION}-${ext}..."
+        apt-get install -y "php${VERSION}-${ext}" 2>/dev/null || echo "Warning: php${VERSION}-${ext} not available"
+    fi
+done
+`, Timeout: 600, Log: "php{{version}} -m"},
+			// Enable and start PHP-FPM
+			{Action: "exec", Command: "systemctl enable php{{version}}-fpm", Timeout: 30},
+			{Action: "exec", Command: "systemctl restart php{{version}}-fpm", Timeout: 60},
+			// Set as default PHP version
+			{Action: "exec", Command: "update-alternatives --set php /usr/bin/php{{version}} 2>/dev/null || true", Timeout: 30},
+		},
+	},
+
+	"remove_php_runtime": {
+		ID:          "remove_php_runtime",
+		Name:        "Remove PHP Runtime",
+		Description: "Remove PHP-FPM installation for a specific version",
+		Category:    "php",
+		Variables: []VariableDef{
+			{Name: "version", Type: "string", Required: true, Description: "PHP version to remove"},
+		},
+		OnError: "continue",
+		Steps: []Step{
+			{Action: "exec", Command: "systemctl stop php{{version}}-fpm 2>/dev/null || true", Timeout: 30},
+			{Action: "exec", Command: "systemctl disable php{{version}}-fpm 2>/dev/null || true", Timeout: 30},
+			{Action: "exec", Command: "apt-get remove -y 'php{{version}}-*'", Timeout: 300},
+			{Action: "exec", Command: "apt-get autoremove -y", Timeout: 120},
+		},
+	},
+
+	"switch_php_version": {
+		ID:          "switch_php_version",
+		Name:        "Switch PHP Version",
+		Description: "Switch to a different PHP version (must be already installed)",
+		Category:    "php",
+		Variables: []VariableDef{
+			{Name: "version", Type: "string", Required: true, Description: "PHP version to switch to"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			// Check if target version is installed
+			{Action: "exec", Command: "dpkg -l | grep php{{version}}-fpm || (echo 'PHP {{version}} not installed' && exit 1)", Timeout: 30},
+			// Set as default
+			{Action: "exec", Command: "update-alternatives --set php /usr/bin/php{{version}} 2>/dev/null || true", Timeout: 30},
+			// Restart FPM
+			{Action: "exec", Command: "systemctl restart php{{version}}-fpm", Timeout: 60, Log: "php -v"},
+		},
+	},
+
+	"get_php_runtime_info": {
+		ID:          "get_php_runtime_info",
+		Name:        "Get PHP Runtime Info",
+		Description: "Get information about installed PHP runtime",
+		Category:    "php",
+		Variables:   []VariableDef{},
+		OnError:     "continue",
+		Steps: []Step{
+			{Action: "exec", Command: `
+echo "=== PHP Version ==="
+php -v 2>/dev/null || echo "PHP not installed"
+echo ""
+echo "=== Installed PHP Versions ==="
+ls -1 /usr/bin/php* 2>/dev/null | grep -E 'php[0-9]+\.[0-9]+$' || echo "No PHP versions found"
+echo ""
+echo "=== Active PHP-FPM Services ==="
+systemctl list-units --type=service | grep php.*fpm || echo "No PHP-FPM services"
+echo ""
+echo "=== PHP-FPM Sockets ==="
+ls -la /run/php/*.sock 2>/dev/null || echo "No PHP-FPM sockets"
+echo ""
+echo "=== Loaded Extensions ==="
+php -m 2>/dev/null | head -50 || echo "Cannot list extensions"
+`, Timeout: 60},
+		},
+	},
+
+	"install_php_extension": {
+		ID:          "install_php_extension",
+		Name:        "Install PHP Extension",
+		Description: "Install a PHP extension for a specific version",
+		Category:    "php",
+		Variables: []VariableDef{
+			{Name: "version", Type: "string", Required: true, Description: "PHP version"},
+			{Name: "extension", Type: "string", Required: true, Description: "Extension name"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			{Action: "exec", Command: "apt-get update", Timeout: 120},
+			{Action: "exec", Command: "apt-get install -y php{{version}}-{{extension}}", Timeout: 300},
+			{Action: "exec", Command: "systemctl restart php{{version}}-fpm", Timeout: 60, Log: "php{{version}} -m | grep -i {{extension}}"},
+		},
+	},
+
+	"remove_php_extension": {
+		ID:          "remove_php_extension",
+		Name:        "Remove PHP Extension",
+		Description: "Remove a PHP extension for a specific version",
+		Category:    "php",
+		Variables: []VariableDef{
+			{Name: "version", Type: "string", Required: true, Description: "PHP version"},
+			{Name: "extension", Type: "string", Required: true, Description: "Extension name"},
+		},
+		OnError: "continue",
+		Steps: []Step{
+			{Action: "exec", Command: "apt-get remove -y php{{version}}-{{extension}}", Timeout: 300},
+			{Action: "exec", Command: "systemctl restart php{{version}}-fpm", Timeout: 60},
+		},
+	},
+
+	"get_php_fpm_status": {
+		ID:          "get_php_fpm_status",
+		Name:        "Get PHP-FPM Status",
+		Description: "Check PHP-FPM service status and configuration",
+		Category:    "php",
+		Variables: []VariableDef{
+			{Name: "version", Type: "string", Required: true, Description: "PHP version"},
+		},
+		OnError: "continue",
+		Steps: []Step{
+			{Action: "exec", Command: "systemctl status php{{version}}-fpm --no-pager", Timeout: 30},
+			{Action: "exec", Command: "ls -la /run/php/php{{version}}-fpm.sock 2>/dev/null || echo 'Socket not found'", Timeout: 10},
+			{Action: "exec", Command: "cat /etc/php/{{version}}/fpm/pool.d/www.conf | grep -E '^(listen|pm\\.|user|group)' 2>/dev/null || echo 'Config not found'", Timeout: 30},
+		},
+	},
+
+	"configure_php_fpm_pool": {
+		ID:          "configure_php_fpm_pool",
+		Name:        "Configure PHP-FPM Pool",
+		Description: "Configure PHP-FPM pool settings",
+		Category:    "php",
+		Variables: []VariableDef{
+			{Name: "version", Type: "string", Required: true, Description: "PHP version"},
+			{Name: "max_children", Type: "int", Required: false, Default: "5", Description: "Max children processes"},
+			{Name: "start_servers", Type: "int", Required: false, Default: "2", Description: "Start servers"},
+			{Name: "min_spare_servers", Type: "int", Required: false, Default: "1", Description: "Min spare servers"},
+			{Name: "max_spare_servers", Type: "int", Required: false, Default: "3", Description: "Max spare servers"},
+		},
+		OnError: "rollback",
+		Steps: []Step{
+			{Action: "file", Op: "backup", Path: "/etc/php/{{version}}/fpm/pool.d/www.conf"},
+			{Action: "exec", Command: `
+VERSION="{{version}}"
+POOL_CONF="/etc/php/${VERSION}/fpm/pool.d/www.conf"
+
+sed -i 's/^pm.max_children.*/pm.max_children = {{max_children}}/' "$POOL_CONF"
+sed -i 's/^pm.start_servers.*/pm.start_servers = {{start_servers}}/' "$POOL_CONF"
+sed -i 's/^pm.min_spare_servers.*/pm.min_spare_servers = {{min_spare_servers}}/' "$POOL_CONF"
+sed -i 's/^pm.max_spare_servers.*/pm.max_spare_servers = {{max_spare_servers}}/' "$POOL_CONF"
+`, Timeout: 30},
+			{Action: "exec", Command: "php-fpm{{version}} -t", Timeout: 30},
+			{Action: "exec", Command: "systemctl restart php{{version}}-fpm", Timeout: 60},
+		},
+	},
 }
 
 // GetCommand returns a command template by ID

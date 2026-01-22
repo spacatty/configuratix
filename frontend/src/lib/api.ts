@@ -784,6 +784,70 @@ class ApiClient {
       body: JSON.stringify({ path, content }),
     });
   }
+
+  // PHP Runtimes
+  async getPHPRuntime(machineId: string): Promise<PHPRuntimeResponse> {
+    return this.request<PHPRuntimeResponse>(`/api/machines/${machineId}/php`);
+  }
+
+  async installPHPRuntime(machineId: string, version: string, extensions: string[]): Promise<{ message: string; job_id: string }> {
+    return this.request<{ message: string; job_id: string }>(`/api/machines/${machineId}/php`, {
+      method: "POST",
+      body: JSON.stringify({ version, extensions }),
+    });
+  }
+
+  async updatePHPRuntime(machineId: string, version: string, extensions: string[]): Promise<{ message: string; job_id: string }> {
+    return this.request<{ message: string; job_id: string }>(`/api/machines/${machineId}/php`, {
+      method: "PUT",
+      body: JSON.stringify({ version, extensions }),
+    });
+  }
+
+  async removePHPRuntime(machineId: string): Promise<{ message: string; job_id: string }> {
+    return this.request<{ message: string; job_id: string }>(`/api/machines/${machineId}/php`, {
+      method: "DELETE",
+    });
+  }
+
+  async getPHPRuntimeInfo(machineId: string): Promise<{ message: string; job_id: string }> {
+    return this.request<{ message: string; job_id: string }>(`/api/machines/${machineId}/php/info`);
+  }
+
+  async listPHPExtensions(): Promise<{ extensions: string[]; versions: string[] }> {
+    return this.request<{ extensions: string[]; versions: string[] }>("/api/php/extensions");
+  }
+
+  async listPHPExtensionTemplates(): Promise<PHPExtensionTemplate[]> {
+    return this.request<PHPExtensionTemplate[]>("/api/php/templates");
+  }
+}
+
+export interface PHPRuntime {
+  id: string;
+  machine_id: string;
+  version: string;
+  extensions: string[];
+  status: string; // pending, installing, installed, failed, removing
+  socket_path: string | null;
+  error_message: string | null;
+  installed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PHPRuntimeResponse {
+  installed: boolean;
+  runtime?: PHPRuntime;
+}
+
+export interface PHPExtensionTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  extensions: string[];
+  is_default: boolean;
+  created_at: string;
 }
 
 export interface ConfigFile {

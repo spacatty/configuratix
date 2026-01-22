@@ -15,7 +15,9 @@ import (
 	"github.com/gorilla/mux"
 )
 
-func generateNginxFromStructured(structuredJSON json.RawMessage, domain string) string {
+// generateNginxFromStructured creates nginx config from structured JSON
+// phpVersion is optional - if provided, uses the specific PHP-FPM socket, otherwise uses default
+func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, phpVersion string) string {
 	var structured struct {
 		SSLMode   string `json:"ssl_mode"`
 		Locations []struct {
@@ -55,6 +57,12 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string) 
 		config += "    add_header 'Access-Control-Allow-Headers' '*' always;\n\n"
 	}
 
+	// Determine PHP-FPM socket path
+	phpSocket := "/run/php/php-fpm.sock" // Default fallback
+	if phpVersion != "" {
+		phpSocket = "/run/php/php" + phpVersion + "-fpm.sock"
+	}
+
 	for _, loc := range structured.Locations {
 		// Build location directive based on match type
 		locationDirective := "    location "
@@ -63,6 +71,8 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string) 
 			locationDirective += "= "
 		case "regex":
 			locationDirective += "~ "
+		case "case_insensitive_regex":
+			locationDirective += "~* "
 		// "prefix" or empty = default prefix match (no modifier)
 		}
 		locationDirective += loc.Path + " {\n"
@@ -86,7 +96,7 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string) 
 				config += "\n"
 				config += "        location ~ \\.php$ {\n"
 				config += "            include snippets/fastcgi-php.conf;\n"
-				config += "            fastcgi_pass unix:/run/php/php-fpm.sock;\n"
+				config += "            fastcgi_pass unix:" + phpSocket + ";\n"
 				config += "            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n"
 				config += "            include fastcgi_params;\n"
 				config += "        }\n"
@@ -325,11 +335,24 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 		tx.Get(&config, "SELECT structured_json, raw_text, mode FROM nginx_configs WHERE id = $1", req.ConfigID)
 		configJSON = config.StructuredJSON
 		
+		// Look up PHP version for the target machine if available
+		phpVersion := ""
+		if req.MachineID != nil {
+			var runtime struct {
+				Version string `db:"version"`
+				Status  string `db:"status"`
+			}
+			err := tx.Get(&runtime, "SELECT version, status FROM php_runtimes WHERE machine_id = $1", req.MachineID)
+			if err == nil && runtime.Status == "installed" {
+				phpVersion = runtime.Version
+			}
+		}
+		
 		if config.Mode == "manual" && config.RawText != nil {
 			nginxConfig = *config.RawText
 		} else {
-			// Generate nginx config from structured JSON
-			nginxConfig = generateNginxFromStructured(config.StructuredJSON, domainFQDN)
+			// Generate nginx config from structured JSON with PHP version
+			nginxConfig = generateNginxFromStructured(config.StructuredJSON, domainFQDN, phpVersion)
 		}
 	}
 
