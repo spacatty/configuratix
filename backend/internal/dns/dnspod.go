@@ -79,13 +79,73 @@ func (p *DNSPodProvider) ValidateCredentials(ctx context.Context) error {
 	return err
 }
 
+// CreateZone creates a new domain in DNSPod
+func (p *DNSPodProvider) CreateZone(ctx context.Context, domain string) error {
+	params := url.Values{
+		"domain": {domain},
+	}
+
+	_, err := p.doRequest(ctx, "Domain.Create", params)
+	if err != nil {
+		// Check if domain already exists (code 6 or similar)
+		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "已存在") {
+			return nil
+		}
+		return fmt.Errorf("failed to create domain: %w", err)
+	}
+
+	return nil
+}
+
 func (p *DNSPodProvider) GetExpectedNameservers(ctx context.Context, domain string) ([]string, error) {
-	// DNSPod has fixed nameservers for free accounts
-	// For paid accounts, they might differ - we could query Domain.Info
+	// Query Domain.Info to get the actual nameservers for this domain
+	params := url.Values{
+		"domain": {domain},
+	}
+
+	result, err := p.doRequest(ctx, "Domain.Info", params)
+	if err != nil {
+		// If domain doesn't exist, return error
+		return nil, err
+	}
+
+	var domainInfo struct {
+		DNSPodNS []string `json:"dnspod_ns"`
+	}
+	if err := json.Unmarshal(result.Domain, &domainInfo); err != nil {
+		// Fallback to default nameservers
+		return []string{
+			"f1g1ns1.dnspod.net",
+			"f1g1ns2.dnspod.net",
+		}, nil
+	}
+
+	if len(domainInfo.DNSPodNS) > 0 {
+		return domainInfo.DNSPodNS, nil
+	}
+
+	// Fallback to default nameservers
 	return []string{
 		"f1g1ns1.dnspod.net",
 		"f1g1ns2.dnspod.net",
 	}, nil
+}
+
+// GetOrCreateZone creates the domain if it doesn't exist and returns nameservers
+func (p *DNSPodProvider) GetOrCreateZone(ctx context.Context, domain string) ([]string, error) {
+	// First try to get existing domain
+	ns, err := p.GetExpectedNameservers(ctx, domain)
+	if err == nil {
+		return ns, nil
+	}
+
+	// Domain doesn't exist, create it
+	if err := p.CreateZone(ctx, domain); err != nil {
+		return nil, err
+	}
+
+	// Now get the nameservers
+	return p.GetExpectedNameservers(ctx, domain)
 }
 
 func (p *DNSPodProvider) ListRecords(ctx context.Context, domain string) ([]Record, error) {

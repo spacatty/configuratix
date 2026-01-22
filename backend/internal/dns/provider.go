@@ -57,8 +57,14 @@ type Provider interface {
 	// ValidateCredentials checks if API credentials work
 	ValidateCredentials(ctx context.Context) error
 
+	// CreateZone creates a new zone/domain in the provider
+	CreateZone(ctx context.Context, domain string) error
+
 	// GetExpectedNameservers returns NS records user should set at registrar
 	GetExpectedNameservers(ctx context.Context, domain string) ([]string, error)
+
+	// GetOrCreateZone creates zone if needed and returns nameservers
+	GetOrCreateZone(ctx context.Context, domain string) ([]string, error)
 
 	// ListRecords fetches all records for a domain from provider
 	ListRecords(ctx context.Context, domain string) ([]Record, error)

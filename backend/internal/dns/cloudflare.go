@@ -121,6 +121,56 @@ func (p *CloudflareProvider) getZoneID(ctx context.Context, domain string) (stri
 	return zones[0].ID, nil
 }
 
+// CreateZone creates a new zone in Cloudflare
+func (p *CloudflareProvider) CreateZone(ctx context.Context, domain string) error {
+	// First get the account ID (required for zone creation)
+	accountID, err := p.getAccountID(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get account ID: %w", err)
+	}
+
+	body := map[string]interface{}{
+		"name": domain,
+		"account": map[string]string{
+			"id": accountID,
+		},
+		"type": "full", // Full DNS management
+	}
+
+	_, err = p.doRequest(ctx, "POST", "/zones", body)
+	if err != nil {
+		// Check if zone already exists
+		if strings.Contains(err.Error(), "already exists") {
+			return nil // Zone exists, that's fine
+		}
+		return fmt.Errorf("failed to create zone: %w", err)
+	}
+
+	return nil
+}
+
+// getAccountID gets the first account ID for this token
+func (p *CloudflareProvider) getAccountID(ctx context.Context) (string, error) {
+	result, err := p.doRequest(ctx, "GET", "/accounts?per_page=1", nil)
+	if err != nil {
+		return "", err
+	}
+
+	var accounts []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(result.Result, &accounts); err != nil {
+		return "", fmt.Errorf("failed to parse accounts: %w", err)
+	}
+
+	if len(accounts) == 0 {
+		return "", fmt.Errorf("no accounts found for this API token")
+	}
+
+	return accounts[0].ID, nil
+}
+
 func (p *CloudflareProvider) GetExpectedNameservers(ctx context.Context, domain string) ([]string, error) {
 	zoneID, err := p.getZoneID(ctx, domain)
 	if err != nil {
@@ -140,6 +190,23 @@ func (p *CloudflareProvider) GetExpectedNameservers(ctx context.Context, domain 
 	}
 
 	return zone.NameServers, nil
+}
+
+// GetOrCreateZone creates the zone if it doesn't exist and returns nameservers
+func (p *CloudflareProvider) GetOrCreateZone(ctx context.Context, domain string) ([]string, error) {
+	// First try to get existing zone
+	ns, err := p.GetExpectedNameservers(ctx, domain)
+	if err == nil {
+		return ns, nil
+	}
+
+	// Zone doesn't exist, create it
+	if err := p.CreateZone(ctx, domain); err != nil {
+		return nil, err
+	}
+
+	// Now get the nameservers
+	return p.GetExpectedNameservers(ctx, domain)
 }
 
 func (p *CloudflareProvider) ListRecords(ctx context.Context, domain string) ([]Record, error) {

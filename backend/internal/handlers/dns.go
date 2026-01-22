@@ -376,17 +376,18 @@ func (h *DNSHandler) GetExpectedNameservers(w http.ResponseWriter, r *http.Reque
 	}
 
 	provider, _ := dns.NewProvider(account.Provider, apiID, account.ApiToken)
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	nameservers, err := provider.GetExpectedNameservers(ctx, domain)
+	// This will create the zone if it doesn't exist
+	nameservers, err := provider.GetOrCreateZone(ctx, domain)
 	if err != nil {
-		// Zone might not exist yet - return helpful message
+		log.Printf("Failed to get/create zone for %s: %v", domain, err)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"found":       false,
 			"nameservers": []string{},
-			"message":     fmt.Sprintf("Zone not found in %s. Add the domain to your %s account first.", account.Provider, account.Provider),
+			"message":     fmt.Sprintf("Failed to setup zone: %v", err),
 			"provider":    account.Provider,
 		})
 		return
