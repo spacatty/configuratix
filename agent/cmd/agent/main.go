@@ -13,6 +13,7 @@ import (
 	"configuratix/agent/internal/client"
 	"configuratix/agent/internal/config"
 	"configuratix/agent/internal/executor"
+	"configuratix/agent/internal/terminal"
 )
 
 const Version = "0.1.0"
@@ -105,6 +106,9 @@ func run() error {
 
 	c := client.New(cfg.ServerURL, cfg.APIKey)
 	exec := executor.New()
+
+	// Start terminal connection in background
+	go terminal.RunTerminalLoop(cfg.ServerURL, cfg.APIKey)
 
 	// Heartbeat ticker
 	heartbeatTicker := time.NewTicker(30 * time.Second)
