@@ -361,7 +361,7 @@ export default function DomainsPage() {
                   <SelectItem value="_none">None (Unassign)</SelectItem>
                   {machines.map((machine) => (
                     <SelectItem key={machine.id} value={machine.id}>
-                      {machine.hostname} ({machine.ip_address})
+                      {machine.title || machine.hostname || "Unknown"} ({machine.ip_address})
                     </SelectItem>
                   ))}
                 </SelectContent>
