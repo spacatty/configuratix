@@ -510,8 +510,8 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
   return (
     <ResizablePanelGroup direction="horizontal" className="h-[600px] rounded-lg border border-border/50">
       {/* Config File List */}
-      <ResizablePanel defaultSize={28} minSize={20} maxSize={45}>
-        <div className="h-full bg-card/50 flex flex-col">
+      <ResizablePanel defaultSize={30} minSize={25} maxSize={50}>
+        <div className="h-full bg-card/50 flex flex-col min-w-[250px]">
           <div className="p-4 border-b border-border/50 flex items-center justify-between">
             <h3 className="text-sm font-medium">Config Files</h3>
             <Button variant="ghost" size="sm" onClick={loadConfigs} className="h-7 w-7 p-0">
@@ -556,8 +556,8 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
       <ResizableHandle withHandle />
 
       {/* Editor */}
-      <ResizablePanel defaultSize={72} minSize={55}>
-        <div className="h-full bg-card/50 flex flex-col">
+      <ResizablePanel defaultSize={70} minSize={50}>
+        <div className="h-full bg-card/50 flex flex-col min-w-[400px]">
           <div className="p-4 border-b border-border/50 flex items-center justify-between">
             <div>
               <div className="text-sm font-medium flex items-center gap-2">
