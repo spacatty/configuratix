@@ -584,28 +584,65 @@ nginx -t
 			{Action: "exec", Command: "mkdir -p /etc/nginx/stream.d /etc/nginx/conf.d/configuratix", Timeout: 10},
 			// Remove any existing HTTP config for this domain (switching from HTTP to passthrough)
 			{Action: "exec", Command: "rm -f /etc/nginx/conf.d/configuratix/{{domain}}.conf", Timeout: 10},
+			// Ensure nginx stream module is available
+			{Action: "exec", Command: `
+# Check if stream module is available
+if ! nginx -V 2>&1 | grep -q "stream"; then
+    echo "Stream module not found, installing nginx with stream support..."
+    # Try to install nginx-extras or nginx-full which includes stream
+    apt-get update
+    if apt-cache show nginx-extras >/dev/null 2>&1; then
+        apt-get install -y nginx-extras
+    elif apt-cache show nginx-full >/dev/null 2>&1; then
+        apt-get install -y nginx-full
+    else
+        # Try loading dynamic module
+        if [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
+            echo "Stream module found as dynamic module"
+        else
+            echo "ERROR: nginx stream module not available"
+            echo "Please install nginx-extras: apt-get install nginx-extras"
+            exit 1
+        fi
+    fi
+fi
+
+# Check for dynamic module loading
+NGINX_CONF="/etc/nginx/nginx.conf"
+if [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
+    if ! grep -q "ngx_stream_module" "$NGINX_CONF"; then
+        # Add load_module at the top of nginx.conf
+        if ! grep -q "load_module.*stream" "$NGINX_CONF"; then
+            sed -i '1i load_module /usr/lib/nginx/modules/ngx_stream_module.so;' "$NGINX_CONF"
+            echo "Added stream module load directive"
+        fi
+    fi
+fi
+
+echo "Nginx stream module is available"
+`, Timeout: 180},
 			// Ensure nginx.conf includes stream.d directory
 			{Action: "exec", Command: `
 NGINX_CONF="/etc/nginx/nginx.conf"
 STREAM_INCLUDE="include /etc/nginx/stream.d/*.conf;"
 
-# Check if stream block exists
-if ! grep -q "^stream {" "$NGINX_CONF"; then
-    # Add stream block at the end of the file
-    if ! grep -q "^stream" "$NGINX_CONF"; then
-        echo "" >> "$NGINX_CONF"
-        echo "# SSL Passthrough configuration (Configuratix)" >> "$NGINX_CONF"
-        echo "stream {" >> "$NGINX_CONF"
-        echo "    $STREAM_INCLUDE" >> "$NGINX_CONF"
-        echo "}" >> "$NGINX_CONF"
-        echo "Added stream block to nginx.conf"
-    fi
-else
+# Check if stream block exists (handle various formats)
+if grep -qE "^stream\s*\{" "$NGINX_CONF"; then
     # Stream block exists, ensure it has the include
     if ! grep -q "include /etc/nginx/stream.d" "$NGINX_CONF"; then
-        sed -i '/^stream {/a\    '"$STREAM_INCLUDE"'' "$NGINX_CONF"
+        sed -i '/^stream\s*{/a\    '"$STREAM_INCLUDE"'' "$NGINX_CONF"
         echo "Added stream.d include to existing stream block"
+    else
+        echo "Stream block with include already exists"
     fi
+else
+    # Add stream block at the end of the file
+    echo "" >> "$NGINX_CONF"
+    echo "# SSL Passthrough configuration (Configuratix)" >> "$NGINX_CONF"
+    echo "stream {" >> "$NGINX_CONF"
+    echo "    $STREAM_INCLUDE" >> "$NGINX_CONF"
+    echo "}" >> "$NGINX_CONF"
+    echo "Added stream block to nginx.conf"
 fi
 `, Timeout: 30},
 			// Write stream config for this domain (just a marker file)
