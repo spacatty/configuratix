@@ -1058,11 +1058,11 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
             <div className="flex items-center gap-3">
               <button 
                 onClick={openTitleDialog}
-                className="text-3xl font-semibold tracking-tight hover:text-primary/80 transition-colors flex items-center gap-2 group"
+                className="text-3xl font-semibold tracking-tight hover:text-primary/80 transition-colors flex items-center gap-2"
                 title="Click to edit machine name"
               >
                 {machine.title || machine.hostname || "Unknown"}
-                <span className="text-sm opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground">✎</span>
+                <span className="text-sm text-muted-foreground">✎</span>
               </button>
               {getStatusBadge()}
               {(pendingUFW || pendingFail2ban) && (
@@ -1071,9 +1071,12 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
                 </Badge>
               )}
             </div>
-            <p className="text-muted-foreground mt-1">
+            <p className="text-muted-foreground mt-1 text-sm">
               {machine.hostname && machine.title && machine.hostname !== machine.title && (
-                <span className="text-xs bg-muted px-2 py-0.5 rounded mr-2">{machine.hostname}</span>
+                <>
+                  <span>{machine.hostname}</span>
+                  <span className="mx-2">•</span>
+                </>
               )}
               {machine.ip_address || "No IP address"}
             </p>
@@ -1455,7 +1458,7 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
                 <WebSocketTerminal
                   machineId={machine.id}
                   apiUrl={api.getApiUrl()}
-                  token={localStorage.getItem("token") || ""}
+                  token={localStorage.getItem("auth_token") || ""}
                 />
               </div>
               <p className="text-xs text-muted-foreground mt-2">

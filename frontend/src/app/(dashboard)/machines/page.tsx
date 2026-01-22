@@ -143,9 +143,12 @@ export default function MachinesPage() {
               >
                 {displayName}
               </a>
-              <div className="text-xs text-muted-foreground flex items-center gap-2">
+              <div className="text-xs text-muted-foreground">
                 {showHostname && (
-                  <span className="bg-muted px-1.5 py-0.5 rounded text-[10px]">{machine.hostname}</span>
+                  <>
+                    <span>{machine.hostname}</span>
+                    <span className="mx-1">•</span>
+                  </>
                 )}
                 <span>{machine.ip_address || "No IP"}</span>
               </div>
