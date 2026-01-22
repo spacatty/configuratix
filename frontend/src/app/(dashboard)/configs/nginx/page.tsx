@@ -551,29 +551,51 @@ export default function NginxConfigsPage() {
                     </p>
                   </div>
                   
-                  <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm space-y-2">
+                  <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm space-y-3">
                     <p className="font-medium text-amber-400">⚠️ Backend Configuration Required</p>
-                    <p className="text-muted-foreground text-xs">
-                      Both HTTP (for certbot) and HTTPS (passthrough) are proxied. Your backend nginx:
-                    </p>
-                    <pre className="text-xs bg-black/30 p-2 rounded overflow-x-auto font-mono text-amber-300/80">{`server {
-    listen 80;                      # HTTP for certbot
-    listen 443 ssl proxy_protocol; # HTTPS with PROXY Protocol
+                    
+                    <div>
+                      <p className="text-muted-foreground text-xs mb-1">
+                        <strong>Step 1:</strong> Create initial HTTP config to get certificate:
+                      </p>
+                      <pre className="text-xs bg-black/30 p-2 rounded overflow-x-auto font-mono text-green-300/80">{`server {
+    listen 80;
+    server_name domain.com;
     
+    location / {
+        root /var/www/html;
+        # Or proxy to your app
+    }
+}`}</pre>
+                    </div>
+                    
+                    <div>
+                      <p className="text-muted-foreground text-xs mb-1">
+                        Then run: <code className="bg-black/30 px-1 rounded">certbot --nginx -d domain.com</code>
+                      </p>
+                    </div>
+                    
+                    <div>
+                      <p className="text-muted-foreground text-xs mb-1">
+                        <strong>Step 2:</strong> Update to accept PROXY Protocol for HTTPS:
+                      </p>
+                      <pre className="text-xs bg-black/30 p-2 rounded overflow-x-auto font-mono text-amber-300/80">{`server {
+    listen 80;
+    listen 443 ssl proxy_protocol;
+    server_name domain.com;
+    
+    # Real IP from PROXY Protocol
     set_real_ip_from 0.0.0.0/0;
     real_ip_header proxy_protocol;
     
-    ssl_certificate /etc/letsencrypt/live/domain/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/domain/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/domain.com/privkey.pem;
     
-    # Certbot will work, redirect HTTP->HTTPS here
-    if ($scheme = http) {
-        return 301 https://$host$request_uri;
+    location / {
+        # Your app config
     }
 }`}</pre>
-                    <p className="text-muted-foreground text-xs">
-                      Run <code className="bg-black/30 px-1 rounded">certbot --nginx</code> on the backend to issue certificates.
-                    </p>
+                    </div>
                   </div>
                 </div>
               )}
