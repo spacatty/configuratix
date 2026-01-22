@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DataTable } from "@/components/ui/data-table";
 import { api, Machine, EnrollmentToken, ProjectWithStats, BACKEND_URL } from "@/lib/api";
+import { copyToClipboard } from "@/lib/clipboard";
 import { toast } from "sonner";
 import { 
   Copy, 
@@ -78,23 +79,11 @@ export default function MachinesPage() {
     }
   };
 
-  const copyToClipboard = async (text: string) => {
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const textArea = document.createElement("textarea");
-        textArea.value = text;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-999999px";
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textArea);
-      }
+  const handleCopy = async (text: string) => {
+    const success = await copyToClipboard(text);
+    if (success) {
       toast.success("Copied to clipboard");
-    } catch (err) {
+    } else {
       toast.error("Failed to copy");
     }
   };
@@ -292,7 +281,7 @@ export default function MachinesPage() {
                 <ExternalLink className="mr-2 h-4 w-4" />
                 View Details
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => copyToClipboard(machine.ip_address || "")}>
+              <DropdownMenuItem onClick={() => handleCopy(machine.ip_address || "")}>
                 <Copy className="mr-2 h-4 w-4" />
                 Copy IP
               </DropdownMenuItem>
@@ -399,7 +388,7 @@ export default function MachinesPage() {
                   size="sm"
                   variant="secondary"
                   className="absolute top-2 right-2"
-                  onClick={() => copyToClipboard(installCommand)}
+                  onClick={() => handleCopy(installCommand)}
                 >
                   <Copy className="h-4 w-4" />
                 </Button>

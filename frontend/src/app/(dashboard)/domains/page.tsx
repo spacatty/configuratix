@@ -16,6 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable } from "@/components/ui/data-table";
 import { api, Domain, Machine, NginxConfig, DNSAccount, DNSRecord, NSStatus, DNSSyncResult } from "@/lib/api";
+import { copyToClipboard } from "@/lib/clipboard";
 import ReactMarkdown from "react-markdown";
 import { ExternalLink, MoreHorizontal, Trash, Link2, FileText, Server, Globe, CheckCircle, XCircle, Cloud, Circle, Plus, RefreshCw, AlertTriangle, Settings2, X, Copy } from "lucide-react";
 import { toast } from "sonner";
@@ -1083,8 +1084,8 @@ function DNSSettingsDialog({
                                   variant="ghost"
                                   size="sm"
                                   className="h-6 px-2 text-xs"
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(expectedNS.nameservers.join("\n"));
+                                  onClick={async () => {
+                                    await copyToClipboard(expectedNS.nameservers.join("\n"));
                                     toast.success("Nameservers copied to clipboard");
                                   }}
                                 >
@@ -1097,8 +1098,8 @@ function DNSSettingsDialog({
                                   <code
                                     key={i}
                                     className="px-2 py-1 bg-background rounded text-xs font-mono cursor-pointer hover:bg-muted transition-colors"
-                                    onClick={() => {
-                                      navigator.clipboard.writeText(ns);
+                                    onClick={async () => {
+                                      await copyToClipboard(ns);
                                       toast.success(`Copied: ${ns}`);
                                     }}
                                     title="Click to copy"

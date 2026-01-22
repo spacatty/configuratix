@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, Machine, UFWRule, Job, ConfigFile } from "@/lib/api";
+import { copyToClipboard } from "@/lib/clipboard";
 import { ChevronDown, ChevronRight, RefreshCw, FileCode, Save, RotateCcw, Loader2, FileText, Settings, Lock, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
@@ -343,8 +344,8 @@ function MachineJobsTab({ machineId, agentId }: { machineId: string; agentId: st
                                     variant="ghost"
                                     size="sm"
                                     className="h-7 text-xs"
-                                    onClick={() => {
-                                      navigator.clipboard.writeText(job.logs || "");
+                                    onClick={async () => {
+                                      await copyToClipboard(job.logs || "");
                                       toast.success("Copied to clipboard");
                                     }}
                                   >
@@ -512,9 +513,9 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
     return "plaintext";
   };
 
-  const copyPath = (path: string, e: React.MouseEvent) => {
+  const copyPath = async (path: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(path);
+    await copyToClipboard(path);
     toast.success("Path copied to clipboard");
   };
 

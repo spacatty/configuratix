@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { DataTable } from "@/components/ui/data-table";
 import { api, ProjectWithStats, ProjectMember, Machine, User } from "@/lib/api";
+import { copyToClipboard } from "@/lib/clipboard";
 import { toast } from "sonner";
 import { ColumnDef } from "@tanstack/react-table";
 import { 
@@ -117,27 +118,6 @@ export default function ProjectDetailPage({ params }: PageProps) {
     }
   };
 
-  const copyToClipboard = async (text: string): Promise<boolean> => {
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-        return true;
-      } else {
-        const textArea = document.createElement("textarea");
-        textArea.value = text;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-999999px";
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        const success = document.execCommand("copy");
-        document.body.removeChild(textArea);
-        return success;
-      }
-    } catch {
-      return false;
-    }
-  };
 
   const handleSaveNotes = async () => {
     try {

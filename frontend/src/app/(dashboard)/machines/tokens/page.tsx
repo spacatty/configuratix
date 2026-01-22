@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DataTable } from "@/components/ui/data-table";
 import { api, EnrollmentToken, BACKEND_URL } from "@/lib/api";
+import { copyToClipboard } from "@/lib/clipboard";
 import { toast } from "sonner";
 import { Copy, Plus, Trash2, KeyRound, Clock, CheckCircle, MoreHorizontal } from "lucide-react";
 import {
@@ -76,23 +77,11 @@ export default function EnrollmentTokensPage() {
     setShowDeleteDialog(true);
   };
 
-  const copyToClipboard = async (text: string) => {
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const textArea = document.createElement("textarea");
-        textArea.value = text;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-999999px";
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textArea);
-      }
+  const handleCopy = async (text: string) => {
+    const success = await copyToClipboard(text);
+    if (success) {
       toast.success("Copied to clipboard");
-    } catch (err) {
+    } else {
       toast.error("Failed to copy");
     }
   };
@@ -177,7 +166,7 @@ export default function EnrollmentTokensPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => copyToClipboard(`curl -sSL ${BACKEND_URL}/install.sh | sudo bash -s -- ${token.token}`)}>
+              <DropdownMenuItem onClick={() => handleCopy(`curl -sSL ${BACKEND_URL}/install.sh | sudo bash -s -- ${token.token}`)}>
                 <Copy className="h-4 w-4 mr-2" />
                 Copy Install Command
               </DropdownMenuItem>
@@ -253,7 +242,7 @@ export default function EnrollmentTokensPage() {
                   size="sm"
                   variant="secondary"
                   className="absolute top-2 right-2"
-                  onClick={() => copyToClipboard(installCommand)}
+                  onClick={() => handleCopy(installCommand)}
                 >
                   <Copy className="h-4 w-4" />
                 </Button>

@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DataTable } from "@/components/ui/data-table";
 import { api, ProjectWithStats } from "@/lib/api";
+import { copyToClipboard } from "@/lib/clipboard";
 import { toast } from "sonner";
 import { 
   Plus, 
@@ -121,28 +122,6 @@ export default function ProjectsPage() {
     }
   };
 
-  const copyToClipboard = async (text: string): Promise<boolean> => {
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-        return true;
-      } else {
-        // Fallback for HTTP
-        const textArea = document.createElement("textarea");
-        textArea.value = text;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-999999px";
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        const success = document.execCommand("copy");
-        document.body.removeChild(textArea);
-        return success;
-      }
-    } catch {
-      return false;
-    }
-  };
 
   const toggleSharing = async (project: ProjectWithStats) => {
     try {

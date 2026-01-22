@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { DataTable } from "@/components/ui/data-table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api, NginxConfig, NginxConfigStructured, LocationConfig, Landing } from "@/lib/api";
+import { copyToClipboard } from "@/lib/clipboard";
 import { MoreHorizontal, Pencil, Trash, Copy, FileCode, Cog, Lock, LockOpen, Shield, ShieldOff, GripVertical, ChevronUp, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
@@ -364,7 +365,7 @@ export default function NginxConfigsPage() {
               <DropdownMenuItem onClick={() => openEditDialog(config)}>
                 <Pencil className="h-4 w-4 mr-2" />Edit
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => navigator.clipboard.writeText(config.id)}>
+              <DropdownMenuItem onClick={async () => { await copyToClipboard(config.id); }}>
                 <Copy className="h-4 w-4 mr-2" />Copy ID
               </DropdownMenuItem>
               <DropdownMenuSeparator />
