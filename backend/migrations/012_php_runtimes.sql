@@ -29,18 +29,18 @@ INSERT INTO php_extension_templates (name, description, extensions, is_default) 
  ARRAY['mysqli', 'pdo_mysql', 'curl', 'mbstring', 'xml', 'zip'], TRUE),
  
 ('WordPress', 'Extensions required for WordPress and common plugins',
- ARRAY['mysqli', 'pdo_mysql', 'curl', 'mbstring', 'xml', 'zip', 'gd', 'imagick', 'exif', 'intl', 'opcache', 'redis', 'memcached', 'apcu', 'bcmath', 'soap']),
+ ARRAY['mysqli', 'pdo_mysql', 'curl', 'mbstring', 'xml', 'zip', 'gd', 'imagick', 'exif', 'intl', 'opcache', 'redis', 'memcached', 'apcu', 'bcmath', 'soap'], FALSE),
  
 ('Laravel', 'Extensions for Laravel framework',
- ARRAY['mysqli', 'pdo_mysql', 'curl', 'mbstring', 'xml', 'zip', 'bcmath', 'ctype', 'fileinfo', 'tokenizer', 'redis', 'opcache', 'gd', 'intl']),
+ ARRAY['mysqli', 'pdo_mysql', 'curl', 'mbstring', 'xml', 'zip', 'bcmath', 'ctype', 'fileinfo', 'tokenizer', 'redis', 'opcache', 'gd', 'intl'], FALSE),
  
 ('Symfony', 'Extensions for Symfony framework',
- ARRAY['mysqli', 'pdo_mysql', 'curl', 'mbstring', 'xml', 'zip', 'bcmath', 'ctype', 'intl', 'opcache', 'redis', 'yaml', 'gd']),
+ ARRAY['mysqli', 'pdo_mysql', 'curl', 'mbstring', 'xml', 'zip', 'bcmath', 'ctype', 'intl', 'opcache', 'redis', 'yaml', 'gd'], FALSE),
 
 ('Minimal', 'Minimal extensions for simple PHP scripts',
- ARRAY['mysqli', 'curl', 'mbstring']),
+ ARRAY['mysqli', 'curl', 'mbstring'], FALSE),
 
 ('Full Stack', 'Comprehensive set for most applications',
- ARRAY['mysqli', 'pdo_mysql', 'pdo_pgsql', 'curl', 'mbstring', 'xml', 'zip', 'gd', 'imagick', 'exif', 'intl', 'opcache', 'redis', 'memcached', 'apcu', 'bcmath', 'soap', 'ldap', 'imap', 'ssh2'])
+ ARRAY['mysqli', 'pdo_mysql', 'pdo_pgsql', 'curl', 'mbstring', 'xml', 'zip', 'gd', 'imagick', 'exif', 'intl', 'opcache', 'redis', 'memcached', 'apcu', 'bcmath', 'soap', 'ldap', 'imap', 'ssh2'], FALSE)
 ON CONFLICT (name) DO NOTHING;
 
