@@ -269,6 +269,105 @@ var Commands = map[string]*CommandTemplate{
 		},
 	},
 
+	"read_file": {
+		ID:          "read_file",
+		Name:        "Read File",
+		Description: "Read content from a file",
+		Category:    "files",
+		Variables: []VariableDef{
+			{Name: "path", Type: "string", Required: true, Description: "File path"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			{Action: "exec", Command: "cat {{path}}", Timeout: 30},
+		},
+	},
+
+	"list_nginx_configs": {
+		ID:          "list_nginx_configs",
+		Name:        "List Nginx Configs",
+		Description: "List all nginx configuration files",
+		Category:    "nginx",
+		Variables:   []VariableDef{},
+		OnError:     "continue",
+		Steps: []Step{
+			{Action: "exec", Command: "echo '=== Main Config ===' && ls -la /etc/nginx/nginx.conf 2>/dev/null && echo '=== Site Configs ===' && ls -la /etc/nginx/conf.d/configuratix/*.conf 2>/dev/null || echo 'No configuratix configs' && echo '=== Sites Enabled ===' && ls -la /etc/nginx/sites-enabled/ 2>/dev/null || echo 'No sites-enabled'", Timeout: 30},
+		},
+	},
+
+	"nginx_test_reload": {
+		ID:          "nginx_test_reload",
+		Name:        "Test and Reload Nginx",
+		Description: "Test nginx configuration and reload if valid",
+		Category:    "nginx",
+		Variables:   []VariableDef{},
+		OnError:     "stop",
+		Steps: []Step{
+			{Action: "exec", Command: "nginx -t", Timeout: 30},
+			{Action: "exec", Command: "systemctl reload nginx", Timeout: 30},
+		},
+	},
+
+	"get_sshd_config": {
+		ID:          "get_sshd_config",
+		Name:        "Get SSHD Config",
+		Description: "Read the SSH daemon configuration",
+		Category:    "security",
+		Variables:   []VariableDef{},
+		OnError:     "stop",
+		Steps: []Step{
+			{Action: "exec", Command: "cat /etc/ssh/sshd_config", Timeout: 30},
+		},
+	},
+
+	"get_php_config": {
+		ID:          "get_php_config",
+		Name:        "Get PHP Config",
+		Description: "Read the PHP-FPM configuration",
+		Category:    "php",
+		Variables:   []VariableDef{},
+		OnError:     "continue",
+		Steps: []Step{
+			{Action: "exec", Command: "PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION.\".\".PHP_MINOR_VERSION;' 2>/dev/null) && cat /etc/php/${PHP_VERSION}/fpm/php.ini 2>/dev/null || echo 'PHP not installed'", Timeout: 30},
+		},
+	},
+
+	"write_nginx_config": {
+		ID:          "write_nginx_config",
+		Name:        "Write Nginx Config",
+		Description: "Write nginx configuration and reload",
+		Category:    "nginx",
+		Variables: []VariableDef{
+			{Name: "path", Type: "string", Required: true, Description: "Config file path"},
+			{Name: "content", Type: "text", Required: true, Description: "Config content"},
+		},
+		OnError: "rollback",
+		Steps: []Step{
+			{Action: "file", Op: "backup", Path: "{{path}}"},
+			{Action: "file", Op: "write", Path: "{{path}}", Content: "{{content}}", Mode: "0644"},
+			{Action: "exec", Command: "nginx -t", Timeout: 30},
+			{Action: "exec", Command: "systemctl reload nginx", Timeout: 30},
+		},
+	},
+
+	"write_sshd_config": {
+		ID:          "write_sshd_config",
+		Name:        "Write SSHD Config",
+		Description: "Write SSH daemon configuration and reload",
+		Category:    "security",
+		Variables: []VariableDef{
+			{Name: "content", Type: "text", Required: true, Description: "sshd_config content"},
+		},
+		OnError: "rollback",
+		Steps: []Step{
+			{Action: "file", Op: "backup", Path: "/etc/ssh/sshd_config"},
+			{Action: "file", Op: "write", Path: "/etc/ssh/sshd_config", Content: "{{content}}", Mode: "0644"},
+			{Action: "exec", Command: "sshd -t", Timeout: 30},
+			{Action: "exec", Command: "systemctl daemon-reload", Timeout: 30},
+			{Action: "exec", Command: "systemctl restart sshd 2>/dev/null || systemctl restart ssh", Timeout: 60},
+		},
+	},
+
 	"exec_command": {
 		ID:          "exec_command",
 		Name:        "Execute Command",

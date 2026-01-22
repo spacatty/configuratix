@@ -764,6 +764,32 @@ class ApiClient {
   getLandingDownloadUrl(id: string): string {
     return `${this.baseUrl}/api/landings/${id}/download`;
   }
+
+  // Machine Configs (file editing)
+  async listMachineConfigs(machineId: string): Promise<ConfigFile[]> {
+    return this.request<ConfigFile[]>(`/api/machines/${machineId}/configs`);
+  }
+
+  async readMachineConfig(machineId: string, path: string): Promise<{ content: string; path: string }> {
+    return this.request<{ content: string; path: string }>(`/api/machines/${machineId}/configs/read`, {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
+  }
+
+  async writeMachineConfig(machineId: string, path: string, content: string): Promise<{ success: boolean; logs: string }> {
+    return this.request<{ success: boolean; logs: string }>(`/api/machines/${machineId}/configs/write`, {
+      method: "POST",
+      body: JSON.stringify({ path, content }),
+    });
+  }
+}
+
+export interface ConfigFile {
+  name: string;
+  path: string;
+  type: string; // nginx, nginx_site, php, ssh
+  readonly: boolean;
 }
 
 export const api = new ApiClient(API_URL);

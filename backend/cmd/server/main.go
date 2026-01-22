@@ -116,6 +116,12 @@ func main() {
 	apiRouter.HandleFunc("/machines/{id}/logs", machinesHandler.GetMachineLogs).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/exec", machinesHandler.ExecTerminalCommand).Methods("POST", "OPTIONS")
 
+	// Machine Configs (file editing)
+	configsHandler := handlers.NewConfigsHandler(db)
+	apiRouter.HandleFunc("/machines/{id}/configs", configsHandler.ListConfigs).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/configs/read", configsHandler.ReadConfig).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/configs/write", configsHandler.WriteConfig).Methods("POST", "OPTIONS")
+
 	// Enrollment Tokens
 	apiRouter.HandleFunc("/enrollment-tokens", machinesHandler.ListEnrollmentTokens).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/enrollment-tokens", machinesHandler.CreateEnrollmentToken).Methods("POST", "OPTIONS")

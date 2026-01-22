@@ -12,8 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { api, Machine, UFWRule, Job } from "@/lib/api";
-import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import { api, Machine, UFWRule, Job, ConfigFile } from "@/lib/api";
+import { ChevronDown, ChevronRight, RefreshCw, FileCode, Save, RotateCcw, Loader2, FileText, Settings, Lock } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
@@ -394,6 +394,233 @@ const WebSocketTerminal = dynamic(
   () => import("@/components/terminal").then((mod) => mod.WebSocketTerminal),
   { ssr: false, loading: () => <div className="h-[400px] bg-black rounded-lg animate-pulse" /> }
 );
+
+// Dynamically import Monaco Editor
+const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { 
+  ssr: false, 
+  loading: () => <div className="h-[500px] bg-muted/30 rounded-lg animate-pulse" /> 
+});
+
+// Config Editor Component
+function ConfigEditorTab({ machineId }: { machineId: string }) {
+  const [configs, setConfigs] = useState<ConfigFile[]>([]);
+  const [selectedConfig, setSelectedConfig] = useState<ConfigFile | null>(null);
+  const [content, setContent] = useState("");
+  const [originalContent, setOriginalContent] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadingConfigs, setLoadingConfigs] = useState(true);
+
+  const loadConfigs = useCallback(async () => {
+    try {
+      setLoadingConfigs(true);
+      const data = await api.listMachineConfigs(machineId);
+      setConfigs(data);
+    } catch (err) {
+      console.error("Failed to load configs:", err);
+      toast.error("Failed to load config list");
+    } finally {
+      setLoadingConfigs(false);
+    }
+  }, [machineId]);
+
+  useEffect(() => {
+    loadConfigs();
+  }, [loadConfigs]);
+
+  const loadConfigContent = async (config: ConfigFile) => {
+    try {
+      setLoading(true);
+      setSelectedConfig(config);
+      const result = await api.readMachineConfig(machineId, config.path);
+      setContent(result.content);
+      setOriginalContent(result.content);
+    } catch (err) {
+      console.error("Failed to read config:", err);
+      toast.error("Failed to read config file");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveConfig = async () => {
+    if (!selectedConfig) return;
+    try {
+      setSaving(true);
+      const result = await api.writeMachineConfig(machineId, selectedConfig.path, content);
+      if (result.success) {
+        toast.success("Config saved and reloaded");
+        setOriginalContent(content);
+      } else {
+        toast.error("Failed to save config");
+      }
+    } catch (err: unknown) {
+      console.error("Failed to save config:", err);
+      const message = err instanceof Error ? err.message : "Failed to save config";
+      toast.error(message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resetConfig = () => {
+    setContent(originalContent);
+    toast.info("Changes reverted");
+  };
+
+  const hasChanges = content !== originalContent;
+
+  const getConfigIcon = (type: string) => {
+    switch (type) {
+      case "nginx":
+      case "nginx_site":
+        return <Settings className="h-4 w-4 text-green-500" />;
+      case "ssh":
+        return <Lock className="h-4 w-4 text-yellow-500" />;
+      case "php":
+        return <FileCode className="h-4 w-4 text-purple-500" />;
+      default:
+        return <FileText className="h-4 w-4 text-blue-500" />;
+    }
+  };
+
+  const getEditorLanguage = (config: ConfigFile | null) => {
+    if (!config) return "plaintext";
+    if (config.type === "nginx" || config.type === "nginx_site") return "nginx";
+    if (config.type === "ssh") return "ini";
+    if (config.type === "php") return "ini";
+    return "plaintext";
+  };
+
+  if (loadingConfigs) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-4 gap-4 h-[600px]">
+      {/* Config File List */}
+      <Card className="border-border/50 bg-card/50 col-span-1 overflow-hidden">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center justify-between">
+            Config Files
+            <Button variant="ghost" size="sm" onClick={loadConfigs}>
+              <RefreshCw className="h-3 w-3" />
+            </Button>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="divide-y divide-border/50">
+            {configs.length === 0 ? (
+              <p className="text-sm text-muted-foreground p-4 text-center">
+                No config files found. Make sure the agent is running.
+              </p>
+            ) : (
+              configs.map((config) => (
+                <button
+                  key={config.path}
+                  onClick={() => loadConfigContent(config)}
+                  className={`w-full p-3 text-left hover:bg-muted/50 transition-colors flex items-center gap-2 ${
+                    selectedConfig?.path === config.path ? "bg-muted/50" : ""
+                  }`}
+                >
+                  {getConfigIcon(config.type)}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{config.name}</div>
+                    <div className="text-xs text-muted-foreground truncate">{config.path}</div>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Editor */}
+      <Card className="border-border/50 bg-card/50 col-span-3 overflow-hidden flex flex-col">
+        <CardHeader className="pb-2 flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-sm flex items-center gap-2">
+                {selectedConfig ? (
+                  <>
+                    {getConfigIcon(selectedConfig.type)}
+                    {selectedConfig.name}
+                    {hasChanges && <Badge variant="outline" className="ml-2 text-xs">Modified</Badge>}
+                  </>
+                ) : (
+                  "Select a config file"
+                )}
+              </CardTitle>
+              {selectedConfig && (
+                <CardDescription className="text-xs mt-1">{selectedConfig.path}</CardDescription>
+              )}
+            </div>
+            {selectedConfig && (
+              <div className="flex items-center gap-2">
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={resetConfig} 
+                  disabled={!hasChanges || saving}
+                >
+                  <RotateCcw className="h-3 w-3 mr-1" />
+                  Reset
+                </Button>
+                <Button 
+                  size="sm" 
+                  onClick={saveConfig} 
+                  disabled={!hasChanges || saving}
+                >
+                  {saving ? (
+                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                  ) : (
+                    <Save className="h-3 w-3 mr-1" />
+                  )}
+                  Save & Reload
+                </Button>
+              </div>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="flex-1 p-0 overflow-hidden">
+          {loading ? (
+            <div className="h-full flex items-center justify-center">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          ) : selectedConfig ? (
+            <MonacoEditor
+              height="100%"
+              language={getEditorLanguage(selectedConfig)}
+              theme="vs-dark"
+              value={content}
+              onChange={(value) => setContent(value || "")}
+              options={{
+                minimap: { enabled: false },
+                fontSize: 13,
+                lineNumbers: "on",
+                scrollBeyondLastLine: false,
+                wordWrap: "on",
+                padding: { top: 8, bottom: 8 },
+                automaticLayout: true,
+              }}
+            />
+          ) : (
+            <div className="h-full flex items-center justify-center text-muted-foreground">
+              <div className="text-center">
+                <FileCode className="h-12 w-12 mx-auto mb-2 opacity-50" />
+                <p>Select a configuration file from the list</p>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 const DEFAULT_FAIL2BAN_CONFIG = `[sshd]
 enabled = true
@@ -1149,41 +1376,8 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
         </TabsContent>
 
         {/* Configs Tab */}
-        <TabsContent value="configs" className="space-y-4 mt-6">
-          <Card className="border-border/50 bg-card/50">
-            <CardHeader>
-              <CardTitle>Server Configurations</CardTitle>
-              <CardDescription>View and edit configuration files on this machine</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-4 md:grid-cols-3">
-                <Card className="border-border/50 bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors">
-                  <CardContent className="p-4 text-center">
-                    <div className="text-2xl mb-2">🔧</div>
-                    <div className="font-medium">NGINX</div>
-                    <div className="text-xs text-muted-foreground">Web server configs</div>
-                  </CardContent>
-                </Card>
-                <Card className="border-border/50 bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors">
-                  <CardContent className="p-4 text-center">
-                    <div className="text-2xl mb-2">🐘</div>
-                    <div className="font-medium">PHP</div>
-                    <div className="text-xs text-muted-foreground">PHP-FPM settings</div>
-                  </CardContent>
-                </Card>
-                <Card className="border-border/50 bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors">
-                  <CardContent className="p-4 text-center">
-                    <div className="text-2xl mb-2">🔐</div>
-                    <div className="font-medium">SSH</div>
-                    <div className="text-xs text-muted-foreground">sshd_config</div>
-                  </CardContent>
-                </Card>
-              </div>
-              <p className="text-sm text-muted-foreground mt-4 text-center">
-                Config editor coming soon. Use the Terminal tab to edit files directly for now.
-              </p>
-            </CardContent>
-          </Card>
+        <TabsContent value="configs" className="mt-6">
+          <ConfigEditorTab machineId={machine.id} />
         </TabsContent>
 
         {/* Jobs Tab */}
