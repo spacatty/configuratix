@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { DataTable } from "@/components/ui/data-table";
 import { api, Domain, Machine, NginxConfig } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
-import { ExternalLink, MoreHorizontal, Trash, Link2, FileText, Server, Globe } from "lucide-react";
+import { ExternalLink, MoreHorizontal, Trash, Link2, FileText, Server, Globe, CheckCircle, XCircle, Cloud, Circle } from "lucide-react";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -142,15 +142,40 @@ export default function DomainsPage() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "healthy":
-        return <Badge className="bg-green-500/20 text-green-400 border-green-500/30">Healthy</Badge>;
+        return (
+          <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
+            <CheckCircle className="h-3 w-3 mr-1" />
+            Healthy
+          </Badge>
+        );
       case "unhealthy":
-        return <Badge variant="destructive">Unhealthy</Badge>;
+        return (
+          <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-xs">
+            <XCircle className="h-3 w-3 mr-1" />
+            Unhealthy
+          </Badge>
+        );
       case "linked":
-        return <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">Linked</Badge>;
+        return (
+          <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30 text-xs">
+            <Link2 className="h-3 w-3 mr-1" />
+            Linked
+          </Badge>
+        );
       case "proxied":
-        return <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30">Proxied</Badge>;
+        return (
+          <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30 text-xs">
+            <Cloud className="h-3 w-3 mr-1" />
+            Proxied
+          </Badge>
+        );
       default:
-        return <Badge variant="secondary">Idle</Badge>;
+        return (
+          <Badge className="bg-zinc-500/20 text-zinc-400 border-zinc-500/30 text-xs">
+            <Circle className="h-3 w-3 mr-1" />
+            Idle
+          </Badge>
+        );
     }
   };
 

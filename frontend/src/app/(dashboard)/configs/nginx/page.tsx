@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { DataTable } from "@/components/ui/data-table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api, NginxConfig, NginxConfigStructured, LocationConfig, Landing } from "@/lib/api";
-import { MoreHorizontal, Pencil, Trash, Copy, FileCode } from "lucide-react";
+import { MoreHorizontal, Pencil, Trash, Copy, FileCode, Cog, Lock, LockOpen, Shield, ShieldOff } from "lucide-react";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
 
@@ -199,8 +199,12 @@ export default function NginxConfigsPage() {
       accessorKey: "mode",
       header: "Mode",
       cell: ({ row }) => (
-        <Badge variant={row.original.mode === "manual" ? "secondary" : "default"}>
-          {row.original.mode}
+        <Badge className={row.original.mode === "manual" 
+          ? "bg-orange-500/20 text-orange-400 border-orange-500/30 text-xs"
+          : "bg-blue-500/20 text-blue-400 border-blue-500/30 text-xs"
+        }>
+          <Cog className="h-3 w-3 mr-1" />
+          {row.original.mode === "manual" ? "Manual" : "Auto"}
         </Badge>
       ),
     },
@@ -209,9 +213,23 @@ export default function NginxConfigsPage() {
       header: "SSL",
       cell: ({ row }) => {
         const structured = row.original.structured_json as NginxConfigStructured | null;
-        return structured ? (
-          <Badge variant="outline" className="text-xs">{structured.ssl_mode}</Badge>
-        ) : <span className="text-muted-foreground">—</span>;
+        if (!structured) return <span className="text-muted-foreground">—</span>;
+        
+        const sslMode = structured.ssl_mode;
+        if (sslMode === "disabled") {
+          return (
+            <Badge className="bg-zinc-500/20 text-zinc-400 border-zinc-500/30 text-xs">
+              <LockOpen className="h-3 w-3 mr-1" />
+              Disabled
+            </Badge>
+          );
+        }
+        return (
+          <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
+            <Lock className="h-3 w-3 mr-1" />
+            {sslMode === "redirect_https" ? "Force HTTPS" : "Allow HTTP"}
+          </Badge>
+        );
       },
     },
     {
@@ -221,9 +239,15 @@ export default function NginxConfigsPage() {
         const structured = row.original.structured_json as NginxConfigStructured | null;
         return structured?.cors?.enabled ? (
           <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
+            <Shield className="h-3 w-3 mr-1" />
             {structured.cors.allow_all ? "Allow All" : "Custom"}
           </Badge>
-        ) : <span className="text-muted-foreground text-sm">Disabled</span>;
+        ) : (
+          <Badge className="bg-zinc-500/20 text-zinc-400 border-zinc-500/30 text-xs">
+            <ShieldOff className="h-3 w-3 mr-1" />
+            Disabled
+          </Badge>
+        );
       },
     },
     {
