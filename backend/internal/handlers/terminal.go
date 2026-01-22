@@ -151,6 +151,25 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 		})
 	}
 
+	// Keepalive ping goroutine
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				if err := conn.WriteJSON(TerminalMessage{Type: "ping"}); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	defer close(done)
+
 	// Handle incoming messages from user - relay to agent
 	for {
 		var msg TerminalMessage
@@ -173,6 +192,8 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 			session.agentConnLock.Unlock()
 		case "ping":
 			conn.WriteJSON(TerminalMessage{Type: "pong"})
+		case "pong":
+			// Keepalive response, ignore
 		}
 	}
 }
@@ -242,6 +263,25 @@ func (h *TerminalHandler) AgentTerminalConnect(w http.ResponseWriter, r *http.Re
 		Data: "\r\n\x1b[32mAgent connected. Terminal ready.\x1b[0m\r\n",
 	})
 
+	// Keepalive ping goroutine for agent
+	agentDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-agentDone:
+				return
+			case <-ticker.C:
+				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				if err := conn.WriteJSON(TerminalMessage{Type: "ping"}); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	defer close(agentDone)
+
 	// Read from agent WebSocket and relay to users
 	for {
 		var msg TerminalMessage
@@ -259,6 +299,8 @@ func (h *TerminalHandler) AgentTerminalConnect(w http.ResponseWriter, r *http.Re
 			h.broadcastToUsers(session, msg)
 		case "ping":
 			conn.WriteJSON(TerminalMessage{Type: "pong"})
+		case "pong":
+			// Keepalive response, ignore
 		}
 	}
 

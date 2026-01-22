@@ -468,12 +468,15 @@ type TerminalMessage struct {
 
 func runTerminalWebSocket(cfg *Config) {
 	for {
-		connectTerminal(cfg)
-		time.Sleep(5 * time.Second) // Reconnect delay
+		err := connectTerminal(cfg)
+		if err != nil {
+			log.Printf("Terminal: %v, reconnecting in 5s...", err)
+		}
+		time.Sleep(5 * time.Second)
 	}
 }
 
-func connectTerminal(cfg *Config) {
+func connectTerminal(cfg *Config) error {
 	// Convert HTTP URL to WebSocket URL
 	wsURL := cfg.ServerURL
 	if strings.HasPrefix(wsURL, "https://") {
@@ -486,8 +489,7 @@ func connectTerminal(cfg *Config) {
 	// Add API key as query parameter
 	u, err := url.Parse(wsURL)
 	if err != nil {
-		log.Printf("Terminal: invalid URL: %v", err)
-		return
+		return fmt.Errorf("invalid URL: %v", err)
 	}
 	q := u.Query()
 	q.Set("key", cfg.APIKey)
@@ -501,8 +503,7 @@ func connectTerminal(cfg *Config) {
 	
 	conn, _, err := dialer.Dial(u.String(), nil)
 	if err != nil {
-		log.Printf("Terminal: connection failed: %v", err)
-		return
+		return fmt.Errorf("connection failed: %v", err)
 	}
 	defer conn.Close()
 	
@@ -514,74 +515,69 @@ func connectTerminal(cfg *Config) {
 		shell = "/bin/bash"
 	}
 	
-	cmd := exec.Command(shell)
+	cmd := exec.Command(shell, "-l")
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
-		log.Printf("Terminal: failed to start PTY: %v", err)
 		conn.WriteJSON(TerminalMessage{Type: "output", Data: fmt.Sprintf("Failed to start shell: %v\r\n", err)})
-		return
+		return fmt.Errorf("failed to start PTY: %v", err)
 	}
+	
+	// Cleanup on exit
 	defer func() {
+		ptmx.Close()
 		cmd.Process.Kill()
 		cmd.Wait()
-		ptmx.Close()
 	}()
 	
-	// Handle graceful shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	
-	var wg sync.WaitGroup
 	done := make(chan struct{})
+	var once sync.Once
+	closeDone := func() { once.Do(func() { close(done) }) }
 	
-	// Read from PTY, send to WebSocket
-	wg.Add(1)
+	// Ping keepalive goroutine
 	go func() {
-		defer wg.Done()
-		buf := make([]byte, 4096)
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-done:
 				return
-			default:
+			case <-ticker.C:
+				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				if err := conn.WriteJSON(TerminalMessage{Type: "ping"}); err != nil {
+					closeDone()
+					return
+				}
 			}
-			
+		}
+	}()
+	
+	// Read from PTY, send to WebSocket
+	go func() {
+		buf := make([]byte, 4096)
+		for {
 			n, err := ptmx.Read(buf)
 			if err != nil {
-				if err != io.EOF {
-					log.Printf("Terminal: PTY read error: %v", err)
-				}
+				closeDone()
 				return
 			}
 			
-			msg := TerminalMessage{Type: "output", Data: string(buf[:n])}
-			conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			if err := conn.WriteJSON(msg); err != nil {
-				log.Printf("Terminal: WebSocket write error: %v", err)
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := conn.WriteJSON(TerminalMessage{Type: "output", Data: string(buf[:n])}); err != nil {
+				closeDone()
 				return
 			}
 		}
 	}()
 	
 	// Read from WebSocket, write to PTY
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
 		for {
-			select {
-			case <-done:
-				return
-			default:
-			}
-			
 			var msg TerminalMessage
-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			// No read deadline - rely on ping/pong for keepalive
 			if err := conn.ReadJSON(&msg); err != nil {
-				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-					log.Printf("Terminal: WebSocket read error: %v", err)
-				}
+				closeDone()
 				return
 			}
 			
@@ -594,20 +590,16 @@ func connectTerminal(cfg *Config) {
 				}
 			case "ping":
 				conn.WriteJSON(TerminalMessage{Type: "pong"})
+			case "pong":
+				// Keepalive response, ignore
 			}
 		}
 	}()
 	
-	// Wait for signal or goroutine exit
-	select {
-	case <-sigCh:
-		log.Println("Terminal: received shutdown signal")
-	case <-done:
-	}
-	
-	close(done)
+	// Wait for done signal
+	<-done
 	conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-	wg.Wait()
+	return nil
 }
 
 func processJob(cfg *Config, client *http.Client, id, jobType string, payload json.RawMessage) {

@@ -89,6 +89,9 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
     const wsUrl = apiUrl.replace(/^https?/, wsProtocol);
     const ws = new WebSocket(`${wsUrl}/api/machines/${machineId}/terminal?token=${token}`);
 
+    // Keepalive ping interval
+    let pingInterval: NodeJS.Timeout | null = null;
+
     ws.onopen = () => {
       if (!mountedRef.current) {
         ws.close();
@@ -105,6 +108,13 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
         cols: term.cols,
         rows: term.rows,
       }));
+
+      // Start keepalive ping
+      pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "ping" }));
+        }
+      }, 30000);
     };
 
     ws.onmessage = (event) => {
@@ -136,6 +146,10 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
     };
 
     ws.onclose = (event) => {
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
       if (!mountedRef.current) return;
       setConnected(false);
       if (event.wasClean) {
