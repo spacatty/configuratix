@@ -14,7 +14,6 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, Machine, UFWRule, Job, ConfigFile } from "@/lib/api";
 import { ChevronDown, ChevronRight, RefreshCw, FileCode, Save, RotateCcw, Loader2, FileText, Settings, Lock, Copy } from "lucide-react";
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
@@ -508,59 +507,57 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
   }
 
   return (
-    <ResizablePanelGroup direction="horizontal" className="h-[600px] rounded-lg border border-border/50">
+    <div className="grid grid-cols-4 gap-4 h-[600px]">
       {/* Config File List */}
-      <ResizablePanel defaultSize={30} minSize={25} maxSize={50}>
-        <div className="h-full bg-card/50 flex flex-col min-w-[250px]">
-          <div className="p-4 border-b border-border/50 flex items-center justify-between">
-            <h3 className="text-sm font-medium">Config Files</h3>
+      <Card className="border-border/50 bg-card/50 col-span-1 overflow-hidden">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center justify-between">
+            Config Files
             <Button variant="ghost" size="sm" onClick={loadConfigs} className="h-7 w-7 p-0">
               <RefreshCw className="h-3 w-3" />
             </Button>
-          </div>
-          <div className="flex-1 overflow-auto">
-            {configs.length === 0 ? (
-              <p className="text-sm text-muted-foreground p-6 text-center">
-                No config files found. Make sure the agent is running.
-              </p>
-            ) : (
-              <div className="divide-y divide-border/30">
-                {configs.map((config) => (
-                  <button
-                    key={config.path}
-                    onClick={() => loadConfigContent(config)}
-                    className={`w-full p-4 text-left hover:bg-muted/50 transition-colors flex items-start gap-3 ${
-                      selectedConfig?.path === config.path ? "bg-muted/50 border-l-2 border-l-primary" : ""
-                    }`}
-                  >
-                    <div className="mt-0.5">{getConfigIcon(config.type)}</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{config.name}</div>
-                      <button
-                        onClick={(e) => copyPath(config.path, e)}
-                        className="text-xs text-muted-foreground truncate hover:text-foreground transition-colors flex items-center gap-1 mt-1 group"
-                        title="Click to copy path"
-                      >
-                        <span className="truncate">{config.path}</span>
-                        <Copy className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-                      </button>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </ResizablePanel>
-
-      <ResizableHandle withHandle />
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0 overflow-auto">
+          {configs.length === 0 ? (
+            <p className="text-sm text-muted-foreground p-6 text-center">
+              No config files found. Make sure the agent is running.
+            </p>
+          ) : (
+            <div className="divide-y divide-border/30">
+              {configs.map((config) => (
+                <button
+                  key={config.path}
+                  onClick={() => loadConfigContent(config)}
+                  className={`w-full p-4 text-left hover:bg-muted/50 transition-colors flex items-start gap-3 ${
+                    selectedConfig?.path === config.path ? "bg-muted/50 border-l-2 border-l-primary" : ""
+                  }`}
+                >
+                  <div className="mt-0.5">{getConfigIcon(config.type)}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{config.name}</div>
+                    <button
+                      onClick={(e) => copyPath(config.path, e)}
+                      className="text-xs text-muted-foreground truncate hover:text-foreground transition-colors flex items-center gap-1 mt-1 group"
+                      title="Click to copy path"
+                    >
+                      <span className="truncate">{config.path}</span>
+                      <Copy className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                    </button>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Editor */}
-      <ResizablePanel defaultSize={70} minSize={50}>
-        <div className="h-full bg-card/50 flex flex-col min-w-[400px]">
-          <div className="p-4 border-b border-border/50 flex items-center justify-between">
+      <Card className="border-border/50 bg-card/50 col-span-3 overflow-hidden flex flex-col">
+        <CardHeader className="pb-2 flex-shrink-0">
+          <div className="flex items-center justify-between">
             <div>
-              <div className="text-sm font-medium flex items-center gap-2">
+              <CardTitle className="text-sm flex items-center gap-2">
                 {selectedConfig ? (
                   <>
                     {getConfigIcon(selectedConfig.type)}
@@ -570,7 +567,7 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
                 ) : (
                   "Select a config file"
                 )}
-              </div>
+              </CardTitle>
               {selectedConfig && (
                 <button 
                   onClick={(e) => copyPath(selectedConfig.path, e)}
@@ -608,40 +605,40 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
               </div>
             )}
           </div>
-          <div className="flex-1 overflow-hidden">
-            {loading ? (
-              <div className="h-full flex items-center justify-center">
-                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </CardHeader>
+        <CardContent className="flex-1 p-0 overflow-hidden">
+          {loading ? (
+            <div className="h-full flex items-center justify-center">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          ) : selectedConfig ? (
+            <MonacoEditor
+              height="100%"
+              language={getEditorLanguage(selectedConfig)}
+              theme="vs-dark"
+              value={content}
+              onChange={(value) => setContent(value || "")}
+              options={{
+                minimap: { enabled: false },
+                fontSize: 13,
+                lineNumbers: "on",
+                scrollBeyondLastLine: false,
+                wordWrap: "on",
+                padding: { top: 8, bottom: 8 },
+                automaticLayout: true,
+              }}
+            />
+          ) : (
+            <div className="h-full flex items-center justify-center text-muted-foreground">
+              <div className="text-center">
+                <FileCode className="h-12 w-12 mx-auto mb-2 opacity-50" />
+                <p>Select a configuration file from the list</p>
               </div>
-            ) : selectedConfig ? (
-              <MonacoEditor
-                height="100%"
-                language={getEditorLanguage(selectedConfig)}
-                theme="vs-dark"
-                value={content}
-                onChange={(value) => setContent(value || "")}
-                options={{
-                  minimap: { enabled: false },
-                  fontSize: 13,
-                  lineNumbers: "on",
-                  scrollBeyondLastLine: false,
-                  wordWrap: "on",
-                  padding: { top: 8, bottom: 8 },
-                  automaticLayout: true,
-                }}
-              />
-            ) : (
-              <div className="h-full flex items-center justify-center text-muted-foreground">
-                <div className="text-center">
-                  <FileCode className="h-12 w-12 mx-auto mb-2 opacity-50" />
-                  <p>Select a configuration file from the list</p>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </ResizablePanel>
-    </ResizablePanelGroup>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
