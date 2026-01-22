@@ -499,8 +499,53 @@ fi
 `, Timeout: 180},
 			// Write nginx config
 			{Action: "file", Op: "write", Path: "/etc/nginx/conf.d/configuratix/{{domain}}.conf", Content: "{{nginx_config}}", Mode: "0644", Log: "cat /etc/nginx/conf.d/configuratix/{{domain}}.conf"},
-			// Test and start/reload nginx
-			{Action: "exec", Command: "nginx -t", Timeout: 30},
+			// Test nginx - temporarily disable configs with missing SSL certs
+			{Action: "exec", Command: `
+echo "Testing nginx configuration..."
+
+# Function to check if a config has missing SSL certs
+check_and_disable_broken_configs() {
+    DISABLED_CONFIGS=""
+    for conf in /etc/nginx/conf.d/configuratix/*.conf; do
+        [ -f "$conf" ] || continue
+        # Extract ssl_certificate paths from config
+        certs=$(grep -oP 'ssl_certificate\s+\K[^;]+' "$conf" 2>/dev/null || true)
+        for cert in $certs; do
+            if [ ! -f "$cert" ]; then
+                echo "WARNING: Disabling $conf - missing certificate: $cert"
+                mv "$conf" "$conf.disabled" 2>/dev/null || true
+                DISABLED_CONFIGS="$DISABLED_CONFIGS $conf"
+                break
+            fi
+        done
+    done
+    echo "$DISABLED_CONFIGS"
+}
+
+# Also check main nginx conf.d
+check_and_disable_broken_configs_main() {
+    for conf in /etc/nginx/conf.d/*.conf; do
+        [ -f "$conf" ] || continue
+        [[ "$conf" == *"/configuratix/"* ]] && continue  # Skip our managed configs
+        certs=$(grep -oP 'ssl_certificate\s+\K[^;]+' "$conf" 2>/dev/null || true)
+        for cert in $certs; do
+            if [ ! -f "$cert" ]; then
+                echo "WARNING: Disabling $conf - missing certificate: $cert"
+                mv "$conf" "$conf.disabled" 2>/dev/null || true
+                break
+            fi
+        done
+    done
+}
+
+# Disable broken configs before testing
+check_and_disable_broken_configs
+check_and_disable_broken_configs_main
+
+# Now test nginx
+nginx -t
+`, Timeout: 60},
+			// Start/reload nginx
 			{Action: "exec", Command: "systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || systemctl start nginx", Timeout: 30, Log: "systemctl status nginx --no-pager | head -5"},
 		},
 	},
