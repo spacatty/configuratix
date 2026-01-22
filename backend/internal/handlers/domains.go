@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/lib/pq"
 )
 
 // structuredConfig is used for parsing the structured JSON
@@ -208,6 +209,22 @@ type DomainWithConfig struct {
 	MachineIP         *string    `db:"machine_ip" json:"machine_ip"`
 	ConfigID          *uuid.UUID `db:"config_id" json:"config_id"`
 	ConfigName        *string    `db:"config_name" json:"config_name"`
+	// DNS fields
+	DNSAccountID       *uuid.UUID     `db:"dns_account_id" json:"dns_account_id"`
+	DNSMode            string         `db:"dns_mode" json:"dns_mode"`
+	NSStatus           string         `db:"ns_status" json:"ns_status"`
+	NSLastCheck        *time.Time     `db:"ns_last_check" json:"ns_last_check"`
+	NSExpected         pq.StringArray `db:"ns_expected" json:"ns_expected"`
+	NSActual           pq.StringArray `db:"ns_actual" json:"ns_actual"`
+	IsWildcard         bool           `db:"is_wildcard" json:"is_wildcard"`
+	IPAddress          *string        `db:"ip_address" json:"ip_address"`
+	HTTPSSendProxy     bool           `db:"https_send_proxy" json:"https_send_proxy"`
+	HTTPIncomingPorts  pq.Int64Array  `db:"http_incoming_ports" json:"http_incoming_ports"`
+	HTTPOutgoingPorts  pq.Int64Array  `db:"http_outgoing_ports" json:"http_outgoing_ports"`
+	HTTPSIncomingPorts pq.Int64Array  `db:"https_incoming_ports" json:"https_incoming_ports"`
+	HTTPSOutgoingPorts pq.Int64Array  `db:"https_outgoing_ports" json:"https_outgoing_ports"`
+	DNSAccountName     *string        `db:"dns_account_name" json:"dns_account_name"`
+	DNSAccountProvider *string        `db:"dns_account_provider" json:"dns_account_provider"`
 }
 
 // ListDomains returns all domains with their machine and config info
@@ -224,11 +241,14 @@ func (h *DomainsHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 				m.hostname as machine_name, 
 				m.ip_address as machine_ip,
 				dcl.nginx_config_id as config_id,
-				nc.name as config_name
+				nc.name as config_name,
+				da.name as dns_account_name,
+				da.provider as dns_account_provider
 			FROM domains d
 			LEFT JOIN machines m ON d.assigned_machine_id = m.id
 			LEFT JOIN domain_config_links dcl ON d.id = dcl.domain_id
 			LEFT JOIN nginx_configs nc ON dcl.nginx_config_id = nc.id
+			LEFT JOIN dns_accounts da ON d.dns_account_id = da.id
 			ORDER BY d.created_at DESC
 		`)
 	} else {
@@ -237,11 +257,14 @@ func (h *DomainsHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 				m.hostname as machine_name, 
 				m.ip_address as machine_ip,
 				dcl.nginx_config_id as config_id,
-				nc.name as config_name
+				nc.name as config_name,
+				da.name as dns_account_name,
+				da.provider as dns_account_provider
 			FROM domains d
 			LEFT JOIN machines m ON d.assigned_machine_id = m.id
 			LEFT JOIN domain_config_links dcl ON d.id = dcl.domain_id
 			LEFT JOIN nginx_configs nc ON dcl.nginx_config_id = nc.id
+			LEFT JOIN dns_accounts da ON d.dns_account_id = da.id
 			WHERE d.owner_id = $1 OR d.owner_id IS NULL
 			ORDER BY d.created_at DESC
 		`, userID)
@@ -275,11 +298,14 @@ func (h *DomainsHandler) GetDomain(w http.ResponseWriter, r *http.Request) {
 			m.hostname as machine_name, 
 			m.ip_address as machine_ip,
 			dcl.nginx_config_id as config_id,
-			nc.name as config_name
+			nc.name as config_name,
+			da.name as dns_account_name,
+			da.provider as dns_account_provider
 		FROM domains d
 		LEFT JOIN machines m ON d.assigned_machine_id = m.id
 		LEFT JOIN domain_config_links dcl ON d.id = dcl.domain_id
 		LEFT JOIN nginx_configs nc ON dcl.nginx_config_id = nc.id
+		LEFT JOIN dns_accounts da ON d.dns_account_id = da.id
 		WHERE d.id = $1
 	`, id)
 	if err != nil {

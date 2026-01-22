@@ -206,6 +206,89 @@ export interface Domain {
   machine_ip: string | null;
   config_id: string | null;
   config_name: string | null;
+  // DNS settings
+  dns_account_id: string | null;
+  dns_mode: string; // managed, external
+  ns_status: string; // unknown, pending, valid, invalid
+  ns_last_check: string | null;
+  ns_expected: string[] | null;
+  ns_actual: string[] | null;
+  is_wildcard: boolean;
+  ip_address: string | null;
+  https_send_proxy: boolean;
+  http_incoming_ports: number[];
+  http_outgoing_ports: number[];
+  https_incoming_ports: number[];
+  https_outgoing_ports: number[];
+  dns_account_name: string | null;
+  dns_account_provider: string | null;
+}
+
+export interface DNSAccount {
+  id: string;
+  owner_id: string;
+  provider: string; // dnspod, cloudflare
+  name: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DNSRecord {
+  id: string;
+  domain_id: string;
+  name: string; // subdomain: www, @, *
+  record_type: string; // A, AAAA, CNAME, TXT, MX
+  value: string;
+  ttl: number;
+  priority: number | null;
+  proxied: boolean;
+  http_incoming_port: number | null;
+  http_outgoing_port: number | null;
+  https_incoming_port: number | null;
+  https_outgoing_port: number | null;
+  remote_record_id: string | null;
+  sync_status: string; // synced, pending, conflict, local_only, remote_only, error
+  sync_error: string | null;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NSStatus {
+  valid: boolean;
+  status: string; // unknown, pending, valid, invalid, external
+  expected: string[];
+  actual: string[];
+  message: string;
+}
+
+export interface DNSSyncResult {
+  in_sync: boolean;
+  created: DNSSyncRecord[];
+  updated: DNSSyncRecord[];
+  deleted: DNSSyncRecord[];
+  conflicts: DNSConflict[];
+  errors: string[];
+}
+
+export interface DNSSyncRecord {
+  id: string;
+  name: string;
+  type: string;
+  value: string;
+  ttl: number;
+  priority: number;
+  proxied: boolean;
+}
+
+export interface DNSConflict {
+  record_name: string;
+  record_type: string;
+  local_value: string;
+  remote_value: string;
+  remote_id: string;
+  local_id: string;
 }
 
 export interface NginxConfig {
@@ -665,6 +748,132 @@ class ApiClient {
     await this.request(`/api/domains/${id}/notes`, {
       method: "PUT",
       body: JSON.stringify({ notes }),
+    });
+  }
+
+  // DNS Accounts
+  async listDNSAccounts(): Promise<DNSAccount[]> {
+    return this.request<DNSAccount[]>("/api/dns-accounts");
+  }
+
+  async createDNSAccount(data: {
+    provider: string;
+    name: string;
+    api_id?: string;
+    api_token: string;
+    is_default?: boolean;
+  }): Promise<DNSAccount> {
+    return this.request<DNSAccount>("/api/dns-accounts", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDNSAccount(id: string, data: {
+    name?: string;
+    api_id?: string;
+    api_token?: string;
+    is_default?: boolean;
+  }): Promise<void> {
+    await this.request(`/api/dns-accounts/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteDNSAccount(id: string): Promise<void> {
+    await this.request(`/api/dns-accounts/${id}`, { method: "DELETE" });
+  }
+
+  async testDNSAccount(id: string): Promise<{ valid: boolean; message: string }> {
+    return this.request<{ valid: boolean; message: string }>(`/api/dns-accounts/${id}/test`, {
+      method: "POST",
+    });
+  }
+
+  // Domain DNS settings
+  async updateDomainDNS(id: string, data: {
+    dns_account_id?: string | null;
+    dns_mode?: string;
+    is_wildcard?: boolean;
+    ip_address?: string;
+    https_send_proxy?: boolean;
+    http_incoming_ports?: number[];
+    http_outgoing_ports?: number[];
+    https_incoming_ports?: number[];
+    https_outgoing_ports?: number[];
+  }): Promise<void> {
+    await this.request(`/api/domains/${id}/dns`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async checkDomainNS(id: string): Promise<NSStatus> {
+    return this.request<NSStatus>(`/api/domains/${id}/ns-check`, {
+      method: "POST",
+    });
+  }
+
+  // DNS Records
+  async listDNSRecords(domainId: string): Promise<DNSRecord[]> {
+    return this.request<DNSRecord[]>(`/api/domains/${domainId}/records`);
+  }
+
+  async createDNSRecord(domainId: string, data: {
+    name: string;
+    record_type: string;
+    value: string;
+    ttl?: number;
+    priority?: number;
+    proxied?: boolean;
+    http_incoming_port?: number;
+    http_outgoing_port?: number;
+    https_incoming_port?: number;
+    https_outgoing_port?: number;
+  }): Promise<DNSRecord> {
+    return this.request<DNSRecord>(`/api/domains/${domainId}/records`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDNSRecord(domainId: string, recordId: string, data: {
+    name: string;
+    record_type: string;
+    value: string;
+    ttl?: number;
+    priority?: number;
+    proxied?: boolean;
+    http_incoming_port?: number;
+    http_outgoing_port?: number;
+    https_incoming_port?: number;
+    https_outgoing_port?: number;
+  }): Promise<void> {
+    await this.request(`/api/domains/${domainId}/records/${recordId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteDNSRecord(domainId: string, recordId: string): Promise<void> {
+    await this.request(`/api/domains/${domainId}/records/${recordId}`, { method: "DELETE" });
+  }
+
+  // DNS Sync
+  async compareDNSRecords(domainId: string): Promise<DNSSyncResult> {
+    return this.request<DNSSyncResult>(`/api/domains/${domainId}/dns-sync`);
+  }
+
+  async applyDNSToRemote(domainId: string): Promise<DNSSyncResult> {
+    return this.request<DNSSyncResult>(`/api/domains/${domainId}/dns-sync/apply`, {
+      method: "POST",
+    });
+  }
+
+  async importDNSFromRemote(domainId: string): Promise<{ imported: number; message: string }> {
+    return this.request<{ imported: number; message: string }>(`/api/domains/${domainId}/dns-sync/import`, {
+      method: "POST",
     });
   }
 
