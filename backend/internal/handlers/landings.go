@@ -152,7 +152,7 @@ func (h *LandingsHandler) UploadLanding(w http.ResponseWriter, r *http.Request) 
 	// Store preview path as relative URL
 	var previewURL *string
 	if previewPath != "" {
-		url := "/api/landings/preview/" + previewToken + "/"
+		url := "/api/static/preview/" + previewToken + "/"
 		previewURL = &url
 	}
 
@@ -306,10 +306,10 @@ func (h *LandingsHandler) extractZipForPreview(zipPath, destPath string, landing
 	return nil
 }
 
-// ServePreview serves landing page preview (static files only, no PHP execution)
+// ServePreview serves static content preview (static files only, no PHP execution)
 func (h *LandingsHandler) ServePreview(w http.ResponseWriter, r *http.Request) {
-	// Parse URL: /api/landings/preview/{token}/{path...}
-	urlPath := strings.TrimPrefix(r.URL.Path, "/api/landings/preview/")
+	// Parse URL: /api/static/preview/{token}/{path...}
+	urlPath := strings.TrimPrefix(r.URL.Path, "/api/static/preview/")
 	parts := strings.SplitN(urlPath, "/", 2)
 	if len(parts) == 0 || parts[0] == "" {
 		log.Printf("Preview: missing token in URL: %s", r.URL.Path)

@@ -983,11 +983,11 @@ class ApiClient {
 
   // Landings
   async listLandings(): Promise<Landing[]> {
-    return this.request<Landing[]>("/api/landings");
+    return this.request<Landing[]>("/api/static");
   }
 
   async getLanding(id: string): Promise<Landing> {
-    return this.request<Landing>(`/api/landings/${id}`);
+    return this.request<Landing>(`/api/static/${id}`);
   }
 
   async uploadLanding(name: string, file: File): Promise<Landing> {
@@ -1001,7 +1001,7 @@ class ApiClient {
       headers["Authorization"] = `Bearer ${this.token}`;
     }
 
-    const response = await fetch(`${this.baseUrl}/api/landings`, {
+    const response = await fetch(`${this.baseUrl}/api/static`, {
       method: "POST",
       headers,
       body: formData,
@@ -1016,18 +1016,41 @@ class ApiClient {
   }
 
   async updateLanding(id: string, data: { name?: string; type?: string }): Promise<void> {
-    await this.request(`/api/landings/${id}`, {
+    await this.request(`/api/static/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
   }
 
   async deleteLanding(id: string): Promise<void> {
-    await this.request(`/api/landings/${id}`, { method: "DELETE" });
+    await this.request(`/api/static/${id}`, { method: "DELETE" });
   }
 
-  getLandingDownloadUrl(id: string): string {
-    return `${this.baseUrl}/api/landings/${id}/download`;
+  async downloadStatic(id: string, fileName: string): Promise<void> {
+    const token = this.getToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${this.baseUrl}/api/static/${id}/download`, {
+      method: "GET",
+      headers,
+    });
+
+    if (!response.ok) {
+      throw new Error("Download failed");
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
   }
 
   // Machine Configs (file editing)

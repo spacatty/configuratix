@@ -199,7 +199,14 @@ export default function LandingsPage() {
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem 
-                onClick={() => window.open(api.getLandingDownloadUrl(landing.id), "_blank")}
+                onClick={async () => {
+                  try {
+                    await api.downloadStatic(landing.id, landing.file_name);
+                    toast.success("Download started");
+                  } catch {
+                    toast.error("Download failed");
+                  }
+                }}
               >
                 <Download className="mr-2 h-4 w-4" />
                 Download
@@ -240,52 +247,6 @@ export default function LandingsPage() {
           <Plus className="mr-2 h-4 w-4" />
           Upload Content
         </Button>
-      </div>
-
-      {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total</CardTitle>
-            <FileArchive className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{landings.length}</div>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">HTML</CardTitle>
-            <FileArchive className="h-4 w-4 text-blue-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-500">
-              {landings.filter(l => l.type === "html").length}
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">PHP</CardTitle>
-            <FileArchive className="h-4 w-4 text-purple-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-purple-500">
-              {landings.filter(l => l.type === "php").length}
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Assets</CardTitle>
-            <FileArchive className="h-4 w-4 text-orange-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-orange-500">
-              {landings.filter(l => l.type === "asset").length}
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       {/* Static Content Table */}

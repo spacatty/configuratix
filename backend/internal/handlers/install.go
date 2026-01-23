@@ -1144,8 +1144,8 @@ func deployLanding(cfg *Config, client *http.Client, landingID, targetPath, inde
 		runCmd("rm", "-rf", targetPath+"/*")
 	}
 	
-	// Download landing from server
-	downloadURL := cfg.ServerURL + "/api/agent/landings/" + landingID + "/download"
+	// Download static content from server
+	downloadURL := cfg.ServerURL + "/api/agent/static/" + landingID + "/download"
 	logs.WriteString(fmt.Sprintf("Downloading from %s...\n", downloadURL))
 	
 	req, _ := http.NewRequest("GET", downloadURL, nil)

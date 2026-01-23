@@ -193,16 +193,16 @@ func main() {
 	apiRouter.HandleFunc("/commands/{id}", commandsHandler.GetCommand).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/commands/execute", commandsHandler.ExecuteCommand).Methods("POST", "OPTIONS")
 
-	// Landings
-	landingsHandler := handlers.NewLandingsHandler(db)
-	apiRouter.HandleFunc("/landings", landingsHandler.ListLandings).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/landings", landingsHandler.UploadLanding).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/landings/{id}", landingsHandler.GetLanding).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/landings/{id}", landingsHandler.UpdateLanding).Methods("PUT", "OPTIONS")
-	apiRouter.HandleFunc("/landings/{id}", landingsHandler.DeleteLanding).Methods("DELETE", "OPTIONS")
-	apiRouter.HandleFunc("/landings/{id}/download", landingsHandler.DownloadLanding).Methods("GET", "OPTIONS")
-	// Landing preview (static file serving - public with token)
-	router.PathPrefix("/api/landings/preview/").HandlerFunc(landingsHandler.ServePreview)
+	// Static Content (formerly Landings)
+	staticHandler := handlers.NewLandingsHandler(db)
+	apiRouter.HandleFunc("/static", staticHandler.ListLandings).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/static", staticHandler.UploadLanding).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/static/{id}", staticHandler.GetLanding).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/static/{id}", staticHandler.UpdateLanding).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/static/{id}", staticHandler.DeleteLanding).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/static/{id}/download", staticHandler.DownloadLanding).Methods("GET", "OPTIONS")
+	// Static preview (public with token)
+	router.PathPrefix("/api/static/preview/").HandlerFunc(staticHandler.ServePreview)
 
 	// Terminal WebSocket
 	terminalHandler := handlers.NewTerminalHandler(db)
@@ -210,8 +210,8 @@ func main() {
 	apiRouter.HandleFunc("/machines/{id}/terminal/status", terminalHandler.GetTerminalStatus).Methods("GET", "OPTIONS")
 	// Agent terminal WebSocket (uses agent auth)
 	agentRouter.HandleFunc("/terminal", terminalHandler.AgentTerminalConnect).Methods("GET")
-	// Agent landing download (uses agent auth)
-	agentRouter.HandleFunc("/landings/{id}/download", landingsHandler.AgentDownloadLanding).Methods("GET", "OPTIONS")
+	// Agent static content download (uses agent auth)
+	agentRouter.HandleFunc("/static/{id}/download", staticHandler.AgentDownloadLanding).Methods("GET", "OPTIONS")
 
 	// Start domain health check scheduler
 	checkInterval := 1 // Default: 1 hour
