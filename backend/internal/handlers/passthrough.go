@@ -196,6 +196,14 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 		h.updateDNSRecordToMachine(recordID, firstMachineID, "manual")
 	}
 
+	// Regenerate and deploy nginx configs to all pool members
+	// This ensures target_ip changes are propagated
+	go func() {
+		if err := h.nginx.ApplyToAllPoolMembers(pool.ID, false); err != nil {
+			log.Printf("Failed to apply nginx configs for pool %s: %v", pool.ID, err)
+		}
+	}()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(pool)
 }
@@ -208,11 +216,27 @@ func (h *PassthroughHandler) DeleteRecordPool(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Get pool and members before deletion for nginx cleanup
+	var pool models.PassthroughPool
+	var machineIDs []uuid.UUID
+	if err := h.db.Get(&pool, "SELECT * FROM dns_passthrough_pools WHERE dns_record_id = $1", recordID); err == nil {
+		h.db.Select(&machineIDs, "SELECT machine_id FROM dns_passthrough_members WHERE pool_id = $1", pool.ID)
+	}
+
 	// Delete pool (cascade deletes members)
 	h.db.Exec("DELETE FROM dns_passthrough_pools WHERE dns_record_id = $1", recordID)
 
 	// Switch record back to static mode
 	h.db.Exec("UPDATE dns_records SET mode = 'static' WHERE id = $1", recordID)
+
+	// Regenerate nginx configs for affected machines (pool is now removed)
+	go func() {
+		for _, machineID := range machineIDs {
+			if err := h.nginx.ApplyToMachine(machineID); err != nil {
+				log.Printf("Failed to update nginx config for machine %s after pool deletion: %v", machineID, err)
+			}
+		}
+	}()
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -453,6 +477,14 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 		h.updateWildcardDNS(domainID, firstMachineID, pool.IncludeRoot, "manual")
 	}
 
+	// Regenerate and deploy nginx configs to all pool members
+	// This ensures target_ip changes are propagated
+	go func() {
+		if err := h.nginx.ApplyToAllPoolMembers(pool.ID, true); err != nil {
+			log.Printf("Failed to apply nginx configs for wildcard pool %s: %v", pool.ID, err)
+		}
+	}()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(pool)
 }
@@ -465,8 +497,24 @@ func (h *PassthroughHandler) DeleteWildcardPool(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Get pool and members before deletion for nginx cleanup
+	var pool models.WildcardPool
+	var machineIDs []uuid.UUID
+	if err := h.db.Get(&pool, "SELECT * FROM dns_wildcard_pools WHERE dns_domain_id = $1", domainID); err == nil {
+		h.db.Select(&machineIDs, "SELECT machine_id FROM dns_wildcard_pool_members WHERE pool_id = $1", pool.ID)
+	}
+
 	h.db.Exec("DELETE FROM dns_wildcard_pools WHERE dns_domain_id = $1", domainID)
 	h.db.Exec("UPDATE dns_managed_domains SET proxy_mode = 'separate' WHERE id = $1", domainID)
+
+	// Regenerate nginx configs for affected machines (pool is now removed)
+	go func() {
+		for _, machineID := range machineIDs {
+			if err := h.nginx.ApplyToMachine(machineID); err != nil {
+				log.Printf("Failed to update nginx config for machine %s after wildcard pool deletion: %v", machineID, err)
+			}
+		}
+	}()
 
 	w.WriteHeader(http.StatusNoContent)
 }
