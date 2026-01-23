@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // UUIDArray is a custom type for UUID arrays in PostgreSQL
@@ -52,7 +53,7 @@ type PassthroughPool struct {
 	CurrentIndex       int             `db:"current_index" json:"current_index"`
 	IsPaused           bool            `db:"is_paused" json:"is_paused"`
 	LastRotatedAt      *time.Time      `db:"last_rotated_at" json:"last_rotated_at"`
-	GroupIDs           JSONStringArray `db:"group_ids" json:"group_ids"`                     // Machine groups for dynamic membership (JSONB)
+	GroupIDs           pq.StringArray  `db:"group_ids" json:"group_ids"`                     // Machine groups for dynamic membership (UUID[])
 	CreatedAt          time.Time       `db:"created_at" json:"created_at"`
 	UpdatedAt          time.Time       `db:"updated_at" json:"updated_at"`
 }
@@ -94,7 +95,7 @@ type WildcardPool struct {
 	CurrentIndex       int             `db:"current_index" json:"current_index"`
 	IsPaused           bool            `db:"is_paused" json:"is_paused"`
 	LastRotatedAt      *time.Time      `db:"last_rotated_at" json:"last_rotated_at"`
-	GroupIDs           JSONStringArray `db:"group_ids" json:"group_ids"`               // Machine groups for dynamic membership (JSONB)
+	GroupIDs           pq.StringArray  `db:"group_ids" json:"group_ids"`               // Machine groups for dynamic membership (UUID[])
 	CreatedAt          time.Time       `db:"created_at" json:"created_at"`
 	UpdatedAt          time.Time       `db:"updated_at" json:"updated_at"`
 }

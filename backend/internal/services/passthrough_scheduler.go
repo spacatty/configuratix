@@ -9,7 +9,6 @@ import (
 	"configuratix/backend/internal/models"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 )
 
 // PassthroughScheduler handles automatic DNS rotation
@@ -160,7 +159,7 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 			JOIN machines m ON gm.machine_id = m.id
 			LEFT JOIN agents a ON m.agent_id = a.id
 			WHERE gm.group_id = ANY($1::uuid[])
-		`, pq.Array([]string(pool.GroupIDs)))
+		`, pool.GroupIDs)
 		
 		// Add group members that aren't already in direct members
 		for _, gm := range groupMembers {
@@ -278,7 +277,7 @@ func (s *PassthroughScheduler) rotateWildcardPool(pool models.WildcardPool) {
 			JOIN machines m ON gm.machine_id = m.id
 			LEFT JOIN agents a ON m.agent_id = a.id
 			WHERE gm.group_id = ANY($1::uuid[])
-		`, pq.Array([]string(pool.GroupIDs)))
+		`, pool.GroupIDs)
 		
 		// Add group members that aren't already in direct members
 		for _, gm := range groupMembers {

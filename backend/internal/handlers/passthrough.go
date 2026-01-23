@@ -86,7 +86,7 @@ func (h *PassthroughHandler) GetRecordPool(w http.ResponseWriter, r *http.Reques
 			LEFT JOIN machine_group_members gm ON g.id = gm.group_id
 			WHERE g.id = ANY($1::uuid[])
 			GROUP BY g.id
-		`, pq.Array([]string(pool.GroupIDs)))
+		`, pool.GroupIDs)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -162,7 +162,7 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 	}
 
 	scheduledTimesJSON, _ := json.Marshal(req.ScheduledTimes)
-	groupIDsJSON, _ := json.Marshal(req.GroupIDs)
+	groupIDsArray := pq.StringArray(req.GroupIDs)
 
 	// Upsert pool
 	var pool models.PassthroughPool
@@ -184,7 +184,7 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 			updated_at = NOW()
 		RETURNING *
 	`, recordID, req.TargetIP, req.TargetPort, req.TargetPortHTTP, req.RotationStrategy, req.RotationMode,
-		req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, groupIDsJSON)
+		req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, groupIDsArray)
 	if err != nil {
 		log.Printf("Failed to upsert pool: %v", err)
 		http.Error(w, "Failed to save pool", http.StatusInternalServerError)
@@ -423,7 +423,7 @@ func (h *PassthroughHandler) GetWildcardPool(w http.ResponseWriter, r *http.Requ
 			LEFT JOIN machine_group_members gm ON g.id = gm.group_id
 			WHERE g.id = ANY($1::uuid[])
 			GROUP BY g.id
-		`, pq.Array([]string(pool.GroupIDs)))
+		`, pool.GroupIDs)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -496,7 +496,7 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 	}
 
 	scheduledTimesJSON, _ := json.Marshal(req.ScheduledTimes)
-	groupIDsJSON, _ := json.Marshal(req.GroupIDs)
+	groupIDsArray := pq.StringArray(req.GroupIDs)
 
 	var pool models.WildcardPool
 	err = h.db.Get(&pool, `
@@ -518,7 +518,7 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 			updated_at = NOW()
 		RETURNING *
 	`, domainID, req.IncludeRoot, req.TargetIP, req.TargetPort, req.TargetPortHTTP, req.RotationStrategy,
-		req.RotationMode, req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, groupIDsJSON)
+		req.RotationMode, req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, groupIDsArray)
 	if err != nil {
 		log.Printf("Failed to upsert wildcard pool: %v", err)
 		http.Error(w, "Failed to save pool", http.StatusInternalServerError)
@@ -709,7 +709,7 @@ func (h *PassthroughHandler) selectNextMachine(poolID uuid.UUID, strategy string
 			JOIN machines m ON gm.machine_id = m.id
 			LEFT JOIN agents a ON m.agent_id = a.id
 			WHERE gm.group_id = ANY($1::uuid[])
-		`, pq.Array([]string(pool.GroupIDs)))
+		`, pool.GroupIDs)
 
 		// Add group machines that aren't already direct members
 		existingIDs := make(map[uuid.UUID]bool)
@@ -800,7 +800,7 @@ func (h *PassthroughHandler) selectNextMachineWildcard(poolID uuid.UUID, strateg
 			JOIN machines m ON gm.machine_id = m.id
 			LEFT JOIN agents a ON m.agent_id = a.id
 			WHERE gm.group_id = ANY($1::uuid[])
-		`, pq.Array([]string(pool.GroupIDs)))
+		`, pool.GroupIDs)
 
 		// Add group machines that aren't already direct members
 		existingIDs := make(map[uuid.UUID]bool)
