@@ -107,7 +107,7 @@ fi
 # Install dependencies
 echo "Installing dependencies..."
 apt-get update
-apt-get install -y golang-go nginx certbot python3-certbot-nginx fail2ban ufw unzip
+apt-get install -y nginx certbot python3-certbot-nginx fail2ban ufw unzip curl
 
 # Create directories
 mkdir -p /etc/configuratix
@@ -151,12 +151,25 @@ if ! ufw status | grep -q "Status: active"; then
     echo "y" | ufw enable
 fi
 
-# Build agent
-echo "Building agent..."
-cd /tmp
-rm -rf configuratix-agent-build
-mkdir configuratix-agent-build
-cd configuratix-agent-build
+# Download agent binary
+echo "Downloading agent binary..."
+AGENT_DOWNLOAD_URL="${SERVER_URL}/api/agent/download"
+AGENT_PATH="/opt/configuratix/bin/configuratix-agent"
+
+# Try to download pre-built binary
+if curl -sSL -f -o "${AGENT_PATH}.tmp" "$AGENT_DOWNLOAD_URL"; then
+    mv "${AGENT_PATH}.tmp" "$AGENT_PATH"
+    chmod +x "$AGENT_PATH"
+    echo "Agent binary downloaded successfully"
+else
+    echo "Failed to download pre-built binary, falling back to source build..."
+    # Install Go for source build
+    apt-get install -y golang-go
+    
+    cd /tmp
+    rm -rf configuratix-agent-build
+    mkdir configuratix-agent-build
+    cd configuratix-agent-build
 
 cat > go.mod << 'EOF'
 module configuratix/agent
@@ -1343,12 +1356,14 @@ func getOS() string {
 }
 MAINEOF
 
-# Download dependencies
+# Download dependencies and build (fallback only)
 echo "Downloading Go dependencies..."
 go mod tidy
 
 go build -o /opt/configuratix/bin/configuratix-agent ./cmd/agent
 cd / && rm -rf /tmp/configuratix-agent-build
+echo "Agent built from source successfully"
+fi
 
 # Handle enrollment
 if [ "$REINSTALL" = false ] || [ "$FORCE_NEW" = true ]; then
