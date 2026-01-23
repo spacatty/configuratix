@@ -318,15 +318,54 @@ func (g *PassthroughNginxGenerator) ApplyToMachine(machineID uuid.UUID) error {
 		return fmt.Errorf("machine %s has no agent", machineID)
 	}
 	
-	// Use 'run' job with multiple steps: create dir, write file, reload nginx
+	// Use 'run' job with multiple steps:
+	// 1. Install stream module if needed
+	// 2. Ensure nginx.conf includes stream.d
+	// 3. Write the config
+	// 4. Reload nginx
+	setupScript := `
+# Setup nginx stream module and configuration
+NGINX_CONF="/etc/nginx/nginx.conf"
+
+# 1. Create directory
+mkdir -p /etc/nginx/stream.d
+
+# 2. Install stream module if not available
+if nginx -t 2>&1 | grep -q "unknown directive.*stream"; then
+    echo "Installing nginx stream module..."
+    apt-get update -qq
+    if apt-cache show libnginx-mod-stream >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y libnginx-mod-stream
+    elif [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
+        if ! grep -q "load_module.*ngx_stream_module" "$NGINX_CONF"; then
+            sed -i '1i load_module /usr/lib/nginx/modules/ngx_stream_module.so;' "$NGINX_CONF"
+        fi
+    fi
+fi
+
+# 3. Add stream block to nginx.conf if missing
+if ! grep -qE "^stream\s*\{" "$NGINX_CONF"; then
+    echo "" >> "$NGINX_CONF"
+    echo "# SSL Passthrough configuration (Configuratix)" >> "$NGINX_CONF"
+    echo "stream {" >> "$NGINX_CONF"
+    echo "    include /etc/nginx/stream.d/*.conf;" >> "$NGINX_CONF"
+    echo "}" >> "$NGINX_CONF"
+    echo "Added stream block to nginx.conf"
+elif ! grep -q "include /etc/nginx/stream.d" "$NGINX_CONF"; then
+    sed -i '/^stream\s*{/a\    include /etc/nginx/stream.d/*.conf;' "$NGINX_CONF"
+    echo "Added stream.d include to existing stream block"
+fi
+
+echo "Stream setup complete"
+`
 	payload := fmt.Sprintf(`{
 		"steps": [
-			{"action": "exec", "command": "mkdir -p /etc/nginx/stream.d"},
+			{"action": "exec", "command": %q, "timeout": 300},
 			{"action": "file", "op": "write", "path": %q, "content": %q, "mode": "0644"},
-			{"action": "exec", "command": "nginx -t && systemctl reload nginx || nginx -s reload"}
+			{"action": "exec", "command": "nginx -t && systemctl reload nginx"}
 		],
 		"on_error": "stop"
-	}`, configPath, config)
+	}`, setupScript, configPath, config)
 	
 	_, err = g.db.Exec(`
 		INSERT INTO jobs (agent_id, type, payload_json, status)

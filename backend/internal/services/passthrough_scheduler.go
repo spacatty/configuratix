@@ -1,11 +1,13 @@
 package services
 
 import (
+	"context"
 	"log"
 	"math/rand"
 	"time"
 
 	"configuratix/backend/internal/database"
+	"configuratix/backend/internal/dns"
 	"configuratix/backend/internal/models"
 
 	"github.com/google/uuid"
@@ -366,29 +368,123 @@ func (s *PassthroughScheduler) rotateWildcardPool(pool models.WildcardPool) {
 	log.Printf("Passthrough scheduler: rotated wildcard pool %s to %s (%s)", pool.ID, nextMachine.MachineID, nextMachine.MachineIP)
 }
 
-// updateDNSRecord updates a DNS record value
+// updateDNSRecord updates a DNS record value and syncs to provider
 func (s *PassthroughScheduler) updateDNSRecord(recordID uuid.UUID, newIP string) {
 	// Update local record
 	s.db.Exec("UPDATE dns_records SET value = $1, sync_status = 'pending', updated_at = NOW() WHERE id = $2", newIP, recordID)
 
 	// Get record and account info for provider update
 	var record struct {
-		Name         string    `db:"name"`
-		Type         string    `db:"type"`
-		DNSDomainID  uuid.UUID `db:"dns_domain_id"`
-		DNSAccountID uuid.UUID `db:"dns_account_id"`
-		ProviderID   *string   `db:"provider_record_id"`
+		Name           string     `db:"name"`
+		RecordType     string     `db:"record_type"`
+		TTL            int        `db:"ttl"`
+		Priority       int        `db:"priority"`
+		Proxied        bool       `db:"proxied"`
+		DNSDomainID    uuid.UUID  `db:"dns_domain_id"`
+		DomainFQDN     string     `db:"domain_fqdn"`
+		DNSAccountID   *uuid.UUID `db:"dns_account_id"`
+		RemoteRecordID *string    `db:"remote_record_id"`
 	}
-	s.db.Get(&record, `
-		SELECT r.name, r.type, r.dns_domain_id, d.dns_account_id, r.provider_record_id
+	err := s.db.Get(&record, `
+		SELECT r.name, r.record_type, r.ttl, r.priority, r.proxied, r.dns_domain_id, 
+		       d.fqdn as domain_fqdn, d.dns_account_id, r.remote_record_id
 		FROM dns_records r
 		JOIN dns_managed_domains d ON r.dns_domain_id = d.id
 		WHERE r.id = $1
 	`, recordID)
+	if err != nil {
+		log.Printf("Scheduler: failed to get record info: %v", err)
+		s.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", err.Error(), recordID)
+		return
+	}
 
-	// TODO: Call DNS provider to update record
-	// For now, just mark as synced
-	s.db.Exec("UPDATE dns_records SET sync_status = 'synced' WHERE id = $1", recordID)
+	// If no DNS account, just update locally
+	if record.DNSAccountID == nil {
+		s.db.Exec("UPDATE dns_records SET sync_status = 'synced' WHERE id = $1", recordID)
+		return
+	}
+
+	// Get DNS account and create provider
+	var account struct {
+		Provider string  `db:"provider"`
+		ApiID    *string `db:"api_id"`
+		ApiToken string  `db:"api_token"`
+	}
+	err = s.db.Get(&account, "SELECT provider, api_id, api_token FROM dns_accounts WHERE id = $1", *record.DNSAccountID)
+	if err != nil {
+		log.Printf("Scheduler: failed to get DNS account: %v", err)
+		s.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", err.Error(), recordID)
+		return
+	}
+
+	apiID := ""
+	if account.ApiID != nil {
+		apiID = *account.ApiID
+	}
+	provider, err := dns.NewProvider(account.Provider, apiID, account.ApiToken)
+	if err != nil {
+		log.Printf("Scheduler: failed to create provider: %v", err)
+		s.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", err.Error(), recordID)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dnsRecord := dns.Record{
+		Type:     record.RecordType,
+		Name:     record.Name,
+		Value:    newIP,
+		TTL:      record.TTL,
+		Priority: record.Priority,
+		Proxied:  record.Proxied,
+	}
+
+	var providerRecordID string
+	if record.RemoteRecordID != nil && *record.RemoteRecordID != "" {
+		dnsRecord.ID = *record.RemoteRecordID
+		_, err = provider.UpdateRecord(ctx, record.DomainFQDN, *record.RemoteRecordID, dnsRecord)
+		if err != nil {
+			log.Printf("Scheduler: failed to update record, trying delete+create: %v", err)
+			provider.DeleteRecord(ctx, record.DomainFQDN, *record.RemoteRecordID)
+			created, createErr := provider.CreateRecord(ctx, record.DomainFQDN, dnsRecord)
+			if createErr != nil {
+				log.Printf("Scheduler: failed to recreate record: %v", createErr)
+				s.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", createErr.Error(), recordID)
+				return
+			}
+			providerRecordID = created.ID
+		} else {
+			providerRecordID = *record.RemoteRecordID
+		}
+	} else {
+		created, createErr := provider.CreateRecord(ctx, record.DomainFQDN, dnsRecord)
+		if createErr != nil {
+			// Try to find and update existing
+			records, _ := provider.ListRecords(ctx, record.DomainFQDN)
+			for _, r := range records {
+				if r.Name == record.Name && r.Type == record.RecordType {
+					_, updateErr := provider.UpdateRecord(ctx, record.DomainFQDN, r.ID, dnsRecord)
+					if updateErr == nil {
+						providerRecordID = r.ID
+						createErr = nil
+					}
+					break
+				}
+			}
+			if createErr != nil {
+				log.Printf("Scheduler: failed to create/update record: %v", createErr)
+				s.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", createErr.Error(), recordID)
+				return
+			}
+		} else {
+			providerRecordID = created.ID
+		}
+	}
+
+	s.db.Exec("UPDATE dns_records SET remote_record_id = $1, sync_status = 'synced', sync_error = NULL WHERE id = $2", 
+		providerRecordID, recordID)
+	log.Printf("Scheduler: synced DNS record %s to %s", record.Name, newIP)
 }
 
 // updateWildcardDNS updates wildcard DNS records
