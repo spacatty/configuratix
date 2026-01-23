@@ -995,9 +995,9 @@ function DNSSettingsDialog({
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="settings">Settings</TabsTrigger>
-            <TabsTrigger value="records" disabled={!dnsAccountId || proxyMode === "wildcard"}>Records</TabsTrigger>
+            <TabsTrigger value="records" disabled={!dnsAccountId || proxyMode !== "static"}>Records</TabsTrigger>
             <TabsTrigger value="passthrough" disabled={!dnsAccountId || proxyMode === "static"}>Passthrough</TabsTrigger>
-            <TabsTrigger value="sync" disabled={!dnsAccountId}>Sync</TabsTrigger>
+            <TabsTrigger value="sync" disabled={!dnsAccountId || proxyMode !== "static"}>Sync</TabsTrigger>
             <TabsTrigger value="debug" disabled={!dnsAccountId}>Debug</TabsTrigger>
           </TabsList>
 
@@ -1082,87 +1082,47 @@ function DNSSettingsDialog({
 
             {/* Proxy Mode Selector - Right after DNS Account */}
             {dnsAccountId && (
-              <div className="p-4 border rounded-lg bg-muted/20 space-y-4">
-                {/* Primary Mode: Static vs Dynamic */}
-                <div className="space-y-3">
-                  <div>
-                    <Label className="text-sm font-medium">Proxy Mode</Label>
-                    <p className="text-xs text-muted-foreground mt-0.5">How DNS records are routed</p>
-                  </div>
-                  <div className="flex gap-4">
-                    <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "static" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
-                      <input
-                        type="radio"
-                        name="proxy_mode"
-                        value="static"
-                        checked={proxyMode === "static"}
-                        onChange={() => setProxyMode("static")}
-                        className="sr-only"
-                      />
-                      <div className="flex items-center gap-2 mb-1">
-                        <Globe className="h-4 w-4" />
-                        <span className="font-medium text-sm">Static</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground">Direct DNS to provider. Records point to specified IPs.</p>
-                    </label>
-                    <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode !== "static" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
-                      <input
-                        type="radio"
-                        name="proxy_mode"
-                        value="dynamic"
-                        checked={proxyMode !== "static"}
-                        onChange={() => setProxyMode("separate")}
-                        className="sr-only"
-                      />
-                      <div className="flex items-center gap-2 mb-1">
-                        <Zap className="h-4 w-4" />
-                        <span className="font-medium text-sm">Dynamic (Passthrough)</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground">Route through rotating proxy pool. Auto-managed DNS records.</p>
-                    </label>
-                  </div>
+              <div className="p-4 border rounded-lg bg-muted/20 space-y-3">
+                <div>
+                  <Label className="text-sm font-medium">Proxy Mode</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">How DNS records are routed</p>
                 </div>
-
-                {/* Secondary Mode: Separate vs Wildcard (only if Dynamic) */}
+                <div className="flex gap-4">
+                  <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "static" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
+                    <input
+                      type="radio"
+                      name="proxy_mode"
+                      value="static"
+                      checked={proxyMode === "static"}
+                      onChange={() => setProxyMode("static")}
+                      className="sr-only"
+                    />
+                    <div className="flex items-center gap-2 mb-1">
+                      <Globe className="h-4 w-4" />
+                      <span className="font-medium text-sm">Static (DNS Provider)</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Manage DNS records directly with your provider. Standard DNS management.</p>
+                  </label>
+                  <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode !== "static" ? "border-purple-500 bg-purple-500/10" : "border-border hover:bg-muted/30"}`}>
+                    <input
+                      type="radio"
+                      name="proxy_mode"
+                      value="passthrough"
+                      checked={proxyMode !== "static"}
+                      onChange={() => setProxyMode("separate")}
+                      className="sr-only"
+                    />
+                    <div className="flex items-center gap-2 mb-1">
+                      <Zap className="h-4 w-4" />
+                      <span className="font-medium text-sm">Passthrough (Dynamic)</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Route traffic through rotating proxy pools. DNS auto-managed.</p>
+                  </label>
+                </div>
                 {proxyMode !== "static" && (
-                  <div className="space-y-3 pt-3 border-t border-border/50">
-                    <div>
-                      <Label className="text-sm font-medium">Passthrough Mode</Label>
-                      <p className="text-xs text-muted-foreground mt-0.5">How proxy pools are organized</p>
-                    </div>
-                    <div className="flex gap-4">
-                      <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "separate" ? "border-purple-500 bg-purple-500/10" : "border-border hover:bg-muted/30"}`}>
-                        <input
-                          type="radio"
-                          name="passthrough_mode"
-                          value="separate"
-                          checked={proxyMode === "separate"}
-                          onChange={() => setProxyMode("separate")}
-                          className="sr-only"
-                        />
-                        <div className="flex items-center gap-2 mb-1">
-                          <Settings2 className="h-4 w-4" />
-                          <span className="font-medium text-sm">Separate Records</span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">Each subdomain has its own pool, target server, and port config.</p>
-                      </label>
-                      <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "wildcard" ? "border-purple-500 bg-purple-500/10" : "border-border hover:bg-muted/30"}`}>
-                        <input
-                          type="radio"
-                          name="passthrough_mode"
-                          value="wildcard"
-                          checked={proxyMode === "wildcard"}
-                          onChange={() => setProxyMode("wildcard")}
-                          className="sr-only"
-                        />
-                        <div className="flex items-center gap-2 mb-1">
-                          <Zap className="h-4 w-4" />
-                          <span className="font-medium text-sm">Wildcard</span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">Single pool handles *.{domain?.fqdn}. One target server.</p>
-                      </label>
-                    </div>
-                  </div>
+                  <p className="text-xs text-muted-foreground bg-purple-500/10 p-2 rounded">
+                    ⚡ Passthrough mode enabled. Configure pools in the <strong>Passthrough</strong> tab.
+                  </p>
                 )}
               </div>
             )}
@@ -1427,18 +1387,70 @@ function DNSSettingsDialog({
 
           {/* Passthrough Tab - Dynamic Mode Configuration */}
           <TabsContent value="passthrough" className="space-y-6 mt-6">
+            {/* Passthrough Mode Selector */}
+            <div className="p-4 border rounded-lg bg-muted/20 space-y-3">
+              <div>
+                <Label className="text-sm font-medium">Passthrough Mode</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">How proxy pools are organized</p>
+              </div>
+              <div className="flex gap-4">
+                <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "separate" ? "border-purple-500 bg-purple-500/10" : "border-border hover:bg-muted/30"}`}>
+                  <input
+                    type="radio"
+                    name="passthrough_mode"
+                    value="separate"
+                    checked={proxyMode === "separate"}
+                    onChange={() => setProxyMode("separate")}
+                    className="sr-only"
+                  />
+                  <div className="flex items-center gap-2 mb-1">
+                    <Settings2 className="h-4 w-4" />
+                    <span className="font-medium text-sm">Separate Records</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Each subdomain has its own pool, target server, and port config.</p>
+                </label>
+                <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "wildcard" ? "border-purple-500 bg-purple-500/10" : "border-border hover:bg-muted/30"}`}>
+                  <input
+                    type="radio"
+                    name="passthrough_mode"
+                    value="wildcard"
+                    checked={proxyMode === "wildcard"}
+                    onChange={() => setProxyMode("wildcard")}
+                    className="sr-only"
+                  />
+                  <div className="flex items-center gap-2 mb-1">
+                    <Zap className="h-4 w-4" />
+                    <span className="font-medium text-sm">Wildcard</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Single pool handles *.{domain?.fqdn}. One target server for all.</p>
+                </label>
+              </div>
+            </div>
+
             {/* Separate Mode - Per-record configuration */}
             {proxyMode === "separate" && (
-              <div className="p-6 text-center border rounded-lg bg-muted/10">
-                <Settings2 className="h-12 w-12 mx-auto mb-4 text-purple-500 opacity-70" />
-                <h3 className="font-semibold mb-2">Separate Records Mode</h3>
-                <p className="text-muted-foreground text-sm mb-4">
-                  Each DNS record has its own proxy pool and target server configuration.<br />
-                  Go to the <strong>Records</strong> tab to configure passthrough for individual A records.
-                </p>
-                <Button variant="outline" onClick={() => setActiveTab("records")}>
-                  Go to Records
-                </Button>
+              <div className="space-y-4">
+                <div className="p-4 border rounded-lg bg-gradient-to-r from-purple-500/10 to-blue-500/10">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Settings2 className="h-5 w-5 text-purple-500" />
+                    <h3 className="font-semibold">Separate Records Passthrough</h3>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Create passthrough records below. Each record has its own proxy pool and target configuration.
+                  </p>
+                </div>
+                
+                {/* TODO: Add passthrough records management UI here */}
+                <div className="p-6 text-center border rounded-lg border-dashed">
+                  <Plus className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
+                  <p className="text-muted-foreground text-sm">
+                    Add passthrough records to configure individual proxy pools.
+                  </p>
+                  <Button variant="outline" className="mt-3">
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add Passthrough Record
+                  </Button>
+                </div>
               </div>
             )}
 
