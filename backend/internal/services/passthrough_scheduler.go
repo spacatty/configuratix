@@ -149,7 +149,7 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 		JOIN machines m ON pm.machine_id = m.id
 		LEFT JOIN agents a ON m.agent_id = a.id
 		WHERE pm.pool_id = $1 AND pm.is_enabled = true
-		ORDER BY pm.priority, m.name
+		ORDER BY pm.priority, m.hostname
 	`, pool.ID)
 	if err != nil {
 		log.Printf("Scheduler: failed to get direct members: %v", err)
@@ -276,7 +276,7 @@ func (s *PassthroughScheduler) rotateWildcardPool(pool models.WildcardPool) {
 		JOIN machines m ON wm.machine_id = m.id
 		LEFT JOIN agents a ON m.agent_id = a.id
 		WHERE wm.pool_id = $1 AND wm.is_enabled = true
-		ORDER BY wm.priority, m.name
+		ORDER BY wm.priority, m.hostname
 	`, pool.ID)
 
 	// Also get machines from groups if pool has group_ids

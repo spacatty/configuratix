@@ -62,12 +62,12 @@ func (h *PassthroughHandler) GetRecordPool(w http.ResponseWriter, r *http.Reques
 	// Get direct members with machine details
 	var members []models.PassthroughMemberWithMachine
 	h.db.Select(&members, `
-		SELECT pm.*, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
+		SELECT pm.*, m.hostname as machine_name, m.ip_address as machine_ip, a.last_seen
 		FROM dns_passthrough_members pm
 		JOIN machines m ON pm.machine_id = m.id
 		LEFT JOIN agents a ON m.agent_id = a.id
 		WHERE pm.pool_id = $1
-		ORDER BY pm.priority, m.name
+		ORDER BY pm.priority, m.hostname
 	`, pool.ID)
 
 	// Compute online status
@@ -374,8 +374,8 @@ func (h *PassthroughHandler) GetRotationHistory(w http.ResponseWriter, r *http.R
 	var history []models.RotationHistoryWithDetails
 	h.db.Select(&history, `
 		SELECT rh.*,
-			COALESCE(fm.name, '') as from_machine_name,
-			COALESCE(tm.name, '') as to_machine_name
+			COALESCE(fm.hostname, '') as from_machine_name,
+			COALESCE(tm.hostname, '') as to_machine_name
 		FROM dns_rotation_history rh
 		LEFT JOIN machines fm ON rh.from_machine_id = fm.id
 		LEFT JOIN machines tm ON rh.to_machine_id = tm.id
@@ -411,12 +411,12 @@ func (h *PassthroughHandler) GetWildcardPool(w http.ResponseWriter, r *http.Requ
 	// Get direct members
 	var members []models.WildcardMemberWithMachine
 	h.db.Select(&members, `
-		SELECT wm.*, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
+		SELECT wm.*, m.hostname as machine_name, m.ip_address as machine_ip, a.last_seen
 		FROM dns_wildcard_pool_members wm
 		JOIN machines m ON wm.machine_id = m.id
 		LEFT JOIN agents a ON m.agent_id = a.id
 		WHERE wm.pool_id = $1
-		ORDER BY wm.priority, m.name
+		ORDER BY wm.priority, m.hostname
 	`, pool.ID)
 
 	for i := range members {
@@ -700,12 +700,12 @@ func (h *PassthroughHandler) selectNextMachine(poolID uuid.UUID, strategy string
 	// Get direct members
 	var members []models.PassthroughMemberWithMachine
 	err := h.db.Select(&members, `
-		SELECT pm.*, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
+		SELECT pm.*, m.hostname as machine_name, m.ip_address as machine_ip, a.last_seen
 		FROM dns_passthrough_members pm
 		JOIN machines m ON pm.machine_id = m.id
 		LEFT JOIN agents a ON m.agent_id = a.id
 		WHERE pm.pool_id = $1 AND pm.is_enabled = true
-		ORDER BY pm.priority, m.name
+		ORDER BY pm.priority, m.hostname
 	`, poolID)
 	if err != nil {
 		log.Printf("selectNextMachine: failed to get direct members: %v", err)
@@ -721,7 +721,7 @@ func (h *PassthroughHandler) selectNextMachine(poolID uuid.UUID, strategy string
 			LastSeen    *time.Time `db:"last_seen"`
 		}
 		err := h.db.Select(&groupMachines, `
-			SELECT DISTINCT m.id as machine_id, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
+			SELECT DISTINCT m.id as machine_id, m.hostname as machine_name, m.ip_address as machine_ip, a.last_seen
 			FROM machine_group_members gm
 			JOIN machines m ON gm.machine_id = m.id
 			LEFT JOIN agents a ON m.agent_id = a.id
@@ -800,12 +800,12 @@ func (h *PassthroughHandler) selectNextMachineWildcard(poolID uuid.UUID, strateg
 	// Get direct members
 	var members []models.WildcardMemberWithMachine
 	h.db.Select(&members, `
-		SELECT wm.*, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
+		SELECT wm.*, m.hostname as machine_name, m.ip_address as machine_ip, a.last_seen
 		FROM dns_wildcard_pool_members wm
 		JOIN machines m ON wm.machine_id = m.id
 		LEFT JOIN agents a ON m.agent_id = a.id
 		WHERE wm.pool_id = $1 AND wm.is_enabled = true
-		ORDER BY wm.priority, m.name
+		ORDER BY wm.priority, m.hostname
 	`, poolID)
 
 	// Add machines from groups (deduplicated)
@@ -817,7 +817,7 @@ func (h *PassthroughHandler) selectNextMachineWildcard(poolID uuid.UUID, strateg
 			LastSeen    *time.Time `db:"last_seen"`
 		}
 		h.db.Select(&groupMachines, `
-			SELECT DISTINCT m.id as machine_id, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
+			SELECT DISTINCT m.id as machine_id, m.hostname as machine_name, m.ip_address as machine_ip, a.last_seen
 			FROM machine_group_members gm
 			JOIN machines m ON gm.machine_id = m.id
 			LEFT JOIN agents a ON m.agent_id = a.id
