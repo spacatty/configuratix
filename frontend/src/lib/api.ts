@@ -284,7 +284,8 @@ export interface PassthroughPool {
   id: string;
   dns_record_id: string;
   target_ip: string;
-  target_port: number;
+  target_port: number;       // HTTPS (443) target port
+  target_port_http: number;  // HTTP (80) target port
   rotation_strategy: string; // 'round_robin' or 'random'
   rotation_mode: string; // 'interval' or 'scheduled'
   interval_minutes: number;
@@ -322,7 +323,8 @@ export interface PassthroughPoolResponse {
 
 export interface PassthroughPoolRequest {
   target_ip: string;
-  target_port?: number;
+  target_port?: number;       // HTTPS (443) target port
+  target_port_http?: number;  // HTTP (80) target port
   rotation_strategy?: string;
   rotation_mode?: string;
   interval_minutes?: number;
@@ -337,7 +339,8 @@ export interface WildcardPool {
   dns_domain_id: string;
   include_root: boolean;
   target_ip: string;
-  target_port: number;
+  target_port: number;       // HTTPS (443) target port
+  target_port_http: number;  // HTTP (80) target port
   rotation_strategy: string;
   rotation_mode: string;
   interval_minutes: number;
@@ -375,7 +378,8 @@ export interface WildcardPoolResponse {
 export interface WildcardPoolRequest {
   include_root?: boolean;
   target_ip: string;
-  target_port?: number;
+  target_port?: number;       // HTTPS (443) target port
+  target_port_http?: number;  // HTTP (80) target port
   rotation_strategy?: string;
   rotation_mode?: string;
   interval_minutes?: number;

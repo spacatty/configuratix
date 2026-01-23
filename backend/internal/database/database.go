@@ -70,6 +70,7 @@ func (db *DB) RunMigrations() error {
 		"018_fix_landing_preview_paths.sql",
 		"019_dns_passthrough.sql",
 		"020_passthrough_groups.sql",
+		"021_passthrough_http_port.sql",
 	}
 
 	// Get current working directory for debugging

@@ -557,9 +557,14 @@ function PassthroughRecordRow({
         <div className="font-mono font-medium">{record.name === "@" ? domain.fqdn : `${record.name}.${domain.fqdn}`}</div>
       </td>
       <td className="p-3">
-        <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
-          {poolData?.pool.target_ip}:{poolData?.pool.target_port}
-        </code>
+        <div className="space-y-0.5">
+          <code className="text-xs bg-muted px-1.5 py-0.5 rounded block">
+            HTTPS → {poolData?.pool.target_ip}:{poolData?.pool.target_port}
+          </code>
+          <code className="text-xs bg-muted px-1.5 py-0.5 rounded block">
+            HTTP → {poolData?.pool.target_ip}:{poolData?.pool.target_port_http || 80}
+          </code>
+        </div>
       </td>
       <td className="p-3">
         <div className="flex items-center gap-2">
@@ -568,7 +573,7 @@ function PassthroughRecordRow({
           </Badge>
           {currentMachine && (
             <span className="text-xs text-muted-foreground">
-              → {currentMachine.machine_name}
+              → {currentMachine.machine_name} ({currentMachine.machine_ip})
             </span>
           )}
         </div>
@@ -661,6 +666,7 @@ function DNSSettingsDialog({
   const [poolForm, setPoolForm] = useState({
     target_ip: "",
     target_port: 443,
+    target_port_http: 80,
     rotation_strategy: "round_robin",
     rotation_mode: "interval",
     interval_minutes: 60,
@@ -677,6 +683,7 @@ function DNSSettingsDialog({
     name: "",
     target_ip: "",
     target_port: 443,
+    target_port_http: 80,
     rotation_strategy: "round_robin",
     interval_minutes: 60,
     health_check_enabled: true,
@@ -755,6 +762,7 @@ function DNSSettingsDialog({
       setPoolForm({
         target_ip: data.pool.target_ip,
         target_port: data.pool.target_port,
+        target_port_http: data.pool.target_port_http || 80,
         rotation_strategy: data.pool.rotation_strategy,
         rotation_mode: data.pool.rotation_mode,
         interval_minutes: data.pool.interval_minutes,
@@ -776,6 +784,7 @@ function DNSSettingsDialog({
       setPoolForm({
         target_ip: data.pool.target_ip,
         target_port: data.pool.target_port,
+        target_port_http: data.pool.target_port_http || 80,
         rotation_strategy: data.pool.rotation_strategy,
         rotation_mode: data.pool.rotation_mode,
         interval_minutes: data.pool.interval_minutes,
@@ -792,6 +801,7 @@ function DNSSettingsDialog({
       setPoolForm({
         target_ip: "",
         target_port: 443,
+        target_port_http: 80,
         rotation_strategy: "round_robin",
         rotation_mode: "interval",
         interval_minutes: 60,
@@ -873,6 +883,7 @@ function DNSSettingsDialog({
         include_root: poolForm.include_root,
         target_ip: poolForm.target_ip,
         target_port: poolForm.target_port,
+        target_port_http: poolForm.target_port_http,
         rotation_strategy: poolForm.rotation_strategy,
         rotation_mode: poolForm.rotation_mode,
         interval_minutes: poolForm.interval_minutes,
@@ -999,6 +1010,7 @@ function DNSSettingsDialog({
       await api.createOrUpdateRecordPool(recordId!, {
         target_ip: passthroughForm.target_ip,
         target_port: passthroughForm.target_port,
+        target_port_http: passthroughForm.target_port_http,
         rotation_strategy: passthroughForm.rotation_strategy,
         rotation_mode: "interval",
         interval_minutes: passthroughForm.interval_minutes,
@@ -1043,6 +1055,7 @@ function DNSSettingsDialog({
         name: record.name,
         target_ip: poolData.pool.target_ip,
         target_port: poolData.pool.target_port,
+        target_port_http: poolData.pool.target_port_http || 80,
         rotation_strategy: poolData.pool.rotation_strategy,
         interval_minutes: poolData.pool.interval_minutes,
         health_check_enabled: poolData.pool.health_check_enabled,
@@ -1051,7 +1064,7 @@ function DNSSettingsDialog({
       });
     } catch {
       // Pool might not exist yet
-      setPassthroughForm(f => ({ ...f, name: record.name, group_ids: [] }));
+      setPassthroughForm(f => ({ ...f, name: record.name, group_ids: [], target_port_http: 80 }));
     }
   };
 
@@ -1060,6 +1073,7 @@ function DNSSettingsDialog({
       name: "",
       target_ip: "",
       target_port: 443,
+      target_port_http: 80,
       rotation_strategy: "round_robin",
       interval_minutes: 60,
       health_check_enabled: true,
@@ -1749,12 +1763,21 @@ function DNSSettingsDialog({
                         />
                       </div>
                       <div className="space-y-1">
-                        <Label className="text-xs">Target Port</Label>
+                        <Label className="text-xs">HTTPS Port (443→)</Label>
                         <Input
                           type="number"
                           placeholder="443"
                           value={passthroughForm.target_port}
                           onChange={(e) => setPassthroughForm(f => ({ ...f, target_port: parseInt(e.target.value) || 443 }))}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">HTTP Port (80→)</Label>
+                        <Input
+                          type="number"
+                          placeholder="80"
+                          value={passthroughForm.target_port_http}
+                          onChange={(e) => setPassthroughForm(f => ({ ...f, target_port_http: parseInt(e.target.value) || 80 }))}
                         />
                       </div>
                     </div>
@@ -1903,7 +1926,7 @@ function DNSSettingsDialog({
             {/* Pool Configuration */}
             <div className="space-y-4 p-4 border rounded-lg">
               <h4 className="font-medium">Target Server</h4>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-1">
                   <Label className="text-xs">Target IP (final destination)</Label>
                   <Input
@@ -1913,12 +1936,21 @@ function DNSSettingsDialog({
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs">Target Port</Label>
+                  <Label className="text-xs">HTTPS Port (443→)</Label>
                   <Input
                     type="number"
                     placeholder="443"
                     value={poolForm.target_port}
                     onChange={(e) => setPoolForm(f => ({ ...f, target_port: parseInt(e.target.value) || 443 }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">HTTP Port (80→)</Label>
+                  <Input
+                    type="number"
+                    placeholder="80"
+                    value={poolForm.target_port_http}
+                    onChange={(e) => setPoolForm(f => ({ ...f, target_port_http: parseInt(e.target.value) || 80 }))}
                   />
                 </div>
               </div>

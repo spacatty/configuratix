@@ -1,6 +1,8 @@
 package models
 
 import (
+	"database/sql/driver"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,24 +12,50 @@ import (
 // UUIDArray is a custom type for UUID arrays in PostgreSQL
 type UUIDArray []uuid.UUID
 
+// JSONStringArray is a custom type for JSONB string arrays
+type JSONStringArray []string
+
+// Scan implements sql.Scanner for JSONB
+func (a *JSONStringArray) Scan(value interface{}) error {
+	if value == nil {
+		*a = nil
+		return nil
+	}
+	bytes, ok := value.([]byte)
+	if !ok {
+		*a = nil
+		return nil
+	}
+	return json.Unmarshal(bytes, a)
+}
+
+// Value implements driver.Valuer for JSONB
+func (a JSONStringArray) Value() (driver.Value, error) {
+	if a == nil {
+		return "[]", nil
+	}
+	return json.Marshal(a)
+}
+
 // PassthroughPool represents a dynamic DNS rotation pool for a specific record
 type PassthroughPool struct {
-	ID                 uuid.UUID      `db:"id" json:"id"`
-	DNSRecordID        uuid.UUID      `db:"dns_record_id" json:"dns_record_id"`
-	TargetIP           string         `db:"target_ip" json:"target_ip"`
-	TargetPort         int            `db:"target_port" json:"target_port"`
-	RotationStrategy   string         `db:"rotation_strategy" json:"rotation_strategy"`     // round_robin, random
-	RotationMode       string         `db:"rotation_mode" json:"rotation_mode"`             // interval, scheduled
-	IntervalMinutes    int            `db:"interval_minutes" json:"interval_minutes"`
-	ScheduledTimes     []string       `db:"scheduled_times" json:"scheduled_times"`         // JSON array
-	HealthCheckEnabled bool           `db:"health_check_enabled" json:"health_check_enabled"`
-	CurrentMachineID   *uuid.UUID     `db:"current_machine_id" json:"current_machine_id"`
-	CurrentIndex       int            `db:"current_index" json:"current_index"`
-	IsPaused           bool           `db:"is_paused" json:"is_paused"`
-	LastRotatedAt      *time.Time     `db:"last_rotated_at" json:"last_rotated_at"`
-	GroupIDs           pq.StringArray `db:"group_ids" json:"group_ids"`                     // Machine groups for dynamic membership
-	CreatedAt          time.Time      `db:"created_at" json:"created_at"`
-	UpdatedAt          time.Time      `db:"updated_at" json:"updated_at"`
+	ID                 uuid.UUID       `db:"id" json:"id"`
+	DNSRecordID        uuid.UUID       `db:"dns_record_id" json:"dns_record_id"`
+	TargetIP           string          `db:"target_ip" json:"target_ip"`
+	TargetPort         int             `db:"target_port" json:"target_port"`
+	TargetPortHTTP     int             `db:"target_port_http" json:"target_port_http"`       // Port for HTTP (80) passthrough
+	RotationStrategy   string          `db:"rotation_strategy" json:"rotation_strategy"`     // round_robin, random
+	RotationMode       string          `db:"rotation_mode" json:"rotation_mode"`             // interval, scheduled
+	IntervalMinutes    int             `db:"interval_minutes" json:"interval_minutes"`
+	ScheduledTimes     JSONStringArray `db:"scheduled_times" json:"scheduled_times"`         // JSON array
+	HealthCheckEnabled bool            `db:"health_check_enabled" json:"health_check_enabled"`
+	CurrentMachineID   *uuid.UUID      `db:"current_machine_id" json:"current_machine_id"`
+	CurrentIndex       int             `db:"current_index" json:"current_index"`
+	IsPaused           bool            `db:"is_paused" json:"is_paused"`
+	LastRotatedAt      *time.Time      `db:"last_rotated_at" json:"last_rotated_at"`
+	GroupIDs           pq.StringArray  `db:"group_ids" json:"group_ids"`                     // Machine groups for dynamic membership
+	CreatedAt          time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt          time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 // PassthroughMember represents a machine in a passthrough pool
@@ -52,23 +80,24 @@ type PassthroughMemberWithMachine struct {
 
 // WildcardPool represents a wildcard DNS rotation pool for *.domain.com
 type WildcardPool struct {
-	ID                 uuid.UUID      `db:"id" json:"id"`
-	DNSDomainID        uuid.UUID      `db:"dns_domain_id" json:"dns_domain_id"`
-	IncludeRoot        bool           `db:"include_root" json:"include_root"`
-	TargetIP           string         `db:"target_ip" json:"target_ip"`
-	TargetPort         int            `db:"target_port" json:"target_port"`
-	RotationStrategy   string         `db:"rotation_strategy" json:"rotation_strategy"`
-	RotationMode       string         `db:"rotation_mode" json:"rotation_mode"`
-	IntervalMinutes    int            `db:"interval_minutes" json:"interval_minutes"`
-	ScheduledTimes     []string       `db:"scheduled_times" json:"scheduled_times"`
-	HealthCheckEnabled bool           `db:"health_check_enabled" json:"health_check_enabled"`
-	CurrentMachineID   *uuid.UUID     `db:"current_machine_id" json:"current_machine_id"`
-	CurrentIndex       int            `db:"current_index" json:"current_index"`
-	IsPaused           bool           `db:"is_paused" json:"is_paused"`
-	LastRotatedAt      *time.Time     `db:"last_rotated_at" json:"last_rotated_at"`
-	GroupIDs           pq.StringArray `db:"group_ids" json:"group_ids"`               // Machine groups for dynamic membership
-	CreatedAt          time.Time      `db:"created_at" json:"created_at"`
-	UpdatedAt          time.Time      `db:"updated_at" json:"updated_at"`
+	ID                 uuid.UUID       `db:"id" json:"id"`
+	DNSDomainID        uuid.UUID       `db:"dns_domain_id" json:"dns_domain_id"`
+	IncludeRoot        bool            `db:"include_root" json:"include_root"`
+	TargetIP           string          `db:"target_ip" json:"target_ip"`
+	TargetPort         int             `db:"target_port" json:"target_port"`
+	TargetPortHTTP     int             `db:"target_port_http" json:"target_port_http"`   // Port for HTTP (80) passthrough
+	RotationStrategy   string          `db:"rotation_strategy" json:"rotation_strategy"`
+	RotationMode       string          `db:"rotation_mode" json:"rotation_mode"`
+	IntervalMinutes    int             `db:"interval_minutes" json:"interval_minutes"`
+	ScheduledTimes     JSONStringArray `db:"scheduled_times" json:"scheduled_times"`
+	HealthCheckEnabled bool            `db:"health_check_enabled" json:"health_check_enabled"`
+	CurrentMachineID   *uuid.UUID      `db:"current_machine_id" json:"current_machine_id"`
+	CurrentIndex       int             `db:"current_index" json:"current_index"`
+	IsPaused           bool            `db:"is_paused" json:"is_paused"`
+	LastRotatedAt      *time.Time      `db:"last_rotated_at" json:"last_rotated_at"`
+	GroupIDs           pq.StringArray  `db:"group_ids" json:"group_ids"`               // Machine groups for dynamic membership
+	CreatedAt          time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt          time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 // WildcardPoolMember represents a machine in a wildcard pool

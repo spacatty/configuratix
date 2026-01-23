@@ -123,7 +123,8 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 
 	var req struct {
 		TargetIP           string   `json:"target_ip"`
-		TargetPort         int      `json:"target_port"`
+		TargetPort         int      `json:"target_port"`          // HTTPS (443) target port
+		TargetPortHTTP     int      `json:"target_port_http"`     // HTTP (80) target port
 		RotationStrategy   string   `json:"rotation_strategy"`
 		RotationMode       string   `json:"rotation_mode"`
 		IntervalMinutes    int      `json:"interval_minutes"`
@@ -144,6 +145,9 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 	if req.TargetPort == 0 {
 		req.TargetPort = 443
 	}
+	if req.TargetPortHTTP == 0 {
+		req.TargetPortHTTP = 80
+	}
 	if req.RotationStrategy == "" {
 		req.RotationStrategy = "round_robin"
 	}
@@ -161,12 +165,13 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 	var pool models.PassthroughPool
 	err = h.db.Get(&pool, `
 		INSERT INTO dns_passthrough_pools 
-			(dns_record_id, target_ip, target_port, rotation_strategy, rotation_mode, 
+			(dns_record_id, target_ip, target_port, target_port_http, rotation_strategy, rotation_mode, 
 			 interval_minutes, scheduled_times, health_check_enabled, group_ids)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (dns_record_id) DO UPDATE SET
 			target_ip = EXCLUDED.target_ip,
 			target_port = EXCLUDED.target_port,
+			target_port_http = EXCLUDED.target_port_http,
 			rotation_strategy = EXCLUDED.rotation_strategy,
 			rotation_mode = EXCLUDED.rotation_mode,
 			interval_minutes = EXCLUDED.interval_minutes,
@@ -175,7 +180,7 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 			group_ids = EXCLUDED.group_ids,
 			updated_at = NOW()
 		RETURNING *
-	`, recordID, req.TargetIP, req.TargetPort, req.RotationStrategy, req.RotationMode,
+	`, recordID, req.TargetIP, req.TargetPort, req.TargetPortHTTP, req.RotationStrategy, req.RotationMode,
 		req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, groupIDsArray)
 	if err != nil {
 		log.Printf("Failed to upsert pool: %v", err)
@@ -423,7 +428,8 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 	var req struct {
 		IncludeRoot        bool     `json:"include_root"`
 		TargetIP           string   `json:"target_ip"`
-		TargetPort         int      `json:"target_port"`
+		TargetPort         int      `json:"target_port"`          // HTTPS (443) target port
+		TargetPortHTTP     int      `json:"target_port_http"`     // HTTP (80) target port
 		RotationStrategy   string   `json:"rotation_strategy"`
 		RotationMode       string   `json:"rotation_mode"`
 		IntervalMinutes    int      `json:"interval_minutes"`
@@ -444,6 +450,9 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 	if req.TargetPort == 0 {
 		req.TargetPort = 443
 	}
+	if req.TargetPortHTTP == 0 {
+		req.TargetPortHTTP = 80
+	}
 	if req.RotationStrategy == "" {
 		req.RotationStrategy = "round_robin"
 	}
@@ -460,13 +469,14 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 	var pool models.WildcardPool
 	err = h.db.Get(&pool, `
 		INSERT INTO dns_wildcard_pools 
-			(dns_domain_id, include_root, target_ip, target_port, rotation_strategy, 
+			(dns_domain_id, include_root, target_ip, target_port, target_port_http, rotation_strategy, 
 			 rotation_mode, interval_minutes, scheduled_times, health_check_enabled, group_ids)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (dns_domain_id) DO UPDATE SET
 			include_root = EXCLUDED.include_root,
 			target_ip = EXCLUDED.target_ip,
 			target_port = EXCLUDED.target_port,
+			target_port_http = EXCLUDED.target_port_http,
 			rotation_strategy = EXCLUDED.rotation_strategy,
 			rotation_mode = EXCLUDED.rotation_mode,
 			interval_minutes = EXCLUDED.interval_minutes,
@@ -475,7 +485,7 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 			group_ids = EXCLUDED.group_ids,
 			updated_at = NOW()
 		RETURNING *
-	`, domainID, req.IncludeRoot, req.TargetIP, req.TargetPort, req.RotationStrategy,
+	`, domainID, req.IncludeRoot, req.TargetIP, req.TargetPort, req.TargetPortHTTP, req.RotationStrategy,
 		req.RotationMode, req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, groupIDsArray)
 	if err != nil {
 		log.Printf("Failed to upsert wildcard pool: %v", err)
