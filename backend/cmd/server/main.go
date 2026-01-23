@@ -233,6 +233,39 @@ func main() {
 	apiRouter.HandleFunc("/dns/passthrough/nginx/{machineId}/apply", passthroughHandler.ApplyNginxConfig).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/dns/passthrough/{poolId}/apply-nginx", passthroughHandler.ApplyPoolNginxConfigs).Methods("POST", "OPTIONS")
 
+	// Security Module
+	securityHandler := handlers.NewSecurityHandler(db)
+	// IP Bans
+	apiRouter.HandleFunc("/security/bans", securityHandler.ListBans).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/security/bans", securityHandler.CreateBan).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/security/bans/import", securityHandler.ImportBans).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/security/bans/{id}", securityHandler.DeleteBan).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/security/bans", securityHandler.DeleteAllBans).Methods("DELETE", "OPTIONS")
+	// Whitelist
+	apiRouter.HandleFunc("/security/whitelist", securityHandler.ListWhitelist).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/security/whitelist", securityHandler.CreateWhitelistEntry).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/security/whitelist/{id}", securityHandler.DeleteWhitelistEntry).Methods("DELETE", "OPTIONS")
+	// UA Patterns
+	apiRouter.HandleFunc("/security/ua-patterns", securityHandler.ListUAPatterns).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/security/ua-patterns", securityHandler.CreateUAPattern).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/security/ua-patterns/{id}", securityHandler.DeleteUAPattern).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/security/ua-categories/{category}", securityHandler.ToggleUACategory).Methods("PUT", "OPTIONS")
+	// Per-config security settings
+	apiRouter.HandleFunc("/nginx-configs/{configId}/security", securityHandler.GetSecuritySettings).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/nginx-configs/{configId}/security", securityHandler.UpdateSecuritySettings).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/nginx-configs/{configId}/security/endpoints", securityHandler.ListEndpointRules).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/nginx-configs/{configId}/security/endpoints", securityHandler.CreateEndpointRule).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/nginx-configs/{configId}/security/endpoints/{ruleId}", securityHandler.DeleteEndpointRule).Methods("DELETE", "OPTIONS")
+	// Per-machine security settings
+	apiRouter.HandleFunc("/machines/{machineId}/security", securityHandler.GetMachineSecuritySettings).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{machineId}/security", securityHandler.UpdateMachineSecuritySettings).Methods("PUT", "OPTIONS")
+	// Stats
+	apiRouter.HandleFunc("/security/stats", securityHandler.GetSecurityStats).Methods("GET", "OPTIONS")
+	// Agent endpoints
+	agentRouter.HandleFunc("/security/sync", securityHandler.AgentSecuritySync).Methods("POST", "OPTIONS")
+	agentRouter.HandleFunc("/security/ua-patterns", securityHandler.AgentGetUAPatterns).Methods("GET", "OPTIONS")
+	agentRouter.HandleFunc("/security/whitelist", securityHandler.AgentGetWhitelist).Methods("GET", "OPTIONS")
+
 	// Nginx Configs
 	nginxConfigsHandler := handlers.NewNginxConfigsHandler(db)
 	apiRouter.HandleFunc("/nginx-configs", nginxConfigsHandler.ListNginxConfigs).Methods("GET", "OPTIONS")
