@@ -107,10 +107,10 @@ export interface MachineGroup {
 
 export interface MachineGroupMember {
   id: string;
-  hostname: string;
-  ip_address: string;
-  status: string;
-  last_seen_at: string | null;
+  title: string | null;
+  hostname: string | null;
+  ip_address: string | null;
+  last_seen: string | null;
   position: number;
 }
 

@@ -67,6 +67,7 @@ func (db *DB) RunMigrations() error {
 		"015_separate_dns_domains.sql",
 		"016_machine_groups.sql",
 		"017_config_categories.sql",
+		"018_fix_landing_preview_paths.sql",
 	}
 
 	// Get current working directory for debugging

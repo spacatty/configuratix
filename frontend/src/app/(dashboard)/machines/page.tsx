@@ -77,10 +77,12 @@ export default function MachinesPage() {
   const [showGroupDialog, setShowGroupDialog] = useState(false);
   const [editingGroup, setEditingGroup] = useState<MachineGroup | null>(null);
   const [groupForm, setGroupForm] = useState({ name: "", emoji: "📁", color: "#6366f1" });
+  const [groupMachineIds, setGroupMachineIds] = useState<string[]>([]); // Machines to add to group
   const [showAssignGroupsDialog, setShowAssignGroupsDialog] = useState(false);
   const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null);
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [selectedGroupFilter, setSelectedGroupFilter] = useState<string | null>(null); // Filter by group
 
   useEffect(() => {
     loadData();
@@ -131,13 +133,17 @@ export default function MachinesPage() {
   };
 
   // Group management
-  const openGroupDialog = (group?: MachineGroup) => {
+  const openGroupDialog = async (group?: MachineGroup) => {
     if (group) {
       setEditingGroup(group);
       setGroupForm({ name: group.name, emoji: group.emoji, color: group.color });
+      // Load existing members
+      const members = groupMembers[group.id] || [];
+      setGroupMachineIds(members.map(m => m.id));
     } else {
       setEditingGroup(null);
       setGroupForm({ name: "", emoji: "📁", color: "#6366f1" });
+      setGroupMachineIds([]);
     }
     setShowGroupDialog(true);
   };
@@ -149,13 +155,20 @@ export default function MachinesPage() {
     }
     setSubmitting(true);
     try {
+      let groupId = editingGroup?.id;
       if (editingGroup) {
         await api.updateMachineGroup(editingGroup.id, groupForm);
-        toast.success("Group updated");
       } else {
-        await api.createMachineGroup(groupForm);
-        toast.success("Group created");
+        const created = await api.createMachineGroup(groupForm);
+        groupId = created.id;
       }
+      
+      // Update members if we have a groupId
+      if (groupId && groupMachineIds.length > 0) {
+        await api.addGroupMembers(groupId, groupMachineIds);
+      }
+      
+      toast.success(editingGroup ? "Group updated" : "Group created");
       setShowGroupDialog(false);
       loadData();
     } catch (err) {
@@ -513,103 +526,58 @@ export default function MachinesPage() {
         </div>
       </div>
 
-      {/* Machine Groups */}
+      {/* Group Filter Badges */}
       {groups.length > 0 && (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* All badge */}
+          <button
+            onClick={() => setSelectedGroupFilter(null)}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              selectedGroupFilter === null
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted hover:bg-muted/80 text-muted-foreground"
+            }`}
+          >
+            <span>📋</span>
+            <span>All</span>
+            <span className="text-xs opacity-70">({machines.length})</span>
+          </button>
+          
+          {/* Group badges */}
           {groups.map((group) => {
             const members = groupMembers[group.id] || [];
+            const isSelected = selectedGroupFilter === group.id;
             return (
-              <Card key={group.id} className="border-border/50 bg-card/50">
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span 
-                        className="text-xl p-1.5 rounded-md" 
-                        style={{ backgroundColor: `${group.color}20` }}
-                      >
-                        {group.emoji}
-                      </span>
-                      <div>
-                        <CardTitle className="text-base">{group.name}</CardTitle>
-                        <CardDescription className="text-xs">
-                          {members.length} machine{members.length !== 1 ? "s" : ""}
-                        </CardDescription>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => openGroupDialog(group)}>
-                        <Pencil className="h-3 w-3" />
-                      </Button>
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
-                        className="text-destructive hover:text-destructive"
-                        onClick={() => handleDeleteGroup(group.id)}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  {members.length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center py-4">
-                      No machines in this group
-                    </p>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {members.map((member, idx) => (
-                        <div 
-                          key={member.id}
-                          className="flex items-center justify-between p-2 rounded-md bg-muted/50 hover:bg-muted transition-colors group"
-                        >
-                          <div 
-                            className="flex items-center gap-2 flex-1 cursor-pointer"
-                            onClick={() => router.push(`/machines/${member.id}`)}
-                          >
-                            <div 
-                              className={`h-2 w-2 rounded-full ${
-                                member.status === "online" ? "bg-green-500" : "bg-red-500"
-                              }`}
-                            />
-                            <span className="text-sm font-medium truncate">
-                              {member.hostname || member.ip_address}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              className="h-6 w-6 p-0"
-                              disabled={idx === 0}
-                              onClick={() => handleMoveInGroup(group.id, member.id, "up")}
-                            >
-                              <ChevronUp className="h-3 w-3" />
-                            </Button>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              className="h-6 w-6 p-0"
-                              disabled={idx === members.length - 1}
-                              onClick={() => handleMoveInGroup(group.id, member.id, "down")}
-                            >
-                              <ChevronDown className="h-3 w-3" />
-                            </Button>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              className="h-6 w-6 p-0 text-destructive hover:text-destructive"
-                              onClick={() => handleRemoveFromGroup(group.id, member.id)}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+              <div key={group.id} className="relative group/badge">
+                <button
+                  onClick={() => setSelectedGroupFilter(isSelected ? null : group.id)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                    isSelected
+                      ? "text-white"
+                      : "bg-muted hover:bg-muted/80"
+                  }`}
+                  style={isSelected ? { backgroundColor: group.color } : undefined}
+                >
+                  <span>{group.emoji}</span>
+                  <span>{group.name}</span>
+                  <span className="text-xs opacity-70">({members.length})</span>
+                </button>
+                {/* Edit/Delete dropdown on hover */}
+                <div className="absolute -top-1 -right-1 opacity-0 group-hover/badge:opacity-100 transition-opacity flex gap-0.5">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); openGroupDialog(group); }}
+                    className="h-5 w-5 rounded-full bg-background border border-border flex items-center justify-center hover:bg-muted"
+                  >
+                    <Pencil className="h-2.5 w-2.5" />
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDeleteGroup(group.id); }}
+                    className="h-5 w-5 rounded-full bg-background border border-border flex items-center justify-center hover:bg-destructive hover:text-white hover:border-destructive"
+                  >
+                    <Trash2 className="h-2.5 w-2.5" />
+                  </button>
+                </div>
+              </div>
             );
           })}
         </div>
@@ -620,7 +588,10 @@ export default function MachinesPage() {
         <CardContent className="flex-1 overflow-auto p-6">
           <DataTable 
             columns={columns} 
-            data={machines}
+            data={selectedGroupFilter 
+              ? machines.filter(m => (groupMembers[selectedGroupFilter] || []).some(gm => gm.id === m.id))
+              : machines
+            }
             searchKey="title"
             searchPlaceholder="Search machines by name, hostname, or IP..."
           />
@@ -702,7 +673,7 @@ export default function MachinesPage() {
 
       {/* Create/Edit Group Dialog */}
       <Dialog open={showGroupDialog} onOpenChange={setShowGroupDialog}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{editingGroup ? "Edit Group" : "Create Group"}</DialogTitle>
             <DialogDescription>
@@ -710,63 +681,96 @@ export default function MachinesPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="group-name">Name</Label>
-              <Input
-                id="group-name"
-                placeholder="e.g., Production Servers"
-                value={groupForm.name}
-                onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })}
-              />
-            </div>
-            
-            <div className="space-y-2">
-              <Label>Emoji</Label>
-              <div className="flex flex-wrap gap-2">
-                {GROUP_EMOJIS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    onClick={() => setGroupForm({ ...groupForm, emoji })}
-                    className={`text-xl p-2 rounded-md border transition-colors ${
-                      groupForm.emoji === emoji 
-                        ? "border-primary bg-primary/10" 
-                        : "border-border hover:bg-muted"
-                    }`}
-                  >
-                    {emoji}
-                  </button>
-                ))}
-              </div>
-            </div>
-            
-            <div className="space-y-2">
-              <Label>Color</Label>
-              <div className="flex flex-wrap gap-2">
-                {GROUP_COLORS.map((color) => (
-                  <button
-                    key={color}
-                    type="button"
-                    onClick={() => setGroupForm({ ...groupForm, color })}
-                    className={`h-8 w-8 rounded-md border-2 transition-transform ${
-                      groupForm.color === color 
-                        ? "border-foreground scale-110" 
-                        : "border-transparent hover:scale-105"
-                    }`}
-                    style={{ backgroundColor: color }}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
-              <span 
-                className="text-2xl p-2 rounded-md" 
+            {/* Group Name and Preview */}
+            <div className="flex items-center gap-3">
+              <div 
+                className="text-2xl p-2 rounded-md cursor-pointer relative group/emoji"
                 style={{ backgroundColor: `${groupForm.color}20` }}
               >
                 {groupForm.emoji}
-              </span>
-              <span className="font-medium">{groupForm.name || "Group Preview"}</span>
+              </div>
+              <Input
+                placeholder="Group name..."
+                value={groupForm.name}
+                onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })}
+                className="flex-1"
+              />
+            </div>
+
+            {/* Emoji and Color pickers in a compact row */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Emoji</Label>
+                <div className="flex flex-wrap gap-1">
+                  {GROUP_EMOJIS.slice(0, 10).map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => setGroupForm({ ...groupForm, emoji })}
+                      className={`text-sm p-1.5 rounded border transition-colors ${
+                        groupForm.emoji === emoji 
+                          ? "border-primary bg-primary/10" 
+                          : "border-transparent hover:bg-muted"
+                      }`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Color</Label>
+                <div className="flex flex-wrap gap-1">
+                  {GROUP_COLORS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => setGroupForm({ ...groupForm, color })}
+                      className={`h-6 w-6 rounded border-2 transition-transform ${
+                        groupForm.color === color 
+                          ? "border-foreground scale-110" 
+                          : "border-transparent hover:scale-105"
+                      }`}
+                      style={{ backgroundColor: color }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+            
+            {/* Machine Selection */}
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">
+                Machines ({groupMachineIds.length} selected)
+              </Label>
+              <div className="max-h-40 overflow-y-auto border border-border rounded-md p-2 space-y-1">
+                {machines.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-2">No machines available</p>
+                ) : (
+                  machines.map((machine) => (
+                    <label
+                      key={machine.id}
+                      className="flex items-center gap-2 p-1.5 rounded hover:bg-muted/50 cursor-pointer"
+                    >
+                      <Checkbox
+                        checked={groupMachineIds.includes(machine.id)}
+                        onCheckedChange={(checked) => {
+                          if (checked) {
+                            setGroupMachineIds([...groupMachineIds, machine.id]);
+                          } else {
+                            setGroupMachineIds(groupMachineIds.filter(id => id !== machine.id));
+                          }
+                        }}
+                      />
+                      <span className="text-sm flex-1 truncate">
+                        {machine.title || machine.hostname || machine.ip_address}
+                      </span>
+                      <span className="text-xs text-muted-foreground">{machine.ip_address}</span>
+                    </label>
+                  ))
+                )}
+              </div>
             </div>
           </div>
           <DialogFooter>

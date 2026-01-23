@@ -260,18 +260,21 @@ func (h *MachineGroupsHandler) GetGroupMembers(w http.ResponseWriter, r *http.Re
 
 	type MachineWithPosition struct {
 		ID         uuid.UUID  `db:"id" json:"id"`
-		Hostname   string     `db:"hostname" json:"hostname"`
-		IPAddress  string     `db:"ip_address" json:"ip_address"`
-		Status     string     `db:"status" json:"status"`
-		LastSeenAt *time.Time `db:"last_seen_at" json:"last_seen_at"`
+		Title      *string    `db:"title" json:"title"`
+		Hostname   *string    `db:"hostname" json:"hostname"`
+		IPAddress  *string    `db:"ip_address" json:"ip_address"`
+		LastSeen   *time.Time `db:"last_seen" json:"last_seen"`
 		Position   int        `db:"position" json:"position"`
 	}
 
 	var machines []MachineWithPosition
 	err = h.db.Select(&machines, `
-		SELECT m.id, m.hostname, m.ip_address, m.status, m.last_seen_at, mgm.position
+		SELECT m.id, m.title, m.hostname, m.ip_address, 
+			   a.last_seen_at as last_seen,
+			   mgm.position
 		FROM machines m
 		JOIN machine_group_members mgm ON m.id = mgm.machine_id
+		LEFT JOIN agents a ON m.agent_id = a.id
 		WHERE mgm.group_id = $1
 		ORDER BY mgm.position, m.hostname
 	`, groupID)
