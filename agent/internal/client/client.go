@@ -58,8 +58,9 @@ func (c *Client) Enroll(req EnrollRequest) (*EnrollResponse, error) {
 	return &result, nil
 }
 
-func (c *Client) Heartbeat(version string) error {
-	body, _ := json.Marshal(map[string]string{"version": version})
+// HeartbeatWithStats sends full system stats
+func (c *Client) HeartbeatWithStats(stats interface{}) error {
+	body, _ := json.Marshal(stats)
 	req, _ := http.NewRequest("POST", c.serverURL+"/api/agent/heartbeat", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", c.apiKey)

@@ -14,11 +14,12 @@ import (
 	"configuratix/agent/internal/config"
 	"configuratix/agent/internal/executor"
 	"configuratix/agent/internal/files"
+	"configuratix/agent/internal/stats"
 	"configuratix/agent/internal/terminal"
 	"configuratix/agent/internal/updater"
 )
 
-const Version = "0.4.1"
+const Version = "0.4.2"
 
 func main() {
 	enrollCmd := flag.NewFlagSet("enroll", flag.ExitOnError)
@@ -128,12 +129,12 @@ func run() error {
 	defer jobTicker.Stop()
 
 	// Initial heartbeat
-	c.Heartbeat(Version)
+	c.HeartbeatWithStats(stats.Collect(Version))
 
 	for {
 		select {
 		case <-heartbeatTicker.C:
-			if err := c.Heartbeat(Version); err != nil {
+			if err := c.HeartbeatWithStats(stats.Collect(Version)); err != nil {
 				log.Printf("Heartbeat failed: %v", err)
 			}
 
@@ -181,4 +182,3 @@ func getOSVersion() string {
 	}
 	return strings.TrimSpace(string(out))
 }
-

@@ -752,3 +752,80 @@ func (h *ConfigsHandler) RemoveConfigPath(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type UpdateConfigCategoryRequest struct {
+	Name  string `json:"name"`
+	Emoji string `json:"emoji"`
+	Color string `json:"color"`
+}
+
+// UpdateConfigCategory updates a custom config category
+func (h *ConfigsHandler) UpdateConfigCategory(w http.ResponseWriter, r *http.Request) {
+	categoryID, err := uuid.Parse(mux.Vars(r)["categoryId"])
+	if err != nil {
+		http.Error(w, "Invalid category ID", http.StatusBadRequest)
+		return
+	}
+
+	var req UpdateConfigCategoryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		http.Error(w, "Name is required", http.StatusBadRequest)
+		return
+	}
+
+	_, err = h.db.Exec(`
+		UPDATE config_categories SET name = $1, emoji = $2, color = $3, updated_at = NOW()
+		WHERE id = $4
+	`, req.Name, req.Emoji, req.Color, categoryID)
+	if err != nil {
+		http.Error(w, "Failed to update category", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+}
+
+type UpdateConfigPathRequest struct {
+	Name          string  `json:"name"`
+	Path          string  `json:"path"`
+	FileType      string  `json:"file_type"`
+	ReloadCommand *string `json:"reload_command"`
+}
+
+// UpdateConfigPath updates a file path in a category
+func (h *ConfigsHandler) UpdateConfigPath(w http.ResponseWriter, r *http.Request) {
+	pathID, err := uuid.Parse(mux.Vars(r)["pathId"])
+	if err != nil {
+		http.Error(w, "Invalid path ID", http.StatusBadRequest)
+		return
+	}
+
+	var req UpdateConfigPathRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" || req.Path == "" {
+		http.Error(w, "Name and path are required", http.StatusBadRequest)
+		return
+	}
+
+	_, err = h.db.Exec(`
+		UPDATE config_paths SET name = $1, path = $2, file_type = $3, reload_command = $4
+		WHERE id = $5
+	`, req.Name, req.Path, req.FileType, req.ReloadCommand, pathID)
+	if err != nil {
+		http.Error(w, "Failed to update path", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+}
+

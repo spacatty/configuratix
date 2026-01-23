@@ -1162,6 +1162,20 @@ class ApiClient {
     });
   }
 
+  async updateConfigCategory(machineId: string, categoryId: string, data: { name: string; emoji: string; color: string }): Promise<void> {
+    await this.request(`/api/machines/${machineId}/configs/categories/${categoryId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateConfigPath(machineId: string, categoryId: string, pathId: string, data: { name: string; path: string; file_type: string; reload_command?: string }): Promise<void> {
+    await this.request(`/api/machines/${machineId}/configs/categories/${categoryId}/paths/${pathId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
   async addConfigPath(machineId: string, categoryId: string, data: { 
     name: string; 
     path: string; 
