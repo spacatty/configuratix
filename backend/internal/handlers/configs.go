@@ -258,7 +258,7 @@ func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 	// Build built-in categories
 	builtInCategories := []ConfigCategoryResponse{}
 
-	// 1. Nginx Category - run job to list configs
+	// 1. Nginx Category
 	nginxCategory := ConfigCategoryResponse{
 		ID:          "nginx",
 		Name:        "Nginx",
@@ -277,37 +277,7 @@ func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// Get Nginx site configs via job
-	template := templates.Commands["list_nginx_configs"]
-	payload := template.ToPayload(map[string]string{})
-	jobID := uuid.New()
-	h.db.Exec(`
-		INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
-		VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
-	`, jobID, agentID, payload)
-
-	if result, err := h.waitForJobResult(jobID, 15*time.Second); err == nil {
-		siteConfigs := parseSiteConfigs(result)
-		if len(siteConfigs) > 0 {
-			nginxCategory.Subcategories = append(nginxCategory.Subcategories, SubcategoryResponse{
-				ID:    "nginx_configuratix",
-				Name:  "Configuratix Sites",
-				Files: siteConfigs,
-			})
-		}
-
-		sitesEnabled := parseSitesEnabled(result)
-		if len(sitesEnabled) > 0 {
-			nginxCategory.Subcategories = append(nginxCategory.Subcategories, SubcategoryResponse{
-				ID:    "nginx_sites_enabled",
-				Name:  "Sites Enabled",
-				Files: sitesEnabled,
-			})
-		}
-	}
-	builtInCategories = append(builtInCategories, nginxCategory)
-
-	// 2. PHP Category - list PHP versions and their config files
+	// 2. PHP Category
 	phpCategory := ConfigCategoryResponse{
 		ID:          "php",
 		Name:        "PHP",
@@ -318,30 +288,90 @@ func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 		Subcategories: []SubcategoryResponse{},
 	}
 
-	// Get PHP versions via job
-	phpTemplate := templates.Commands["list_php_versions"]
-	if phpTemplate != nil {
+	// Run nginx and PHP jobs in PARALLEL with channels
+	type jobResult struct {
+		jobType string
+		result  string
+		err     error
+	}
+	resultChan := make(chan jobResult, 2)
+
+	// Start nginx job
+	go func() {
+		template := templates.Commands["list_nginx_configs"]
+		if template == nil {
+			resultChan <- jobResult{jobType: "nginx", err: nil}
+			return
+		}
+		payload := template.ToPayload(map[string]string{})
+		jobID := uuid.New()
+		h.db.Exec(`
+			INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
+			VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
+		`, jobID, agentID, payload)
+		result, err := h.waitForJobResult(jobID, 8*time.Second)
+		resultChan <- jobResult{jobType: "nginx", result: result, err: err}
+	}()
+
+	// Start PHP job
+	go func() {
+		phpTemplate := templates.Commands["list_php_versions"]
+		if phpTemplate == nil {
+			resultChan <- jobResult{jobType: "php", err: nil}
+			return
+		}
 		phpPayload := phpTemplate.ToPayload(map[string]string{})
 		phpJobID := uuid.New()
 		h.db.Exec(`
 			INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
 			VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
 		`, phpJobID, agentID, phpPayload)
+		result, err := h.waitForJobResult(phpJobID, 8*time.Second)
+		resultChan <- jobResult{jobType: "php", result: result, err: err}
+	}()
 
-		if phpResult, err := h.waitForJobResult(phpJobID, 10*time.Second); err == nil {
-			phpVersions := parsePHPVersions(phpResult)
-			for _, version := range phpVersions {
-				phpCategory.Subcategories = append(phpCategory.Subcategories, SubcategoryResponse{
-					ID:   "php_" + version,
-					Name: "PHP " + version,
-					Files: []ConfigFile{
-						{Name: "php.ini", Path: "/etc/php/" + version + "/fpm/php.ini", Type: "php", Readonly: false},
-						{Name: "www.conf", Path: "/etc/php/" + version + "/fpm/pool.d/www.conf", Type: "php", Readonly: false},
-					},
-				})
+	// Wait for both results (max 10 seconds total)
+	timeout := time.After(10 * time.Second)
+	for i := 0; i < 2; i++ {
+		select {
+		case res := <-resultChan:
+			if res.jobType == "nginx" && res.err == nil {
+				siteConfigs := parseSiteConfigs(res.result)
+				if len(siteConfigs) > 0 {
+					nginxCategory.Subcategories = append(nginxCategory.Subcategories, SubcategoryResponse{
+						ID:    "nginx_configuratix",
+						Name:  "Configuratix Sites",
+						Files: siteConfigs,
+					})
+				}
+				sitesEnabled := parseSitesEnabled(res.result)
+				if len(sitesEnabled) > 0 {
+					nginxCategory.Subcategories = append(nginxCategory.Subcategories, SubcategoryResponse{
+						ID:    "nginx_sites_enabled",
+						Name:  "Sites Enabled",
+						Files: sitesEnabled,
+					})
+				}
+			} else if res.jobType == "php" && res.err == nil {
+				phpVersions := parsePHPVersions(res.result)
+				for _, version := range phpVersions {
+					phpCategory.Subcategories = append(phpCategory.Subcategories, SubcategoryResponse{
+						ID:   "php_" + version,
+						Name: "PHP " + version,
+						Files: []ConfigFile{
+							{Name: "php.ini", Path: "/etc/php/" + version + "/fpm/php.ini", Type: "php", Readonly: false},
+							{Name: "www.conf", Path: "/etc/php/" + version + "/fpm/pool.d/www.conf", Type: "php", Readonly: false},
+						},
+					})
+				}
 			}
+		case <-timeout:
+			// Timeout reached, continue with what we have
+			break
 		}
 	}
+
+	builtInCategories = append(builtInCategories, nginxCategory)
 	if len(phpCategory.Subcategories) > 0 {
 		builtInCategories = append(builtInCategories, phpCategory)
 	}
@@ -568,32 +598,46 @@ func parseSitesEnabled(output string) []ConfigFile {
 			continue
 		}
 		trimmed := strings.TrimSpace(line)
-		if inSitesEnabled && trimmed != "" && !strings.HasPrefix(trimmed, "$") {
-			parts := strings.Fields(line)
-			if len(parts) > 0 {
-				lastPart := parts[len(parts)-1]
-				if lastPart != "" && !strings.HasPrefix(lastPart, ".") {
-					var filename, fullPath string
-					if strings.HasPrefix(lastPart, "/") {
-						fullPath = lastPart
-						pathParts := strings.Split(lastPart, "/")
-						filename = pathParts[len(pathParts)-1]
-					} else {
-						filename = lastPart
-						fullPath = "/etc/nginx/sites-enabled/" + filename
-					}
-					// Skip if it's a symlink indicator
-					if !strings.Contains(line, "->") || strings.HasSuffix(filename, ".conf") || filename == "default" {
-						configs = append(configs, ConfigFile{
-							Name:     filename,
-							Path:     fullPath,
-							Type:     "nginx_site",
-							Readonly: false,
-						})
-					}
-				}
-			}
+		
+		// Skip empty lines, command lines, total lines, metadata
+		if !inSitesEnabled || trimmed == "" {
+			continue
 		}
+		if strings.HasPrefix(trimmed, "$") || strings.HasPrefix(trimmed, "total") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "d") && strings.Contains(line, " . ") {
+			continue // Skip directory entries like . and ..
+		}
+		
+		// For ls -la output, get the filename (last part, or part before ->)
+		// Example: lrwxrwxrwx 1 root root 34 Jan 22 15:43 default -> /etc/nginx/sites-available/default
+		parts := strings.Fields(line)
+		if len(parts) < 9 {
+			continue // Not a valid ls -la line
+		}
+		
+		// Find the filename - it's after the date/time fields
+		// Format: permissions links owner group size month day time filename [-> target]
+		filename := ""
+		for i := 8; i < len(parts); i++ {
+			if parts[i] == "->" {
+				break
+			}
+			filename = parts[i]
+		}
+		
+		if filename == "" || filename == "." || filename == ".." {
+			continue
+		}
+		
+		fullPath := "/etc/nginx/sites-enabled/" + filename
+		configs = append(configs, ConfigFile{
+			Name:     filename,
+			Path:     fullPath,
+			Type:     "nginx_site",
+			Readonly: false,
+		})
 	}
 	return configs
 }
@@ -605,11 +649,26 @@ func parsePHPVersions(output string) []string {
 	
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		
+		// Skip metadata lines from job output
+		if trimmed == "" || strings.HasPrefix(trimmed, "Starting") || 
+		   strings.HasPrefix(trimmed, "===") || strings.HasPrefix(trimmed, "$") ||
+		   strings.HasPrefix(trimmed, "ERROR") {
+			continue
+		}
+		
 		// Look for version patterns like 8.1, 8.2, 8.3
-		if trimmed != "" && len(trimmed) <= 4 {
-			// Check if it looks like a version (e.g., "8.1", "8.2")
-			if strings.Contains(trimmed, ".") || (len(trimmed) == 1 && trimmed[0] >= '5' && trimmed[0] <= '9') {
-				versions = append(versions, trimmed)
+		// Must match pattern X.Y where X and Y are digits
+		if len(trimmed) >= 3 && len(trimmed) <= 4 {
+			parts := strings.Split(trimmed, ".")
+			if len(parts) == 2 {
+				major := parts[0]
+				minor := parts[1]
+				if len(major) >= 1 && len(minor) >= 1 &&
+				   major[0] >= '5' && major[0] <= '9' &&
+				   minor[0] >= '0' && minor[0] <= '9' {
+					versions = append(versions, trimmed)
+				}
 			}
 		}
 	}

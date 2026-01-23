@@ -435,6 +435,7 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
   const [loadingConfigs, setLoadingConfigs] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [isResizing, setIsResizing] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const loadConfigs = useCallback(async () => {
     try {
@@ -516,14 +517,16 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
   };
 
   // Handle sidebar resize
-  const handleMouseDown = () => {
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
     setIsResizing(true);
   };
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizing) return;
-      const newWidth = Math.max(200, Math.min(500, e.clientX - 48)); // 48px for sidebar
+      if (!isResizing || !containerRef.current) return;
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const newWidth = Math.max(180, Math.min(450, e.clientX - containerRect.left));
       setSidebarWidth(newWidth);
     };
     const handleMouseUp = () => setIsResizing(false);
@@ -531,10 +534,14 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
     if (isResizing) {
       document.addEventListener("mousemove", handleMouseMove);
       document.addEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
     }
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     };
   }, [isResizing]);
 
@@ -590,7 +597,7 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
   );
 
   return (
-    <div className="flex h-[600px] gap-0">
+    <div ref={containerRef} className="flex h-[600px] gap-0">
       {/* Sidebar with categories */}
       <Card 
         className="border-border/50 bg-card/50 overflow-hidden flex-shrink-0 flex flex-col"

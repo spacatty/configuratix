@@ -111,12 +111,12 @@ export function WebSocketTerminal({ machineId, apiUrl, token, isActive = true }:
         rows: term.rows,
       }));
 
-      // Start keepalive ping
+      // Start keepalive ping - every 10 seconds to prevent agent timeout
       pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "ping" }));
         }
-      }, 30000);
+      }, 10000);
     };
 
     ws.onmessage = (event) => {
