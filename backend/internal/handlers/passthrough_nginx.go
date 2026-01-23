@@ -178,52 +178,53 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 	}
 
 	// Generate config
+	// NOTE: This file is included FROM WITHIN a stream{} block in nginx.conf
+	// So we do NOT wrap with stream{} here - only the inner directives
 	var config strings.Builder
 	config.WriteString("# Configuratix Passthrough Configuration\n")
-	config.WriteString("# Auto-generated - DO NOT EDIT MANUALLY\n\n")
-
-	config.WriteString("stream {\n")
+	config.WriteString("# Auto-generated - DO NOT EDIT MANUALLY\n")
+	config.WriteString("# Included from stream{} block in nginx.conf\n\n")
 
 	// SNI map for HTTPS (port 443) - maps by TLS SNI to target:port
-	config.WriteString("    # SNI-based backend routing for HTTPS\n")
-	config.WriteString("    map $ssl_preread_server_name $backend_https {\n")
-	config.WriteString("        default reject;\n")
+	config.WriteString("# SNI-based backend routing for HTTPS\n")
+	config.WriteString("map $ssl_preread_server_name $backend_https {\n")
+	config.WriteString("    default reject;\n")
 
 	for _, pool := range recordPools {
 		fullDomain := pool.DomainFQDN
 		if pool.RecordName != "@" {
 			fullDomain = pool.RecordName + "." + pool.DomainFQDN
 		}
-		config.WriteString(fmt.Sprintf("        %s %s:%d;\n", fullDomain, pool.TargetIP, pool.TargetPort))
+		config.WriteString(fmt.Sprintf("    %s %s:%d;\n", fullDomain, pool.TargetIP, pool.TargetPort))
 	}
 
 	for _, pool := range wildcardPools {
-		config.WriteString(fmt.Sprintf("        ~^.+\\.%s$ %s:%d;\n",
+		config.WriteString(fmt.Sprintf("    ~^.+\\.%s$ %s:%d;\n",
 			strings.ReplaceAll(pool.DomainFQDN, ".", "\\."), pool.TargetIP, pool.TargetPort))
 		if pool.IncludeRoot {
-			config.WriteString(fmt.Sprintf("        %s %s:%d;\n", pool.DomainFQDN, pool.TargetIP, pool.TargetPort))
+			config.WriteString(fmt.Sprintf("    %s %s:%d;\n", pool.DomainFQDN, pool.TargetIP, pool.TargetPort))
 		}
 	}
-	config.WriteString("    }\n\n")
+	config.WriteString("}\n\n")
 
 	// Note: HTTP (port 80) SNI map is not useful since plain HTTP has no SNI.
 	// HTTP routing is handled directly in the server block below.
 
 	// Reject upstream
-	config.WriteString("    # Reject upstream (closed connection)\n")
-	config.WriteString("    upstream reject {\n")
-	config.WriteString("        server 127.0.0.1:1 down;\n")
-	config.WriteString("    }\n\n")
+	config.WriteString("# Reject upstream (closed connection)\n")
+	config.WriteString("upstream reject {\n")
+	config.WriteString("    server 127.0.0.1:1 down;\n")
+	config.WriteString("}\n\n")
 
 	// Server block for HTTPS passthrough (port 443)
-	config.WriteString("    # HTTPS Passthrough (TLS SNI-based routing)\n")
-	config.WriteString("    server {\n")
-	config.WriteString("        listen 443;\n")
-	config.WriteString("        ssl_preread on;\n")
-	config.WriteString("        proxy_pass $backend_https;\n")
-	config.WriteString("        proxy_connect_timeout 10s;\n")
-	config.WriteString("        proxy_timeout 30m;\n")
-	config.WriteString("    }\n\n")
+	config.WriteString("# HTTPS Passthrough (TLS SNI-based routing)\n")
+	config.WriteString("server {\n")
+	config.WriteString("    listen 443;\n")
+	config.WriteString("    ssl_preread on;\n")
+	config.WriteString("    proxy_pass $backend_https;\n")
+	config.WriteString("    proxy_connect_timeout 10s;\n")
+	config.WriteString("    proxy_timeout 30m;\n")
+	config.WriteString("}\n\n")
 
 	// Note: HTTP (port 80) passthrough is tricky because there's no SNI for plain HTTP.
 	// We use nginx's preread module to look at the first bytes - if it's TLS, we route via SNI.
@@ -263,13 +264,13 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 			target = t
 			break
 		}
-		config.WriteString("    # HTTP Passthrough (all traffic to single target)\n")
-		config.WriteString("    server {\n")
-		config.WriteString("        listen 80;\n")
-		config.WriteString(fmt.Sprintf("        proxy_pass %s;\n", target))
-		config.WriteString("        proxy_connect_timeout 10s;\n")
-		config.WriteString("        proxy_timeout 30m;\n")
-		config.WriteString("    }\n")
+		config.WriteString("# HTTP Passthrough (all traffic to single target)\n")
+		config.WriteString("server {\n")
+		config.WriteString("    listen 80;\n")
+		config.WriteString(fmt.Sprintf("    proxy_pass %s;\n", target))
+		config.WriteString("    proxy_connect_timeout 10s;\n")
+		config.WriteString("    proxy_timeout 30m;\n")
+		config.WriteString("}\n")
 	} else if len(uniqueHTTPTargets) > 1 {
 		// Multiple targets - need layer 7 for proper routing
 		// For now, use the first target as default and add a comment
@@ -278,18 +279,16 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 			defaultTarget = t
 			break
 		}
-		config.WriteString("    # HTTP Passthrough\n")
-		config.WriteString("    # NOTE: Multiple HTTP targets configured. Layer 4 cannot route by Host header.\n")
-		config.WriteString("    # All HTTP traffic goes to default target. Target server handles Host routing.\n")
-		config.WriteString("    server {\n")
-		config.WriteString("        listen 80;\n")
-		config.WriteString(fmt.Sprintf("        proxy_pass %s;\n", defaultTarget))
-		config.WriteString("        proxy_connect_timeout 10s;\n")
-		config.WriteString("        proxy_timeout 30m;\n")
-		config.WriteString("    }\n")
+		config.WriteString("# HTTP Passthrough\n")
+		config.WriteString("# NOTE: Multiple HTTP targets configured. Layer 4 cannot route by Host header.\n")
+		config.WriteString("# All HTTP traffic goes to default target. Target server handles Host routing.\n")
+		config.WriteString("server {\n")
+		config.WriteString("    listen 80;\n")
+		config.WriteString(fmt.Sprintf("    proxy_pass %s;\n", defaultTarget))
+		config.WriteString("    proxy_connect_timeout 10s;\n")
+		config.WriteString("    proxy_timeout 30m;\n")
+		config.WriteString("}\n")
 	}
-
-	config.WriteString("}\n")
 
 	return config.String(), nil
 }
