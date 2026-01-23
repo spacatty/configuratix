@@ -513,6 +513,7 @@ function PassthroughRecordRow({
   onDelete,
   onRotate,
   onPauseResume,
+  onShowHistory,
 }: {
   record: DNSRecord;
   domain: DNSManagedDomain;
@@ -520,6 +521,7 @@ function PassthroughRecordRow({
   onDelete: () => void;
   onRotate: (poolId: string, isWildcard: boolean) => void;
   onPauseResume: (poolId: string, isWildcard: boolean, isPaused: boolean) => void;
+  onShowHistory: (poolId: string, isWildcard: boolean) => void;
 }) {
   const [poolData, setPoolData] = useState<PassthroughPoolResponse | null>(null);
   const [loadingPool, setLoadingPool] = useState(true);
@@ -541,8 +543,8 @@ function PassthroughRecordRow({
   if (loadingPool) {
     return (
       <tr className="border-t">
-        <td colSpan={5} className="p-3 text-center text-muted-foreground">
-          <RefreshCw className="h-4 w-4 animate-spin inline mr-2" />
+        <td colSpan={7} className="py-2 px-3 text-center text-muted-foreground text-xs">
+          <RefreshCw className="h-3 w-3 animate-spin inline mr-1" />
           Loading...
         </td>
       </tr>
@@ -552,58 +554,79 @@ function PassthroughRecordRow({
   const members = poolData?.members || [];
   const groupCount = poolData?.pool.group_ids?.length || 0;
   const currentMachine = members.find(m => m.machine_id === poolData?.pool.current_machine_id);
+  const lastRotation = poolData?.pool.updated_at ? new Date(poolData.pool.updated_at) : null;
+
+  // Format relative time
+  const formatRelativeTime = (date: Date) => {
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
 
   return (
-    <tr className="border-t hover:bg-muted/30">
-      <td className="p-3">
-        <div className="font-mono font-medium">{record.name === "@" ? domain.fqdn : `${record.name}.${domain.fqdn}`}</div>
+    <tr className="border-t hover:bg-muted/20 text-xs">
+      <td className="py-2 px-3">
+        <span className="font-mono font-medium text-sm">
+          {record.name === "@" ? domain.fqdn : `${record.name}.${domain.fqdn}`}
+        </span>
       </td>
-      <td className="p-3">
-        <div className="space-y-0.5">
-          <code className="text-xs bg-muted px-1.5 py-0.5 rounded block">
-            HTTPS → {poolData?.pool.target_ip}:{poolData?.pool.target_port}
-          </code>
-          <code className="text-xs bg-muted px-1.5 py-0.5 rounded block">
-            HTTP → {poolData?.pool.target_ip}:{poolData?.pool.target_port_http || 80}
-          </code>
-        </div>
+      <td className="py-2 px-3">
+        <code className="text-[10px] bg-muted/50 px-1 py-0.5 rounded">
+          {poolData?.pool.target_ip}:{poolData?.pool.target_port}/{poolData?.pool.target_port_http || 80}
+        </code>
       </td>
-      <td className="p-3">
-        <div className="flex items-center gap-2">
-          <Badge variant="outline" className="text-xs">
-            {members.length > 0 ? `${members.length} machines` : groupCount > 0 ? `${groupCount} group(s)` : "No machines"}
-          </Badge>
-          {currentMachine && (
-            <span className="text-xs text-muted-foreground">
-              → {currentMachine.machine_name} ({currentMachine.machine_ip})
-            </span>
-          )}
-        </div>
+      <td className="py-2 px-3">
+        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+          {members.length + (groupCount > 0 ? ` +${groupCount}g` : "")} pool
+        </Badge>
       </td>
-      <td className="p-3">
-        {poolData?.pool.is_paused ? (
-          <Badge variant="secondary" className="text-xs">⏸ Paused</Badge>
+      <td className="py-2 px-3">
+        {currentMachine ? (
+          <div className="flex items-center gap-1.5">
+            <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+            <span className="font-medium">{currentMachine.machine_name}</span>
+            <span className="text-muted-foreground">- {currentMachine.machine_ip}</span>
+          </div>
         ) : (
-          <Badge variant="default" className="text-xs bg-green-600">▶ Active</Badge>
+          <span className="text-muted-foreground">—</span>
         )}
       </td>
-      <td className="p-3 text-right">
-        <div className="flex items-center justify-end gap-1">
+      <td className="py-2 px-3 text-muted-foreground">
+        {lastRotation ? formatRelativeTime(lastRotation) : "—"}
+      </td>
+      <td className="py-2 px-3">
+        {poolData?.pool.is_paused ? (
+          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">⏸ Paused</Badge>
+        ) : (
+          <Badge className="text-[10px] px-1.5 py-0 bg-green-600 hover:bg-green-600">▶ Active</Badge>
+        )}
+      </td>
+      <td className="py-2 px-3">
+        <div className="flex items-center justify-end gap-0.5">
           {poolData && (
             <>
-              <Button variant="ghost" size="sm" onClick={() => onRotate(poolData.pool.id, false)} title="Rotate now">
-                <RotateCcw className="h-3.5 w-3.5" />
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => onRotate(poolData.pool.id, false)} title="Rotate now">
+                <RotateCcw className="h-3 w-3" />
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => onPauseResume(poolData.pool.id, false, poolData.pool.is_paused)} title={poolData.pool.is_paused ? "Resume" : "Pause"}>
-                {poolData.pool.is_paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => onPauseResume(poolData.pool.id, false, poolData.pool.is_paused)} title={poolData.pool.is_paused ? "Resume" : "Pause"}>
+                {poolData.pool.is_paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+              </Button>
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => onShowHistory(poolData.pool.id, false)} title="View rotation history">
+                <History className="h-3 w-3" />
               </Button>
             </>
           )}
-          <Button variant="ghost" size="sm" onClick={onEdit} title="Edit">
-            <Settings2 className="h-3.5 w-3.5" />
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onEdit} title="Edit">
+            <Settings2 className="h-3 w-3" />
           </Button>
-          <Button variant="ghost" size="sm" onClick={onDelete} className="text-destructive hover:text-destructive" title="Delete">
-            <Trash className="h-3.5 w-3.5" />
+          <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive" onClick={onDelete} title="Delete">
+            <Trash className="h-3 w-3" />
           </Button>
         </div>
       </td>
@@ -694,6 +717,13 @@ function DNSSettingsDialog({
     group_ids: [] as string[],
   });
   const [groups, setGroups] = useState<MachineGroupWithCount[]>([]);
+  
+  // Rotation history dialog
+  const [showHistoryDialog, setShowHistoryDialog] = useState(false);
+  const [historyPoolId, setHistoryPoolId] = useState<string | null>(null);
+  const [historyIsWildcard, setHistoryIsWildcard] = useState(false);
+  const [historyData, setHistoryData] = useState<RotationHistory[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   
   // Get passthrough records (mode = 'dynamic')
   const passthroughRecords = records.filter(r => r.mode === "dynamic" && r.record_type === "A");
@@ -974,6 +1004,24 @@ function DNSSettingsDialog({
     }
   };
 
+  const handleShowRotationHistory = async (poolId: string, isWildcard: boolean) => {
+    setHistoryPoolId(poolId);
+    setHistoryIsWildcard(isWildcard);
+    setLoadingHistory(true);
+    setShowHistoryDialog(true);
+    try {
+      const history = isWildcard 
+        ? await api.getWildcardPoolHistory(poolId)
+        : await api.getRecordPoolHistory(poolId);
+      setHistoryData(history);
+    } catch (err) {
+      console.error("Failed to load history:", err);
+      setHistoryData([]);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
   const handleDeleteRecordPool = async () => {
     if (!selectedRecordForPool) return;
     try {
@@ -1247,7 +1295,7 @@ function DNSSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-[90vw] max-w-[1400px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Globe className="h-5 w-5" />
@@ -1724,14 +1772,16 @@ function DNSSettingsDialog({
                   </div>
                 ) : (
                   <div className="border rounded-lg overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead className="bg-muted/50">
+                    <table className="w-full">
+                      <thead className="bg-muted/50 text-xs">
                         <tr>
-                          <th className="text-left p-3 font-medium">Subdomain</th>
-                          <th className="text-left p-3 font-medium">Target</th>
-                          <th className="text-left p-3 font-medium">Pool</th>
-                          <th className="text-left p-3 font-medium">Status</th>
-                          <th className="text-right p-3 font-medium">Actions</th>
+                          <th className="text-left py-2 px-3 font-medium">Subdomain</th>
+                          <th className="text-left py-2 px-3 font-medium">Target</th>
+                          <th className="text-left py-2 px-3 font-medium">Pool</th>
+                          <th className="text-left py-2 px-3 font-medium">Current Machine</th>
+                          <th className="text-left py-2 px-3 font-medium">Last Update</th>
+                          <th className="text-left py-2 px-3 font-medium">Status</th>
+                          <th className="text-right py-2 px-3 font-medium w-36">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1744,6 +1794,7 @@ function DNSSettingsDialog({
                             onDelete={() => handleDeletePassthroughRecord(record)}
                             onRotate={handleRotateNow}
                             onPauseResume={handlePauseResume}
+                            onShowHistory={handleShowRotationHistory}
                           />
                         ))}
                       </tbody>
@@ -1935,7 +1986,7 @@ function DNSSettingsDialog({
                                     }}
                                   />
                                   <div className={`h-2 w-2 rounded-full flex-shrink-0 ${isOnline ? "bg-green-500" : "bg-red-500"}`} />
-                                  <span className="text-xs font-medium">{machine.name || machine.hostname || "Unknown"}</span>
+                                  <span className="text-xs font-medium">{machine.title || machine.hostname || "Unknown"}</span>
                                   <span className="text-muted-foreground">-</span>
                                   <span className="text-xs text-muted-foreground font-mono">{machine.ip_address}</span>
                                 </label>
@@ -2114,7 +2165,7 @@ function DNSSettingsDialog({
                           <div className={`h-2 w-2 rounded-full flex-shrink-0 ${isOnline ? "bg-green-500" : "bg-red-500"}`} title={isOnline ? "Online" : "Offline"} />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className="font-medium text-sm">{machine.name || machine.hostname || "Unknown"}</span>
+                              <span className="font-medium text-sm">{machine.title || machine.hostname || "Unknown"}</span>
                               <span className="text-muted-foreground">-</span>
                               <span className="text-xs text-muted-foreground font-mono">{machine.ip_address}</span>
                               {isCurrent && <Badge variant="default" className="text-[10px] py-0 ml-auto">Current</Badge>}
@@ -2618,7 +2669,7 @@ function DNSSettingsDialog({
                           />
                           <div className={`h-2 w-2 rounded-full flex-shrink-0 ${isOnline ? "bg-green-500" : "bg-red-500"}`} />
                           <div className="flex-1 min-w-0">
-                            <span className="font-medium text-sm">{machine.name || machine.hostname || "Unknown"}</span>
+                            <span className="font-medium text-sm">{machine.title || machine.hostname || "Unknown"}</span>
                             <span className="text-muted-foreground mx-1">-</span>
                             <span className="text-xs text-muted-foreground font-mono">{machine.ip_address}</span>
                             {isCurrent && <Badge variant="default" className="text-[10px] py-0 ml-2">Current</Badge>}
@@ -2682,6 +2733,80 @@ function DNSSettingsDialog({
               <Button variant="outline" onClick={() => setShowPoolConfig(false)}>Cancel</Button>
               <Button onClick={handleSaveRecordPool} disabled={loading || !poolForm.target_ip || (poolForm.machine_ids.length === 0 && poolForm.group_ids.length === 0)}>
                 {loading ? "Saving..." : "Save Pool"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Rotation History Dialog */}
+        <Dialog open={showHistoryDialog} onOpenChange={setShowHistoryDialog}>
+          <DialogContent className="sm:max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <History className="h-5 w-5 text-blue-500" />
+                Rotation History
+              </DialogTitle>
+              <DialogDescription>
+                Complete log of DNS record rotations
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="flex-1 overflow-y-auto">
+              {loadingHistory ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : historyData.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  No rotation history yet
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {historyData.map((entry) => (
+                    <div 
+                      key={entry.id} 
+                      className="border rounded-lg p-3 hover:bg-muted/30 transition-colors"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <Badge 
+                            variant={entry.trigger === "manual" ? "default" : entry.trigger === "scheduled" ? "secondary" : "outline"}
+                            className="text-[10px]"
+                          >
+                            {entry.trigger === "manual" ? "⚡ Manual" : entry.trigger === "scheduled" ? "⏰ Scheduled" : "💚 Health"}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(entry.rotated_at).toLocaleString()}
+                          </span>
+                        </div>
+                        {entry.record_name && (
+                          <span className="text-xs font-mono text-muted-foreground">
+                            {entry.record_name}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 text-sm">
+                        <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-red-500/10 text-red-600">
+                          <Server className="h-3 w-3" />
+                          <span className="font-medium">{entry.from_machine_name || "Unknown"}</span>
+                          <span className="text-xs text-muted-foreground">({entry.from_ip})</span>
+                        </div>
+                        <span className="text-muted-foreground">→</span>
+                        <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-green-500/10 text-green-600">
+                          <Server className="h-3 w-3" />
+                          <span className="font-medium">{entry.to_machine_name || "Unknown"}</span>
+                          <span className="text-xs text-muted-foreground">({entry.to_ip})</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowHistoryDialog(false)}>
+                Close
               </Button>
             </DialogFooter>
           </DialogContent>
