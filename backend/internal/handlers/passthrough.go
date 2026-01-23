@@ -913,11 +913,17 @@ func (h *PassthroughHandler) rotateToMachine(poolID, recordID uuid.UUID, member 
 	`, member.MachineID, newIndex, poolID)
 
 	// Log history
-	h.db.Exec(`
+	_, histErr := h.db.Exec(`
 		INSERT INTO dns_rotation_history 
 			(pool_type, pool_id, from_machine_id, from_ip, to_machine_id, to_ip, trigger)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, poolType, poolID, pool.CurrentMachineID, fromIP, member.MachineID, member.MachineIP, trigger)
+	if histErr != nil {
+		log.Printf("Failed to insert rotation history: %v", histErr)
+	} else {
+		log.Printf("Rotation history logged: %s -> %s (%s -> %s)", 
+			pool.CurrentMachineID, member.MachineID, fromIP, member.MachineIP)
+	}
 
 	return nil
 }
@@ -957,11 +963,16 @@ func (h *PassthroughHandler) rotateWildcardToMachine(poolID, domainID uuid.UUID,
 	`, member.MachineID, newIndex, poolID)
 
 	// Log history
-	h.db.Exec(`
+	_, histErr := h.db.Exec(`
 		INSERT INTO dns_rotation_history 
 			(pool_type, pool_id, dns_domain_id, from_machine_id, from_ip, to_machine_id, to_ip, trigger)
 		VALUES ('wildcard', $1, $2, $3, $4, $5, $6, $7)
 	`, poolID, domainID, pool.CurrentMachineID, fromIP, member.MachineID, member.MachineIP, trigger)
+	if histErr != nil {
+		log.Printf("Failed to insert wildcard rotation history: %v", histErr)
+	} else {
+		log.Printf("Wildcard rotation history logged: %s -> %s", fromIP, member.MachineIP)
+	}
 
 	return nil
 }

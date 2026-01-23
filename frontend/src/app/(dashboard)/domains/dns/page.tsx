@@ -15,7 +15,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable } from "@/components/ui/data-table";
 import { api, DNSManagedDomain, DNSAccount, DNSRecord, NSStatus, DNSSyncResult, Machine, PassthroughPoolResponse, WildcardPoolResponse, RotationHistory, MachineGroupWithCount } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
-import { Globe, CheckCircle, XCircle, Cloud, Plus, RefreshCw, AlertTriangle, X, Copy, Trash, Settings2, Play, Pause, RotateCcw, Server, History, Zap, Users } from "lucide-react";
+import { Globe, CheckCircle, XCircle, Cloud, Plus, RefreshCw, AlertTriangle, X, Copy, Trash, Settings2, Play, Pause, RotateCcw, Server, History, Zap, Users, MoreHorizontal } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 
 export default function DNSManagementPage() {
@@ -569,66 +571,118 @@ function PassthroughRecordRow({
     return `${days}d ago`;
   };
 
+  const groups = poolData?.groups || [];
+
   return (
-    <tr className="border-t hover:bg-muted/20 text-xs">
-      <td className="py-2 px-3">
-        <span className="font-mono font-medium text-sm">
+    <tr className="border-t hover:bg-muted/20">
+      <td className="py-3 px-4">
+        <span className="font-mono font-medium">
           {record.name === "@" ? domain.fqdn : `${record.name}.${domain.fqdn}`}
         </span>
       </td>
-      <td className="py-2 px-3">
-        <code className="text-[10px] bg-muted/50 px-1 py-0.5 rounded">
+      <td className="py-3 px-4">
+        <code className="text-xs bg-muted/50 px-1.5 py-0.5 rounded">
           {poolData?.pool.target_ip}:{poolData?.pool.target_port}/{poolData?.pool.target_port_http || 80}
         </code>
       </td>
-      <td className="py-2 px-3">
-        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-          {members.length + (groupCount > 0 ? ` +${groupCount}g` : "")} pool
-        </Badge>
+      <td className="py-3 px-4">
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge variant="outline" className="cursor-help">
+                {members.length} machine{members.length !== 1 ? "s" : ""}{groupCount > 0 ? ` + ${groupCount} group${groupCount !== 1 ? "s" : ""}` : ""}
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-xs">
+              <div className="space-y-2 text-xs">
+                {groups.length > 0 && (
+                  <div>
+                    <div className="font-medium mb-1">Groups:</div>
+                    {groups.map(g => (
+                      <div key={g.id} className="flex items-center gap-1">
+                        <span>{g.emoji}</span>
+                        <span>{g.name}</span>
+                        <span className="text-muted-foreground">({g.machine_count} machines)</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {members.length > 0 && (
+                  <div>
+                    <div className="font-medium mb-1">Direct Members:</div>
+                    {members.slice(0, 5).map(m => (
+                      <div key={m.id} className="flex items-center gap-1">
+                        <div className={`w-1.5 h-1.5 rounded-full ${m.is_online ? "bg-green-500" : "bg-red-500"}`} />
+                        <span>{m.machine_name}</span>
+                        <span className="text-muted-foreground">- {m.machine_ip}</span>
+                      </div>
+                    ))}
+                    {members.length > 5 && (
+                      <div className="text-muted-foreground">+{members.length - 5} more...</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </td>
-      <td className="py-2 px-3">
+      <td className="py-3 px-4">
         {currentMachine ? (
-          <div className="flex items-center gap-1.5">
-            <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-green-500" />
             <span className="font-medium">{currentMachine.machine_name}</span>
-            <span className="text-muted-foreground">- {currentMachine.machine_ip}</span>
+            <span className="text-muted-foreground text-sm">- {currentMachine.machine_ip}</span>
           </div>
         ) : (
           <span className="text-muted-foreground">—</span>
         )}
       </td>
-      <td className="py-2 px-3 text-muted-foreground">
+      <td className="py-3 px-4 text-muted-foreground text-sm">
         {lastRotation ? formatRelativeTime(lastRotation) : "—"}
       </td>
-      <td className="py-2 px-3">
+      <td className="py-3 px-4">
         {poolData?.pool.is_paused ? (
-          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">⏸ Paused</Badge>
+          <Badge variant="secondary">⏸ Paused</Badge>
         ) : (
-          <Badge className="text-[10px] px-1.5 py-0 bg-green-600 hover:bg-green-600">▶ Active</Badge>
+          <Badge className="bg-green-600 hover:bg-green-600">▶ Active</Badge>
         )}
       </td>
-      <td className="py-2 px-3">
-        <div className="flex items-center justify-end gap-0.5">
-          {poolData && (
-            <>
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => onRotate(poolData.pool.id, false)} title="Rotate now">
-                <RotateCcw className="h-3 w-3" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => onPauseResume(poolData.pool.id, false, poolData.pool.is_paused)} title={poolData.pool.is_paused ? "Resume" : "Pause"}>
-                {poolData.pool.is_paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
-              </Button>
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => onShowHistory(poolData.pool.id, false)} title="View rotation history">
-                <History className="h-3 w-3" />
-              </Button>
-            </>
-          )}
-          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onEdit} title="Edit">
-            <Settings2 className="h-3 w-3" />
-          </Button>
-          <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive" onClick={onDelete} title="Delete">
-            <Trash className="h-3 w-3" />
-          </Button>
-        </div>
+      <td className="py-3 px-4 text-right">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-8 w-8">
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {poolData && (
+              <>
+                <DropdownMenuItem onClick={() => onRotate(poolData.pool.id, false)}>
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  Rotate Now
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onPauseResume(poolData.pool.id, false, poolData.pool.is_paused)}>
+                  {poolData.pool.is_paused ? <Play className="h-4 w-4 mr-2" /> : <Pause className="h-4 w-4 mr-2" />}
+                  {poolData.pool.is_paused ? "Resume Rotation" : "Pause Rotation"}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onShowHistory(poolData.pool.id, false)}>
+                  <History className="h-4 w-4 mr-2" />
+                  View History
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            <DropdownMenuItem onClick={onEdit}>
+              <Settings2 className="h-4 w-4 mr-2" />
+              Edit Configuration
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onDelete} className="text-destructive focus:text-destructive">
+              <Trash className="h-4 w-4 mr-2" />
+              Delete Record
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </td>
     </tr>
   );
@@ -1772,16 +1826,16 @@ function DNSSettingsDialog({
                   </div>
                 ) : (
                   <div className="border rounded-lg overflow-hidden">
-                    <table className="w-full">
-                      <thead className="bg-muted/50 text-xs">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50">
                         <tr>
-                          <th className="text-left py-2 px-3 font-medium">Subdomain</th>
-                          <th className="text-left py-2 px-3 font-medium">Target</th>
-                          <th className="text-left py-2 px-3 font-medium">Pool</th>
-                          <th className="text-left py-2 px-3 font-medium">Current Machine</th>
-                          <th className="text-left py-2 px-3 font-medium">Last Update</th>
-                          <th className="text-left py-2 px-3 font-medium">Status</th>
-                          <th className="text-right py-2 px-3 font-medium w-36">Actions</th>
+                          <th className="text-left py-3 px-4 font-medium">Subdomain</th>
+                          <th className="text-left py-3 px-4 font-medium">Target</th>
+                          <th className="text-left py-3 px-4 font-medium">Pool</th>
+                          <th className="text-left py-3 px-4 font-medium">Current Machine</th>
+                          <th className="text-left py-3 px-4 font-medium">Last Update</th>
+                          <th className="text-left py-3 px-4 font-medium">Status</th>
+                          <th className="text-right py-3 px-4 font-medium w-16"></th>
                         </tr>
                       </thead>
                       <tbody>

@@ -252,11 +252,14 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 	`, nextMachine.MachineID, newIndex, pool.ID)
 
 	// Log history
-	s.db.Exec(`
+	_, histErr := s.db.Exec(`
 		INSERT INTO dns_rotation_history 
 			(pool_type, pool_id, from_machine_id, from_ip, to_machine_id, to_ip, trigger)
 		VALUES ('record', $1, $2, $3, $4, $5, 'scheduled')
 	`, pool.ID, pool.CurrentMachineID, fromIP, nextMachine.MachineID, nextMachine.MachineIP)
+	if histErr != nil {
+		log.Printf("Scheduler: failed to insert rotation history: %v", histErr)
+	}
 
 	log.Printf("Passthrough scheduler: rotated pool %s to %s (%s)", pool.ID, nextMachine.MachineID, nextMachine.MachineIP)
 }
@@ -359,11 +362,14 @@ func (s *PassthroughScheduler) rotateWildcardPool(pool models.WildcardPool) {
 		WHERE id = $3
 	`, nextMachine.MachineID, newIndex, pool.ID)
 
-	s.db.Exec(`
+	_, histErr := s.db.Exec(`
 		INSERT INTO dns_rotation_history 
 			(pool_type, pool_id, dns_domain_id, from_machine_id, from_ip, to_machine_id, to_ip, trigger)
 		VALUES ('wildcard', $1, $2, $3, $4, $5, $6, 'scheduled')
 	`, pool.ID, pool.DNSDomainID, pool.CurrentMachineID, fromIP, nextMachine.MachineID, nextMachine.MachineIP)
+	if histErr != nil {
+		log.Printf("Scheduler: failed to insert wildcard rotation history: %v", histErr)
+	}
 
 	log.Printf("Passthrough scheduler: rotated wildcard pool %s to %s (%s)", pool.ID, nextMachine.MachineID, nextMachine.MachineIP)
 }
