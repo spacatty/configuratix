@@ -674,6 +674,7 @@ function DNSSettingsDialog({
     health_check_enabled: true,
     include_root: true,
     machine_ids: [] as string[],
+    group_ids: [] as string[],
   });
   
   // Separate mode passthrough records
@@ -770,6 +771,7 @@ function DNSSettingsDialog({
         health_check_enabled: data.pool.health_check_enabled,
         include_root: data.pool.include_root,
         machine_ids: data.members.map(m => m.machine_id),
+        group_ids: data.pool.group_ids || [],
       });
     } catch {
       // No pool yet
@@ -792,6 +794,7 @@ function DNSSettingsDialog({
         health_check_enabled: data.pool.health_check_enabled,
         include_root: true,
         machine_ids: data.members.map(m => m.machine_id),
+        group_ids: data.pool.group_ids || [],
       });
       // Load history
       const history = await api.getRotationHistory(data.pool.id);
@@ -809,6 +812,7 @@ function DNSSettingsDialog({
         health_check_enabled: true,
         include_root: true,
         machine_ids: [],
+        group_ids: [],
       });
       setRotationHistory([]);
     }
@@ -873,8 +877,9 @@ function DNSSettingsDialog({
 
   const handleSaveWildcardPool = async () => {
     if (!domain) return;
-    if (!poolForm.target_ip || poolForm.machine_ids.length === 0) {
-      toast.error("Target IP and at least one machine are required");
+    const hasMachines = poolForm.machine_ids.length > 0 || poolForm.group_ids.length > 0;
+    if (!poolForm.target_ip || !hasMachines) {
+      toast.error("Target IP and at least one machine or group are required");
       return;
     }
     setLoading(true);
@@ -890,6 +895,7 @@ function DNSSettingsDialog({
         scheduled_times: poolForm.scheduled_times,
         health_check_enabled: poolForm.health_check_enabled,
         machine_ids: poolForm.machine_ids,
+        group_ids: poolForm.group_ids,
       });
       toast.success("Wildcard pool saved");
       loadWildcardPool();
@@ -902,8 +908,9 @@ function DNSSettingsDialog({
 
   const handleSaveRecordPool = async () => {
     if (!selectedRecordForPool) return;
-    if (!poolForm.target_ip || poolForm.machine_ids.length === 0) {
-      toast.error("Target IP and at least one machine are required");
+    const hasMachines = poolForm.machine_ids.length > 0 || poolForm.group_ids.length > 0;
+    if (!poolForm.target_ip || !hasMachines) {
+      toast.error("Target IP and at least one machine or group are required");
       return;
     }
     setLoading(true);
@@ -917,6 +924,7 @@ function DNSSettingsDialog({
         scheduled_times: poolForm.scheduled_times,
         health_check_enabled: poolForm.health_check_enabled,
         machine_ids: poolForm.machine_ids,
+        group_ids: poolForm.group_ids,
       });
       toast.success("Pool saved - record set to dynamic mode");
       setShowPoolConfig(false);
@@ -2160,7 +2168,7 @@ function DNSSettingsDialog({
 
             {/* Save Button */}
             <div className="flex justify-end gap-2">
-              <Button onClick={handleSaveWildcardPool} disabled={loading || !poolForm.target_ip || poolForm.machine_ids.length === 0}>
+              <Button onClick={handleSaveWildcardPool} disabled={loading || !poolForm.target_ip || (poolForm.machine_ids.length === 0 && poolForm.group_ids.length === 0)}>
                 {loading ? "Saving..." : "Save Passthrough Configuration"}
               </Button>
             </div>
@@ -2660,7 +2668,7 @@ function DNSSettingsDialog({
 
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowPoolConfig(false)}>Cancel</Button>
-              <Button onClick={handleSaveRecordPool} disabled={loading || !poolForm.target_ip || poolForm.machine_ids.length === 0}>
+              <Button onClick={handleSaveRecordPool} disabled={loading || !poolForm.target_ip || (poolForm.machine_ids.length === 0 && poolForm.group_ids.length === 0)}>
                 {loading ? "Saving..." : "Save Pool"}
               </Button>
             </DialogFooter>

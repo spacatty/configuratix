@@ -528,28 +528,60 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 	// Update domain proxy mode
 	h.db.Exec("UPDATE dns_managed_domains SET proxy_mode = 'wildcard' WHERE id = $1", domainID)
 
-	// Update members
-	if len(req.MachineIDs) > 0 {
-		h.db.Exec("DELETE FROM dns_wildcard_pool_members WHERE pool_id = $1", pool.ID)
-		for i, machineIDStr := range req.MachineIDs {
-			machineID, err := uuid.Parse(machineIDStr)
-			if err != nil {
-				continue
+	// Update members - delete existing and insert new
+	h.db.Exec("DELETE FROM dns_wildcard_pool_members WHERE pool_id = $1", pool.ID)
+
+	for i, machineIDStr := range req.MachineIDs {
+		machineID, err := uuid.Parse(machineIDStr)
+		if err != nil {
+			continue
+		}
+		h.db.Exec(`
+			INSERT INTO dns_wildcard_pool_members (pool_id, machine_id, priority, is_enabled)
+			VALUES ($1, $2, $3, true)
+		`, pool.ID, machineID, i)
+	}
+
+	// Collect all machines (direct + from groups) to select first one
+	allMachineIDs := make([]uuid.UUID, 0)
+	for _, idStr := range req.MachineIDs {
+		if id, err := uuid.Parse(idStr); err == nil {
+			allMachineIDs = append(allMachineIDs, id)
+		}
+	}
+	
+	// Add machines from groups
+	if len(req.GroupIDs) > 0 {
+		var groupMachines []uuid.UUID
+		h.db.Select(&groupMachines, `
+			SELECT DISTINCT gm.machine_id 
+			FROM machine_group_members gm 
+			WHERE gm.group_id = ANY($1::uuid[])
+		`, pq.Array(req.GroupIDs))
+		for _, machineID := range groupMachines {
+			// Only add if not already in direct list
+			found := false
+			for _, existing := range allMachineIDs {
+				if existing == machineID {
+					found = true
+					break
+				}
 			}
-			h.db.Exec(`
-				INSERT INTO dns_wildcard_pool_members (pool_id, machine_id, priority, is_enabled)
-				VALUES ($1, $2, $3, true)
-			`, pool.ID, machineID, i)
+			if !found {
+				allMachineIDs = append(allMachineIDs, machineID)
+			}
 		}
 	}
 
 	// Set initial machine if not set
-	if pool.CurrentMachineID == nil && len(req.MachineIDs) > 0 {
-		firstMachineID, _ := uuid.Parse(req.MachineIDs[0])
+	if pool.CurrentMachineID == nil && len(allMachineIDs) > 0 {
+		firstMachineID := allMachineIDs[0]
 		h.db.Exec("UPDATE dns_wildcard_pools SET current_machine_id = $1 WHERE id = $2", firstMachineID, pool.ID)
 		
 		// Update wildcard DNS record
-		h.updateWildcardDNS(domainID, firstMachineID, pool.IncludeRoot, "manual")
+		if err := h.updateWildcardDNS(domainID, firstMachineID, pool.IncludeRoot, "initial"); err != nil {
+			log.Printf("Failed to update wildcard DNS to first machine: %v", err)
+		}
 	}
 
 	// Regenerate and deploy nginx configs to all pool members
