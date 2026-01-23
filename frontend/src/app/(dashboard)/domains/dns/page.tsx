@@ -13,9 +13,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable } from "@/components/ui/data-table";
-import { api, DNSManagedDomain, DNSAccount, DNSRecord, NSStatus, DNSSyncResult, Machine, PassthroughPoolResponse, WildcardPoolResponse, RotationHistory } from "@/lib/api";
+import { api, DNSManagedDomain, DNSAccount, DNSRecord, NSStatus, DNSSyncResult, Machine, PassthroughPoolResponse, WildcardPoolResponse, RotationHistory, MachineGroupWithCount } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
-import { Globe, CheckCircle, XCircle, Cloud, Plus, RefreshCw, AlertTriangle, X, Copy, Trash, Settings2, Play, Pause, RotateCcw, Server, History, Zap } from "lucide-react";
+import { Globe, CheckCircle, XCircle, Cloud, Plus, RefreshCw, AlertTriangle, X, Copy, Trash, Settings2, Play, Pause, RotateCcw, Server, History, Zap, Users } from "lucide-react";
 import { toast } from "sonner";
 
 export default function DNSManagementPage() {
@@ -681,7 +681,9 @@ function DNSSettingsDialog({
     interval_minutes: 60,
     health_check_enabled: true,
     machine_ids: [] as string[],
+    group_ids: [] as string[],
   });
+  const [groups, setGroups] = useState<MachineGroupWithCount[]>([]);
   
   // Get passthrough records (mode = 'dynamic')
   const passthroughRecords = records.filter(r => r.mode === "dynamic" && r.record_type === "A");
@@ -713,6 +715,7 @@ function DNSSettingsDialog({
       setNsStatus(null);
       loadRecords();
       loadMachines();
+      loadGroups();
       
       // Load nameservers if account is already set
       if (domain.dns_account_id) {
@@ -732,6 +735,15 @@ function DNSSettingsDialog({
       setMachines(data);
     } catch (err) {
       console.error("Failed to load machines:", err);
+    }
+  };
+
+  const loadGroups = async () => {
+    try {
+      const data = await api.listMachineGroups();
+      setGroups(data);
+    } catch (err) {
+      console.error("Failed to load groups:", err);
     }
   };
 
@@ -956,8 +968,9 @@ function DNSSettingsDialog({
 
   // Separate mode: Create/Edit passthrough record
   const handleSavePassthroughRecord = async () => {
-    if (!domain || !passthroughForm.name || !passthroughForm.target_ip || passthroughForm.machine_ids.length === 0) {
-      toast.error("Please fill all required fields");
+    const hasMachines = passthroughForm.machine_ids.length > 0 || passthroughForm.group_ids.length > 0;
+    if (!domain || !passthroughForm.name || !passthroughForm.target_ip || !hasMachines) {
+      toast.error("Please fill all required fields (need at least one machine or group)");
       return;
     }
     setLoading(true);
@@ -991,6 +1004,7 @@ function DNSSettingsDialog({
         interval_minutes: passthroughForm.interval_minutes,
         health_check_enabled: passthroughForm.health_check_enabled,
         machine_ids: passthroughForm.machine_ids,
+        group_ids: passthroughForm.group_ids,
       });
       
       toast.success(editingPassthrough ? "Passthrough record updated" : "Passthrough record created");
@@ -1033,10 +1047,11 @@ function DNSSettingsDialog({
         interval_minutes: poolData.pool.interval_minutes,
         health_check_enabled: poolData.pool.health_check_enabled,
         machine_ids: poolData.members.map(m => m.machine_id),
+        group_ids: poolData.pool.group_ids || [],
       });
     } catch {
       // Pool might not exist yet
-      setPassthroughForm(f => ({ ...f, name: record.name }));
+      setPassthroughForm(f => ({ ...f, name: record.name, group_ids: [] }));
     }
   };
 
@@ -1049,6 +1064,7 @@ function DNSSettingsDialog({
       interval_minutes: 60,
       health_check_enabled: true,
       machine_ids: [],
+      group_ids: [],
     });
   };
 
@@ -1773,8 +1789,49 @@ function DNSSettingsDialog({
                       <Label htmlFor="pt_health_check" className="text-sm">Skip offline servers</Label>
                     </div>
 
+                    {/* Group Selection */}
                     <div className="space-y-2">
-                      <Label className="text-xs">Select Proxy Machines</Label>
+                      <Label className="text-xs flex items-center gap-1">
+                        <Users className="h-3 w-3" />
+                        Select Groups (machines auto-included)
+                      </Label>
+                      {groups.length === 0 ? (
+                        <p className="text-xs text-muted-foreground p-2 border rounded-md">No groups created yet</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {groups.map((group) => {
+                            const isSelected = passthroughForm.group_ids.includes(group.id);
+                            return (
+                              <Badge
+                                key={group.id}
+                                variant={isSelected ? "default" : "outline"}
+                                className="cursor-pointer"
+                                style={isSelected ? { backgroundColor: group.color || undefined } : undefined}
+                                onClick={() => {
+                                  setPassthroughForm(f => ({
+                                    ...f,
+                                    group_ids: isSelected
+                                      ? f.group_ids.filter(id => id !== group.id)
+                                      : [...f.group_ids, group.id]
+                                  }));
+                                }}
+                              >
+                                {group.emoji && <span className="mr-1">{group.emoji}</span>}
+                                {group.name}
+                                <span className="ml-1 opacity-70">({group.item_count})</span>
+                              </Badge>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Machine Selection */}
+                    <div className="space-y-2">
+                      <Label className="text-xs flex items-center gap-1">
+                        <Server className="h-3 w-3" />
+                        Select Individual Machines
+                      </Label>
                       <div className="border rounded-md max-h-40 overflow-y-auto">
                         {machines.length === 0 ? (
                           <p className="p-3 text-sm text-muted-foreground text-center">No machines available</p>
@@ -1809,7 +1866,9 @@ function DNSSettingsDialog({
                           })
                         )}
                       </div>
-                      <p className="text-xs text-muted-foreground">{passthroughForm.machine_ids.length} machine(s) selected</p>
+                      <p className="text-xs text-muted-foreground">
+                        {passthroughForm.group_ids.length} group(s) + {passthroughForm.machine_ids.length} machine(s) selected
+                      </p>
                     </div>
 
                     <div className="flex justify-end gap-2 pt-2 border-t">
@@ -1818,7 +1877,7 @@ function DNSSettingsDialog({
                       </Button>
                       <Button 
                         onClick={handleSavePassthroughRecord} 
-                        disabled={loading || !passthroughForm.name || !passthroughForm.target_ip || passthroughForm.machine_ids.length === 0}
+                        disabled={loading || !passthroughForm.name || !passthroughForm.target_ip || (passthroughForm.machine_ids.length === 0 && passthroughForm.group_ids.length === 0)}
                       >
                         {loading ? "Saving..." : (editingPassthrough ? "Update" : "Create")} Record
                       </Button>

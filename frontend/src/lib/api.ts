@@ -294,6 +294,7 @@ export interface PassthroughPool {
   current_index: number;
   is_paused: boolean;
   last_rotated_at: string | null;
+  group_ids: string[]; // Machine groups for dynamic membership
   created_at: string;
   updated_at: string;
 }
@@ -316,6 +317,7 @@ export interface PassthroughMember {
 export interface PassthroughPoolResponse {
   pool: PassthroughPool;
   members: PassthroughMember[];
+  groups?: MachineGroupWithCount[];
 }
 
 export interface PassthroughPoolRequest {
@@ -327,6 +329,7 @@ export interface PassthroughPoolRequest {
   scheduled_times?: string[];
   health_check_enabled?: boolean;
   machine_ids: string[];
+  group_ids?: string[]; // Machine groups for dynamic membership
 }
 
 export interface WildcardPool {
@@ -344,6 +347,7 @@ export interface WildcardPool {
   current_index: number;
   is_paused: boolean;
   last_rotated_at: string | null;
+  group_ids: string[]; // Machine groups for dynamic membership
   created_at: string;
   updated_at: string;
 }
@@ -365,6 +369,7 @@ export interface WildcardPoolMember {
 export interface WildcardPoolResponse {
   pool: WildcardPool;
   members: WildcardPoolMember[];
+  groups?: MachineGroupWithCount[];
 }
 
 export interface WildcardPoolRequest {
@@ -377,6 +382,7 @@ export interface WildcardPoolRequest {
   scheduled_times?: string[];
   health_check_enabled?: boolean;
   machine_ids: string[];
+  group_ids?: string[]; // Machine groups for dynamic membership
 }
 
 export interface RotationHistory {

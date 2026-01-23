@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/lib/pq"
 )
 
 // PassthroughHandler handles DNS passthrough pool operations
@@ -55,7 +56,7 @@ func (h *PassthroughHandler) GetRecordPool(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Get members with machine details
+	// Get direct members with machine details
 	var members []models.PassthroughMemberWithMachine
 	h.db.Select(&members, `
 		SELECT pm.*, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
@@ -73,10 +74,23 @@ func (h *PassthroughHandler) GetRecordPool(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	// Get groups info
+	var groups []models.MachineGroupWithCount
+	if len(pool.GroupIDs) > 0 {
+		h.db.Select(&groups, `
+			SELECT g.*, COUNT(DISTINCT gm.machine_id) as item_count
+			FROM machine_groups g
+			LEFT JOIN machine_group_members gm ON g.id = gm.group_id
+			WHERE g.id = ANY($1::uuid[])
+			GROUP BY g.id
+		`, pool.GroupIDs)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"pool":    pool,
 		"members": members,
+		"groups":  groups,
 	})
 }
 
@@ -116,6 +130,7 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 		ScheduledTimes     []string `json:"scheduled_times"`
 		HealthCheckEnabled bool     `json:"health_check_enabled"`
 		MachineIDs         []string `json:"machine_ids"`
+		GroupIDs           []string `json:"group_ids"` // Machine groups for dynamic membership
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -140,14 +155,15 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 	}
 
 	scheduledTimesJSON, _ := json.Marshal(req.ScheduledTimes)
+	groupIDsArray := pq.StringArray(req.GroupIDs)
 
 	// Upsert pool
 	var pool models.PassthroughPool
 	err = h.db.Get(&pool, `
 		INSERT INTO dns_passthrough_pools 
 			(dns_record_id, target_ip, target_port, rotation_strategy, rotation_mode, 
-			 interval_minutes, scheduled_times, health_check_enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			 interval_minutes, scheduled_times, health_check_enabled, group_ids)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (dns_record_id) DO UPDATE SET
 			target_ip = EXCLUDED.target_ip,
 			target_port = EXCLUDED.target_port,
@@ -156,10 +172,11 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 			interval_minutes = EXCLUDED.interval_minutes,
 			scheduled_times = EXCLUDED.scheduled_times,
 			health_check_enabled = EXCLUDED.health_check_enabled,
+			group_ids = EXCLUDED.group_ids,
 			updated_at = NOW()
 		RETURNING *
 	`, recordID, req.TargetIP, req.TargetPort, req.RotationStrategy, req.RotationMode,
-		req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled)
+		req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, groupIDsArray)
 	if err != nil {
 		log.Printf("Failed to upsert pool: %v", err)
 		http.Error(w, "Failed to save pool", http.StatusInternalServerError)
@@ -343,7 +360,7 @@ func (h *PassthroughHandler) GetWildcardPool(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Get members
+	// Get direct members
 	var members []models.WildcardMemberWithMachine
 	h.db.Select(&members, `
 		SELECT wm.*, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
@@ -360,10 +377,23 @@ func (h *PassthroughHandler) GetWildcardPool(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
+	// Get groups info
+	var groups []models.MachineGroupWithCount
+	if len(pool.GroupIDs) > 0 {
+		h.db.Select(&groups, `
+			SELECT g.*, COUNT(DISTINCT gm.machine_id) as item_count
+			FROM machine_groups g
+			LEFT JOIN machine_group_members gm ON g.id = gm.group_id
+			WHERE g.id = ANY($1::uuid[])
+			GROUP BY g.id
+		`, pool.GroupIDs)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"pool":    pool,
 		"members": members,
+		"groups":  groups,
 	})
 }
 
@@ -400,6 +430,7 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 		ScheduledTimes     []string `json:"scheduled_times"`
 		HealthCheckEnabled bool     `json:"health_check_enabled"`
 		MachineIDs         []string `json:"machine_ids"`
+		GroupIDs           []string `json:"group_ids"` // Machine groups for dynamic membership
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -424,13 +455,14 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 	}
 
 	scheduledTimesJSON, _ := json.Marshal(req.ScheduledTimes)
+	groupIDsArray := pq.StringArray(req.GroupIDs)
 
 	var pool models.WildcardPool
 	err = h.db.Get(&pool, `
 		INSERT INTO dns_wildcard_pools 
 			(dns_domain_id, include_root, target_ip, target_port, rotation_strategy, 
-			 rotation_mode, interval_minutes, scheduled_times, health_check_enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			 rotation_mode, interval_minutes, scheduled_times, health_check_enabled, group_ids)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (dns_domain_id) DO UPDATE SET
 			include_root = EXCLUDED.include_root,
 			target_ip = EXCLUDED.target_ip,
@@ -440,10 +472,11 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 			interval_minutes = EXCLUDED.interval_minutes,
 			scheduled_times = EXCLUDED.scheduled_times,
 			health_check_enabled = EXCLUDED.health_check_enabled,
+			group_ids = EXCLUDED.group_ids,
 			updated_at = NOW()
 		RETURNING *
 	`, domainID, req.IncludeRoot, req.TargetIP, req.TargetPort, req.RotationStrategy,
-		req.RotationMode, req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled)
+		req.RotationMode, req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, groupIDsArray)
 	if err != nil {
 		log.Printf("Failed to upsert wildcard pool: %v", err)
 		http.Error(w, "Failed to save pool", http.StatusInternalServerError)
@@ -569,18 +602,61 @@ func (h *PassthroughHandler) ResumeWildcardPool(w http.ResponseWriter, r *http.R
 // =============== Helper Methods ===============
 
 // selectNextMachine selects the next machine based on strategy
+// Includes both direct members AND machines from groups
 func (h *PassthroughHandler) selectNextMachine(poolID uuid.UUID, strategy string, currentIndex int, healthCheck bool, poolType string) (*models.PassthroughMemberWithMachine, error) {
-	query := `
+	// Get pool to check for group_ids
+	var pool models.PassthroughPool
+	if err := h.db.Get(&pool, "SELECT * FROM dns_passthrough_pools WHERE id = $1", poolID); err != nil {
+		return nil, err
+	}
+
+	// Get direct members
+	var members []models.PassthroughMemberWithMachine
+	h.db.Select(&members, `
 		SELECT pm.*, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
 		FROM dns_passthrough_members pm
 		JOIN machines m ON pm.machine_id = m.id
 		LEFT JOIN agents a ON m.agent_id = a.id
 		WHERE pm.pool_id = $1 AND pm.is_enabled = true
 		ORDER BY pm.priority, m.name
-	`
+	`, poolID)
 
-	var members []models.PassthroughMemberWithMachine
-	h.db.Select(&members, query, poolID)
+	// Add machines from groups (deduplicated)
+	if len(pool.GroupIDs) > 0 {
+		var groupMachines []struct {
+			MachineID   uuid.UUID  `db:"machine_id"`
+			MachineName string     `db:"machine_name"`
+			MachineIP   string     `db:"machine_ip"`
+			LastSeen    *time.Time `db:"last_seen"`
+		}
+		h.db.Select(&groupMachines, `
+			SELECT DISTINCT m.id as machine_id, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
+			FROM machine_group_members gm
+			JOIN machines m ON gm.machine_id = m.id
+			LEFT JOIN agents a ON m.agent_id = a.id
+			WHERE gm.group_id = ANY($1::uuid[])
+		`, pool.GroupIDs)
+
+		// Add group machines that aren't already direct members
+		existingIDs := make(map[uuid.UUID]bool)
+		for _, m := range members {
+			existingIDs[m.MachineID] = true
+		}
+		for _, gm := range groupMachines {
+			if !existingIDs[gm.MachineID] {
+				members = append(members, models.PassthroughMemberWithMachine{
+					PassthroughMember: models.PassthroughMember{
+						PoolID:    poolID,
+						MachineID: gm.MachineID,
+						IsEnabled: true,
+					},
+					MachineName: gm.MachineName,
+					MachineIP:   gm.MachineIP,
+					LastSeen:    gm.LastSeen,
+				})
+			}
+		}
+	}
 
 	if len(members) == 0 {
 		return nil, sql.ErrNoRows
@@ -617,18 +693,61 @@ func (h *PassthroughHandler) selectNextMachine(poolID uuid.UUID, strategy string
 }
 
 // selectNextMachineWildcard is same logic for wildcard pools
+// Includes both direct members AND machines from groups
 func (h *PassthroughHandler) selectNextMachineWildcard(poolID uuid.UUID, strategy string, currentIndex int, healthCheck bool) (*models.WildcardMemberWithMachine, error) {
-	query := `
+	// Get pool to check for group_ids
+	var pool models.WildcardPool
+	if err := h.db.Get(&pool, "SELECT * FROM dns_wildcard_pools WHERE id = $1", poolID); err != nil {
+		return nil, err
+	}
+
+	// Get direct members
+	var members []models.WildcardMemberWithMachine
+	h.db.Select(&members, `
 		SELECT wm.*, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
 		FROM dns_wildcard_pool_members wm
 		JOIN machines m ON wm.machine_id = m.id
 		LEFT JOIN agents a ON m.agent_id = a.id
 		WHERE wm.pool_id = $1 AND wm.is_enabled = true
 		ORDER BY wm.priority, m.name
-	`
+	`, poolID)
 
-	var members []models.WildcardMemberWithMachine
-	h.db.Select(&members, query, poolID)
+	// Add machines from groups (deduplicated)
+	if len(pool.GroupIDs) > 0 {
+		var groupMachines []struct {
+			MachineID   uuid.UUID  `db:"machine_id"`
+			MachineName string     `db:"machine_name"`
+			MachineIP   string     `db:"machine_ip"`
+			LastSeen    *time.Time `db:"last_seen"`
+		}
+		h.db.Select(&groupMachines, `
+			SELECT DISTINCT m.id as machine_id, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
+			FROM machine_group_members gm
+			JOIN machines m ON gm.machine_id = m.id
+			LEFT JOIN agents a ON m.agent_id = a.id
+			WHERE gm.group_id = ANY($1::uuid[])
+		`, pool.GroupIDs)
+
+		// Add group machines that aren't already direct members
+		existingIDs := make(map[uuid.UUID]bool)
+		for _, m := range members {
+			existingIDs[m.MachineID] = true
+		}
+		for _, gm := range groupMachines {
+			if !existingIDs[gm.MachineID] {
+				members = append(members, models.WildcardMemberWithMachine{
+					WildcardPoolMember: models.WildcardPoolMember{
+						PoolID:    poolID,
+						MachineID: gm.MachineID,
+						IsEnabled: true,
+					},
+					MachineName: gm.MachineName,
+					MachineIP:   gm.MachineIP,
+					LastSeen:    gm.LastSeen,
+				})
+			}
+		}
+	}
 
 	if len(members) == 0 {
 		return nil, sql.ErrNoRows
