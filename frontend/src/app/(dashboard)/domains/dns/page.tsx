@@ -1733,7 +1733,7 @@ function DNSSettingsDialog({
 
                 {/* Add/Edit Passthrough Record Form */}
                 {showAddPassthrough && (
-                  <div className="p-4 border rounded-lg bg-muted/10 space-y-4">
+                  <div className="p-4 border rounded-lg bg-muted/10 space-y-5">
                     <div className="flex items-center justify-between">
                       <h4 className="font-medium">{editingPassthrough ? "Edit" : "New"} Passthrough Record</h4>
                       <Button variant="ghost" size="sm" onClick={() => { setShowAddPassthrough(false); setEditingPassthrough(null); }}>
@@ -1741,83 +1741,97 @@ function DNSSettingsDialog({
                       </Button>
                     </div>
                     
-                    <div className="grid grid-cols-3 gap-4">
-                      <div className="space-y-1">
-                        <Label className="text-xs">Subdomain</Label>
-                        <div className="flex items-center gap-1">
+                    {/* Subdomain */}
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-medium">Subdomain</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          placeholder="www"
+                          value={passthroughForm.name}
+                          onChange={(e) => setPassthroughForm(f => ({ ...f, name: e.target.value }))}
+                          disabled={!!editingPassthrough}
+                          className="max-w-[200px]"
+                        />
+                        <span className="text-sm text-muted-foreground">.{domain?.fqdn}</span>
+                      </div>
+                    </div>
+
+                    {/* Target Configuration */}
+                    <div className="space-y-2 p-3 border rounded-md bg-background/50">
+                      <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Target Configuration</Label>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="space-y-1">
+                          <Label className="text-xs">Target IP</Label>
                           <Input
-                            placeholder="www"
-                            value={passthroughForm.name}
-                            onChange={(e) => setPassthroughForm(f => ({ ...f, name: e.target.value }))}
-                            disabled={!!editingPassthrough}
+                            placeholder="192.168.1.100"
+                            value={passthroughForm.target_ip}
+                            onChange={(e) => setPassthroughForm(f => ({ ...f, target_ip: e.target.value }))}
                           />
-                          <span className="text-xs text-muted-foreground">.{domain?.fqdn}</span>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">HTTPS (443 →)</Label>
+                          <Input
+                            type="number"
+                            placeholder="443"
+                            value={passthroughForm.target_port}
+                            onChange={(e) => setPassthroughForm(f => ({ ...f, target_port: parseInt(e.target.value) || 443 }))}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">HTTP (80 →)</Label>
+                          <Input
+                            type="number"
+                            placeholder="80"
+                            value={passthroughForm.target_port_http}
+                            onChange={(e) => setPassthroughForm(f => ({ ...f, target_port_http: parseInt(e.target.value) || 80 }))}
+                          />
                         </div>
                       </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Target IP</Label>
-                        <Input
-                          placeholder="192.168.1.100"
-                          value={passthroughForm.target_ip}
-                          onChange={(e) => setPassthroughForm(f => ({ ...f, target_ip: e.target.value }))}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">HTTPS Port (443→)</Label>
-                        <Input
-                          type="number"
-                          placeholder="443"
-                          value={passthroughForm.target_port}
-                          onChange={(e) => setPassthroughForm(f => ({ ...f, target_port: parseInt(e.target.value) || 443 }))}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">HTTP Port (80→)</Label>
-                        <Input
-                          type="number"
-                          placeholder="80"
-                          value={passthroughForm.target_port_http}
-                          onChange={(e) => setPassthroughForm(f => ({ ...f, target_port_http: parseInt(e.target.value) || 80 }))}
-                        />
+                    </div>
+
+                    {/* Rotation Settings */}
+                    <div className="space-y-2 p-3 border rounded-md bg-background/50">
+                      <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Rotation Settings</Label>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                        <div className="space-y-1">
+                          <Label className="text-xs">Strategy</Label>
+                          <Select value={passthroughForm.rotation_strategy} onValueChange={(v) => setPassthroughForm(f => ({ ...f, rotation_strategy: v }))}>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="round_robin">Round Robin</SelectItem>
+                              <SelectItem value="random">Random</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Interval (minutes)</Label>
+                          <Input
+                            type="number"
+                            value={passthroughForm.interval_minutes}
+                            onChange={(e) => setPassthroughForm(f => ({ ...f, interval_minutes: parseInt(e.target.value) || 60 }))}
+                          />
+                        </div>
+                        <div className="flex items-center gap-2 h-9">
+                          <Checkbox
+                            id="pt_health_check"
+                            checked={passthroughForm.health_check_enabled}
+                            onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, health_check_enabled: !!c }))}
+                          />
+                          <Label htmlFor="pt_health_check" className="text-xs">Skip offline servers</Label>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1">
-                        <Label className="text-xs">Rotation Strategy</Label>
-                        <Select value={passthroughForm.rotation_strategy} onValueChange={(v) => setPassthroughForm(f => ({ ...f, rotation_strategy: v }))}>
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="round_robin">Round Robin</SelectItem>
-                            <SelectItem value="random">Random</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Rotate Every (minutes)</Label>
-                        <Input
-                          type="number"
-                          value={passthroughForm.interval_minutes}
-                          onChange={(e) => setPassthroughForm(f => ({ ...f, interval_minutes: parseInt(e.target.value) || 60 }))}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        id="pt_health_check"
-                        checked={passthroughForm.health_check_enabled}
-                        onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, health_check_enabled: !!c }))}
-                      />
-                      <Label htmlFor="pt_health_check" className="text-sm">Skip offline servers</Label>
-                    </div>
-
-                    {/* Group Selection */}
-                    <div className="space-y-2">
-                      <Label className="text-xs flex items-center gap-1">
-                        <Users className="h-3 w-3" />
-                        Select Groups (machines auto-included)
-                      </Label>
+                    {/* Proxy Pool Selection */}
+                    <div className="space-y-3 p-3 border rounded-md bg-background/50">
+                      <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Proxy Pool</Label>
+                      
+                      {/* Group Selection */}
+                      <div className="space-y-1.5">
+                        <Label className="text-xs flex items-center gap-1">
+                          <Users className="h-3 w-3" />
+                          Groups (machines auto-included)
+                        </Label>
                       {groups.length === 0 ? (
                         <p className="text-xs text-muted-foreground p-2 border rounded-md">No groups created yet</p>
                       ) : (
@@ -1849,74 +1863,74 @@ function DNSSettingsDialog({
                       )}
                     </div>
 
-                    {/* Machine Selection */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <Label className="text-xs flex items-center gap-1">
-                          <Server className="h-3 w-3" />
-                          Select Individual Machines
-                        </Label>
-                        <div className="flex gap-1">
-                          <Button 
-                            type="button"
-                            variant="ghost" 
-                            size="sm" 
-                            className="h-6 text-xs px-2"
-                            onClick={() => setPassthroughForm(f => ({ ...f, machine_ids: machines.map(m => m.id) }))}
-                          >
-                            Select All
-                          </Button>
-                          <Button 
-                            type="button"
-                            variant="ghost" 
-                            size="sm" 
-                            className="h-6 text-xs px-2"
-                            onClick={() => setPassthroughForm(f => ({ ...f, machine_ids: [] }))}
-                          >
-                            Unselect All
-                          </Button>
+                      {/* Machine Selection */}
+                      <div className="space-y-1.5 mt-3 pt-3 border-t border-dashed">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs flex items-center gap-1">
+                            <Server className="h-3 w-3" />
+                            Individual Machines
+                          </Label>
+                          <div className="flex gap-1">
+                            <Button 
+                              type="button"
+                              variant="ghost" 
+                              size="sm" 
+                              className="h-5 text-[10px] px-1.5"
+                              onClick={() => setPassthroughForm(f => ({ ...f, machine_ids: machines.map(m => m.id) }))}
+                            >
+                              All
+                            </Button>
+                            <Button 
+                              type="button"
+                              variant="ghost" 
+                              size="sm" 
+                              className="h-5 text-[10px] px-1.5"
+                              onClick={() => setPassthroughForm(f => ({ ...f, machine_ids: [] }))}
+                            >
+                              None
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="border rounded-md max-h-32 overflow-y-auto bg-background">
+                          {machines.length === 0 ? (
+                            <p className="p-3 text-sm text-muted-foreground text-center">No machines available</p>
+                          ) : (
+                            machines.map((machine) => {
+                              const isSelected = passthroughForm.machine_ids.includes(machine.id);
+                              const isOnline = machine.status === "online";
+                              return (
+                                <label
+                                  key={machine.id}
+                                  className={`flex items-center gap-2 p-1.5 hover:bg-muted/30 cursor-pointer border-b last:border-b-0 ${isSelected ? "bg-primary/5" : ""}`}
+                                >
+                                  <Checkbox
+                                    checked={isSelected}
+                                    onCheckedChange={(checked) => {
+                                      setPassthroughForm(f => ({
+                                        ...f,
+                                        machine_ids: checked
+                                          ? [...f.machine_ids, machine.id]
+                                          : f.machine_ids.filter(id => id !== machine.id)
+                                      }));
+                                    }}
+                                  />
+                                  <div className={`h-2 w-2 rounded-full flex-shrink-0 ${isOnline ? "bg-green-500" : "bg-red-500"}`} />
+                                  <span className="text-xs font-medium">{machine.name || machine.hostname || "Unknown"}</span>
+                                  <span className="text-muted-foreground">-</span>
+                                  <span className="text-xs text-muted-foreground font-mono">{machine.ip_address}</span>
+                                </label>
+                              );
+                            })
+                          )}
                         </div>
                       </div>
-                      <div className="border rounded-md max-h-40 overflow-y-auto">
-                        {machines.length === 0 ? (
-                          <p className="p-3 text-sm text-muted-foreground text-center">No machines available</p>
-                        ) : (
-                          machines.map((machine) => {
-                            const isSelected = passthroughForm.machine_ids.includes(machine.id);
-                            const isOnline = machine.status === "online";
-                            return (
-                              <label
-                                key={machine.id}
-                                className={`flex items-center gap-3 p-2 hover:bg-muted/30 cursor-pointer border-b last:border-b-0 ${isSelected ? "bg-primary/5" : ""}`}
-                              >
-                                <Checkbox
-                                  checked={isSelected}
-                                  onCheckedChange={(checked) => {
-                                    setPassthroughForm(f => ({
-                                      ...f,
-                                      machine_ids: checked
-                                        ? [...f.machine_ids, machine.id]
-                                        : f.machine_ids.filter(id => id !== machine.id)
-                                    }));
-                                  }}
-                                />
-                                <div className={`h-2 w-2 rounded-full flex-shrink-0 ${isOnline ? "bg-green-500" : "bg-red-500"}`} />
-                                <div className="flex-1 min-w-0">
-                                  <span className="font-medium text-sm">{machine.name || machine.hostname || "Unknown"}</span>
-                                  <span className="text-muted-foreground mx-1">-</span>
-                                  <span className="text-xs text-muted-foreground font-mono">{machine.ip_address}</span>
-                                </div>
-                              </label>
-                            );
-                          })
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground">
+
+                      <p className="text-xs text-muted-foreground pt-2">
                         {passthroughForm.group_ids.length} group(s) + {passthroughForm.machine_ids.length} machine(s) selected
                       </p>
                     </div>
 
-                    <div className="flex justify-end gap-2 pt-2 border-t">
+                    <div className="flex justify-end gap-2 pt-3">
                       <Button variant="outline" onClick={() => { setShowAddPassthrough(false); setEditingPassthrough(null); }}>
                         Cancel
                       </Button>
