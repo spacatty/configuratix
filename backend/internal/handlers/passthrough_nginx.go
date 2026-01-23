@@ -340,8 +340,8 @@ echo "Checking for conflicting site configs..."
 if [ -d "$SITES_ENABLED" ]; then
     for conf in "$SITES_ENABLED"/*; do
         [ -f "$conf" ] || continue
-        # Skip if already a .disabled file
-        [[ "$conf" == *.disabled ]] && continue
+        # Skip if already disabled
+        [[ "$conf" == *.disabled* ]] && continue
         
         # Check if this config listens on 80 or 443
         if grep -qE 'listen\s+(80|443)' "$conf" 2>/dev/null; then
@@ -414,7 +414,17 @@ echo "Stream setup complete"
 `
 	// Final step: test config and restart nginx (not just reload, in case it's stopped)
 	restartScript := `
+#!/bin/bash
+set -e
+
+# Kill any orphaned nginx processes that might be holding ports
+pkill -9 nginx 2>/dev/null || true
+sleep 1
+
+# Test config
 nginx -t
+
+# Start or reload nginx
 if systemctl is-active --quiet nginx; then
     echo "Reloading nginx..."
     systemctl reload nginx
@@ -422,7 +432,16 @@ else
     echo "Starting nginx..."
     systemctl start nginx
 fi
-echo "Nginx is running"
+
+# Verify it's actually running
+sleep 1
+if ! systemctl is-active --quiet nginx; then
+    echo "ERROR: Nginx failed to start!"
+    journalctl -u nginx --no-pager -n 20
+    exit 1
+fi
+
+echo "Nginx is running successfully"
 `
 	payload := fmt.Sprintf(`{
 		"steps": [
