@@ -206,27 +206,8 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 	}
 	config.WriteString("    }\n\n")
 
-	// SNI map for HTTP (port 80) - maps by TLS SNI to target:port_http
-	config.WriteString("    # SNI-based backend routing for HTTP\n")
-	config.WriteString("    map $ssl_preread_server_name $backend_http {\n")
-	config.WriteString("        default reject;\n")
-
-	for _, pool := range recordPools {
-		fullDomain := pool.DomainFQDN
-		if pool.RecordName != "@" {
-			fullDomain = pool.RecordName + "." + pool.DomainFQDN
-		}
-		config.WriteString(fmt.Sprintf("        %s %s:%d;\n", fullDomain, pool.TargetIP, pool.TargetPortHTTP))
-	}
-
-	for _, pool := range wildcardPools {
-		config.WriteString(fmt.Sprintf("        ~^.+\\.%s$ %s:%d;\n",
-			strings.ReplaceAll(pool.DomainFQDN, ".", "\\."), pool.TargetIP, pool.TargetPortHTTP))
-		if pool.IncludeRoot {
-			config.WriteString(fmt.Sprintf("        %s %s:%d;\n", pool.DomainFQDN, pool.TargetIP, pool.TargetPortHTTP))
-		}
-	}
-	config.WriteString("    }\n\n")
+	// Note: HTTP (port 80) SNI map is not useful since plain HTTP has no SNI.
+	// HTTP routing is handled directly in the server block below.
 
 	// Reject upstream
 	config.WriteString("    # Reject upstream (closed connection)\n")
@@ -244,15 +225,69 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 	config.WriteString("        proxy_timeout 30m;\n")
 	config.WriteString("    }\n\n")
 
-	// Server block for HTTP passthrough (port 80)
-	// Note: HTTP doesn't have SNI, so we use the same map but route plain HTTP
-	config.WriteString("    # HTTP Passthrough (plain, no TLS)\n")
-	config.WriteString("    server {\n")
-	config.WriteString("        listen 80;\n")
-	config.WriteString("        proxy_pass $backend_http;\n")
-	config.WriteString("        proxy_connect_timeout 10s;\n")
-	config.WriteString("        proxy_timeout 30m;\n")
-	config.WriteString("    }\n")
+	// Note: HTTP (port 80) passthrough is tricky because there's no SNI for plain HTTP.
+	// We use nginx's preread module to look at the first bytes - if it's TLS, we route via SNI.
+	// For plain HTTP, we need to use the Host header which requires layer 7 inspection.
+	// 
+	// Approach: Create separate upstream blocks and use the same target as HTTPS.
+	// The target server handles Host-based routing in its HTTP config.
+	
+	// Generate upstreams for each unique target (for HTTP port mapping)
+	httpTargets := make(map[string]string) // domain -> target:port
+	for _, pool := range recordPools {
+		fullDomain := pool.DomainFQDN
+		if pool.RecordName != "@" {
+			fullDomain = pool.RecordName + "." + pool.DomainFQDN
+		}
+		httpTargets[fullDomain] = fmt.Sprintf("%s:%d", pool.TargetIP, pool.TargetPortHTTP)
+	}
+	for _, pool := range wildcardPools {
+		// For wildcards, just use the root domain as key
+		httpTargets["wildcard_"+pool.DomainFQDN] = fmt.Sprintf("%s:%d", pool.TargetIP, pool.TargetPortHTTP)
+		if pool.IncludeRoot {
+			httpTargets[pool.DomainFQDN] = fmt.Sprintf("%s:%d", pool.TargetIP, pool.TargetPortHTTP)
+		}
+	}
+
+	// If all HTTP targets are the same, create a simple server block
+	// Otherwise, create multiple server blocks or use a default
+	uniqueHTTPTargets := make(map[string]bool)
+	for _, target := range httpTargets {
+		uniqueHTTPTargets[target] = true
+	}
+
+	if len(uniqueHTTPTargets) == 1 {
+		// Single target - simple passthrough
+		var target string
+		for t := range uniqueHTTPTargets {
+			target = t
+			break
+		}
+		config.WriteString("    # HTTP Passthrough (all traffic to single target)\n")
+		config.WriteString("    server {\n")
+		config.WriteString("        listen 80;\n")
+		config.WriteString(fmt.Sprintf("        proxy_pass %s;\n", target))
+		config.WriteString("        proxy_connect_timeout 10s;\n")
+		config.WriteString("        proxy_timeout 30m;\n")
+		config.WriteString("    }\n")
+	} else if len(uniqueHTTPTargets) > 1 {
+		// Multiple targets - need layer 7 for proper routing
+		// For now, use the first target as default and add a comment
+		var defaultTarget string
+		for t := range uniqueHTTPTargets {
+			defaultTarget = t
+			break
+		}
+		config.WriteString("    # HTTP Passthrough\n")
+		config.WriteString("    # NOTE: Multiple HTTP targets configured. Layer 4 cannot route by Host header.\n")
+		config.WriteString("    # All HTTP traffic goes to default target. Target server handles Host routing.\n")
+		config.WriteString("    server {\n")
+		config.WriteString("        listen 80;\n")
+		config.WriteString(fmt.Sprintf("        proxy_pass %s;\n", defaultTarget))
+		config.WriteString("        proxy_connect_timeout 10s;\n")
+		config.WriteString("        proxy_timeout 30m;\n")
+		config.WriteString("    }\n")
+	}
 
 	config.WriteString("}\n")
 
@@ -272,12 +307,24 @@ func (g *PassthroughNginxGenerator) ApplyToMachine(machineID uuid.UUID) error {
 	}
 
 	// Create a job to write the config
-	configPath := "/etc/nginx/conf.d/configuratix-passthrough.conf"
+	// Note: stream blocks must be in a file included by nginx.conf, not in conf.d
+	// The config goes to /etc/nginx/stream.d/ or /etc/nginx/conf.d/stream/
+	configPath := "/etc/nginx/stream.d/configuratix-passthrough.conf"
+	
+	// Use 'run' job with multiple steps: create dir, write file, reload nginx
+	payload := fmt.Sprintf(`{
+		"steps": [
+			{"action": "exec", "command": "mkdir -p /etc/nginx/stream.d"},
+			{"action": "file", "op": "write", "path": %q, "content": %q, "mode": "0644"},
+			{"action": "exec", "command": "nginx -t && systemctl reload nginx || nginx -s reload"}
+		],
+		"on_error": "stop"
+	}`, configPath, config)
 	
 	_, err = g.db.Exec(`
 		INSERT INTO jobs (machine_id, type, payload, status)
-		VALUES ($1, 'file', $2::jsonb, 'pending')
-	`, machineID, fmt.Sprintf(`{"path": "%s", "content": %q, "mode": "0644", "reload": "nginx"}`, configPath, config))
+		VALUES ($1, 'run', $2::jsonb, 'pending')
+	`, machineID, payload)
 
 	if err != nil {
 		return fmt.Errorf("failed to create job: %w", err)
