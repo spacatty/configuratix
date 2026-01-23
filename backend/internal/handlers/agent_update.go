@@ -78,34 +78,58 @@ func (h *AgentUpdateHandler) buildAgentIfNeeded() {
 	}
 
 	if needsBuild {
-		log.Printf("Building agent binary v%s...", CurrentAgentVersion)
+		log.Printf("=== Building agent binary v%s ===", CurrentAgentVersion)
 		if err := h.buildAgent(); err != nil {
-			log.Printf("Failed to build agent: %v", err)
+			log.Printf("ERROR: Failed to build agent: %v", err)
+			log.Printf("Agent auto-update will not work until binary is built manually")
 			// Try to load existing version anyway
 			h.loadVersionInfo()
 			return
 		}
-		log.Printf("Agent binary v%s built successfully", CurrentAgentVersion)
+		log.Printf("=== Agent binary v%s built successfully ===", CurrentAgentVersion)
 	}
 }
 
 // buildAgent compiles the agent binary for Linux
 func (h *AgentUpdateHandler) buildAgent() error {
+	// Get current working directory for debugging
+	cwd, _ := os.Getwd()
+	log.Printf("Building agent from cwd: %s", cwd)
+
 	// Find agent source directory (relative to backend)
 	agentDir := "../agent"
 	if _, err := os.Stat(agentDir); os.IsNotExist(err) {
 		// Try from project root
 		agentDir = "agent"
+		if _, err := os.Stat(agentDir); os.IsNotExist(err) {
+			return fmt.Errorf("agent source directory not found (tried ../agent and agent from %s)", cwd)
+		}
 	}
+
+	// Verify go.mod exists
+	goModPath := filepath.Join(agentDir, "go.mod")
+	if _, err := os.Stat(goModPath); os.IsNotExist(err) {
+		return fmt.Errorf("go.mod not found at %s", goModPath)
+	}
+
+	log.Printf("Found agent source at: %s", agentDir)
 
 	binaryPath := filepath.Join(h.binaryDir, "configuratix-agent")
 	tempPath := binaryPath + ".tmp"
+
+	// Check if Go is available
+	goPath, err := exec.LookPath("go")
+	if err != nil {
+		return fmt.Errorf("go not found in PATH: %v", err)
+	}
+	log.Printf("Using Go at: %s", goPath)
 
 	// Build for Linux amd64
 	cmd := exec.Command("go", "build", "-o", tempPath, "./cmd/agent")
 	cmd.Dir = agentDir
 	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
 
+	log.Printf("Running: go build -o %s ./cmd/agent (in %s)", tempPath, agentDir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("go build failed: %v\nOutput: %s", err, string(output))
