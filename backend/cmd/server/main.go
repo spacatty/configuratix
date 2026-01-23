@@ -219,6 +219,7 @@ func main() {
 	apiRouter.HandleFunc("/dns/passthrough/{poolId}/pause", passthroughHandler.PauseRecordPool).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/dns/passthrough/{poolId}/resume", passthroughHandler.ResumeRecordPool).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/dns/passthrough/{poolId}/history", passthroughHandler.GetRotationHistory).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/dns/wildcard/{poolId}/history", passthroughHandler.GetWildcardRotationHistory).Methods("GET", "OPTIONS")
 	// Wildcard pools (for wildcard mode)
 	apiRouter.HandleFunc("/dns-domains/{domainId}/wildcard", passthroughHandler.GetWildcardPool).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/dns-domains/{domainId}/wildcard", passthroughHandler.CreateOrUpdateWildcardPool).Methods("POST", "OPTIONS")

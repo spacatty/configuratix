@@ -1191,6 +1191,10 @@ class ApiClient {
     return this.request(`/api/dns/passthrough/${poolId}/history`);
   }
 
+  async getRecordPoolHistory(poolId: string): Promise<RotationHistory[]> {
+    return this.request(`/api/dns/passthrough/${poolId}/history`);
+  }
+
   // Wildcard pool (for wildcard mode)
   async getWildcardPool(domainId: string): Promise<WildcardPoolResponse> {
     return this.request(`/api/dns-domains/${domainId}/wildcard`);
@@ -1217,6 +1221,10 @@ class ApiClient {
 
   async resumeWildcardPool(poolId: string): Promise<void> {
     return this.request(`/api/dns/wildcard/${poolId}/resume`, { method: "POST" });
+  }
+
+  async getWildcardPoolHistory(poolId: string): Promise<RotationHistory[]> {
+    return this.request(`/api/dns/wildcard/${poolId}/history`);
   }
 
   // Nginx Configs

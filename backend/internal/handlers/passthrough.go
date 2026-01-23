@@ -392,6 +392,35 @@ func (h *PassthroughHandler) GetRotationHistory(w http.ResponseWriter, r *http.R
 	json.NewEncoder(w).Encode(history)
 }
 
+// GetWildcardRotationHistory gets rotation history for a wildcard pool
+func (h *PassthroughHandler) GetWildcardRotationHistory(w http.ResponseWriter, r *http.Request) {
+	poolID, err := uuid.Parse(mux.Vars(r)["poolId"])
+	if err != nil {
+		http.Error(w, "Invalid pool ID", http.StatusBadRequest)
+		return
+	}
+
+	var history []models.RotationHistoryWithDetails
+	err = h.db.Select(&history, `
+		SELECT rh.*,
+			COALESCE(NULLIF(fm.title, ''), fm.hostname, '') as from_machine_name,
+			COALESCE(NULLIF(tm.title, ''), tm.hostname, '') as to_machine_name
+		FROM dns_rotation_history rh
+		LEFT JOIN machines fm ON rh.from_machine_id = fm.id
+		LEFT JOIN machines tm ON rh.to_machine_id = tm.id
+		WHERE rh.pool_id = $1 AND rh.pool_type = 'wildcard'
+		ORDER BY rh.rotated_at DESC
+		LIMIT 50
+	`, poolID)
+	if err != nil {
+		log.Printf("Failed to get wildcard rotation history for pool %s: %v", poolID, err)
+	}
+	log.Printf("GetWildcardRotationHistory: pool=%s, found %d records", poolID, len(history))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(history)
+}
+
 // =============== Wildcard Pool Handlers ===============
 
 // GetWildcardPool gets the wildcard pool for a domain
