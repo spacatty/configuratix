@@ -208,7 +208,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const Version = "0.4.3"
+const Version = "0.4.4"
 const ConfigDir = "/etc/configuratix"
 const ConfigFile = "agent.json"
 

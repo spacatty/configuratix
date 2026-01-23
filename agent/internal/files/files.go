@@ -351,21 +351,26 @@ func isAllowedPath(path string) bool {
 	// Clean the path
 	path = filepath.Clean(path)
 
-	// Allow common config directories
-	allowedPrefixes := []string{
-		"/etc/nginx/",
-		"/etc/php/",
-		"/etc/ssh/",
-		"/etc/fail2ban/",
-		"/etc/ufw/",
-		"/etc/letsencrypt/",
-		"/var/log/",
-		"/root/.ssh/",
-		"/home/",
+	// Allow common config directories (both the dir itself and contents)
+	allowedDirs := []string{
+		"/etc/nginx",
+		"/etc/php",
+		"/etc/ssh",
+		"/etc/fail2ban",
+		"/etc/ufw",
+		"/etc/letsencrypt",
+		"/var/log",
+		"/root/.ssh",
+		"/home",
 	}
 
-	for _, prefix := range allowedPrefixes {
-		if strings.HasPrefix(path, prefix) {
+	for _, dir := range allowedDirs {
+		// Allow exact match (the directory itself)
+		if path == dir {
+			return true
+		}
+		// Allow anything under the directory
+		if strings.HasPrefix(path, dir+"/") {
 			return true
 		}
 	}
