@@ -962,14 +962,14 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 		TTL          int        `db:"ttl"`
 		Priority     int        `db:"priority"`
 		Proxied      bool       `db:"proxied"`
-		ProviderID   *string    `db:"provider_record_id"`
+		ProviderID   *string    `db:"remote_record_id"`
 		DNSDomainID  uuid.UUID  `db:"dns_domain_id"`
 		DomainFQDN   string     `db:"domain_fqdn"`
 		DNSAccountID *uuid.UUID `db:"dns_account_id"`
 	}
 	err = h.db.Get(&recordInfo, `
 		SELECT r.id, r.name, r.record_type, r.value, r.ttl, r.priority, r.proxied,
-			   r.provider_record_id, r.dns_domain_id, d.fqdn as domain_fqdn, d.dns_account_id
+			   r.remote_record_id, r.dns_domain_id, d.fqdn as domain_fqdn, d.dns_account_id
 		FROM dns_records r
 		JOIN dns_managed_domains d ON r.dns_domain_id = d.id
 		WHERE r.id = $1
@@ -1076,7 +1076,7 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 	}
 
 	// Update local record with provider ID and mark as synced
-	h.db.Exec("UPDATE dns_records SET provider_record_id = $1, sync_status = 'synced', sync_error = NULL WHERE id = $2", 
+	h.db.Exec("UPDATE dns_records SET remote_record_id = $1, sync_status = 'synced', sync_error = NULL WHERE id = $2", 
 		providerRecordID, recordID)
 
 	log.Printf("DNS Passthrough: Successfully synced %s.%s = %s", recordInfo.Name, recordInfo.DomainFQDN, machineIP)

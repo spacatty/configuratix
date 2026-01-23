@@ -549,7 +549,9 @@ function PassthroughRecordRow({
     );
   }
 
-  const currentMachine = poolData?.members.find(m => m.machine_id === poolData.pool.current_machine_id);
+  const members = poolData?.members || [];
+  const groupCount = poolData?.pool.group_ids?.length || 0;
+  const currentMachine = members.find(m => m.machine_id === poolData?.pool.current_machine_id);
 
   return (
     <tr className="border-t hover:bg-muted/30">
@@ -569,7 +571,7 @@ function PassthroughRecordRow({
       <td className="p-3">
         <div className="flex items-center gap-2">
           <Badge variant="outline" className="text-xs">
-            {poolData?.members.length || 0} machines
+            {members.length > 0 ? `${members.length} machines` : groupCount > 0 ? `${groupCount} group(s)` : "No machines"}
           </Badge>
           {currentMachine && (
             <span className="text-xs text-muted-foreground">
