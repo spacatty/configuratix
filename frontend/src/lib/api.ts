@@ -770,6 +770,13 @@ class ApiClient {
     });
   }
 
+  async setGroupMembers(groupId: string, machineIds: string[]): Promise<{ count: number }> {
+    return this.request<{ count: number }>(`/api/machine-groups/${groupId}/members`, {
+      method: "PUT",
+      body: JSON.stringify({ machine_ids: machineIds }),
+    });
+  }
+
   async removeGroupMember(groupId: string, machineId: string): Promise<void> {
     await this.request(`/api/machine-groups/${groupId}/members/${machineId}`, { method: "DELETE" });
   }

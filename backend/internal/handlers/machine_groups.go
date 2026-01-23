@@ -296,6 +296,82 @@ type AddGroupMembersRequest struct {
 	MachineIDs []string `json:"machine_ids"`
 }
 
+// SetGroupMembers replaces all machines in a group
+func (h *MachineGroupsHandler) SetGroupMembers(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
+	groupID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid group ID", http.StatusBadRequest)
+		return
+	}
+
+	var req AddGroupMembersRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Verify ownership
+	var exists bool
+	h.db.Get(&exists, "SELECT EXISTS(SELECT 1 FROM machine_groups WHERE id = $1 AND owner_id = $2)", groupID, userID)
+	if !exists {
+		http.Error(w, "Group not found", http.StatusNotFound)
+		return
+	}
+
+	// Remove all existing members
+	_, err = h.db.Exec("DELETE FROM machine_group_members WHERE group_id = $1", groupID)
+	if err != nil {
+		log.Printf("Failed to clear group members: %v", err)
+	}
+
+	// Add new members
+	added := 0
+	for i, machineIDStr := range req.MachineIDs {
+		machineID, err := uuid.Parse(machineIDStr)
+		if err != nil {
+			continue
+		}
+
+		// Check user has access to this machine
+		var machineExists bool
+		if claims.IsSuperAdmin() {
+			h.db.Get(&machineExists, "SELECT EXISTS(SELECT 1 FROM machines WHERE id = $1)", machineID)
+		} else {
+			h.db.Get(&machineExists, `
+				SELECT EXISTS(SELECT 1 FROM machines m WHERE m.id = $1 AND (
+					m.owner_id = $2 
+					OR m.project_id IN (
+						SELECT id FROM projects WHERE owner_id = $2
+						UNION
+						SELECT project_id FROM project_members WHERE user_id = $2 AND status = 'approved'
+					)
+				))
+			`, machineID, userID)
+		}
+		if !machineExists {
+			continue
+		}
+
+		_, err = h.db.Exec(`
+			INSERT INTO machine_group_members (group_id, machine_id, position)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (group_id, machine_id) DO NOTHING
+		`, groupID, machineID, i+1)
+		if err == nil {
+			added++
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"count":   added,
+		"message": "Group members updated",
+	})
+}
+
 // AddGroupMembers adds machines to a group
 func (h *MachineGroupsHandler) AddGroupMembers(w http.ResponseWriter, r *http.Request) {
 	claims := r.Context().Value("claims").(*auth.Claims)
@@ -332,12 +408,22 @@ func (h *MachineGroupsHandler) AddGroupMembers(w http.ResponseWriter, r *http.Re
 			continue
 		}
 
-		// Check machine exists and belongs to user (or user is superadmin)
+		// Check user has access to this machine
 		var machineExists bool
 		if claims.IsSuperAdmin() {
 			h.db.Get(&machineExists, "SELECT EXISTS(SELECT 1 FROM machines WHERE id = $1)", machineID)
 		} else {
-			h.db.Get(&machineExists, "SELECT EXISTS(SELECT 1 FROM machines WHERE id = $1 AND owner_id = $2)", machineID, userID)
+			// User can access if: direct owner, or machine in their project
+			h.db.Get(&machineExists, `
+				SELECT EXISTS(SELECT 1 FROM machines m WHERE m.id = $1 AND (
+					m.owner_id = $2 
+					OR m.project_id IN (
+						SELECT id FROM projects WHERE owner_id = $2
+						UNION
+						SELECT project_id FROM project_members WHERE user_id = $2 AND status = 'approved'
+					)
+				))
+			`, machineID, userID)
 		}
 		if !machineExists {
 			continue
@@ -498,19 +584,36 @@ func (h *MachineGroupsHandler) SetMachineGroups(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	tx, err := h.db.Beginx()
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+	// Verify user has access to this machine
+	var hasAccess bool
+	if claims.IsSuperAdmin() {
+		h.db.Get(&hasAccess, "SELECT EXISTS(SELECT 1 FROM machines WHERE id = $1)", machineID)
+	} else {
+		h.db.Get(&hasAccess, `
+			SELECT EXISTS(SELECT 1 FROM machines m WHERE m.id = $1 AND (
+				m.owner_id = $2 
+				OR m.project_id IN (
+					SELECT id FROM projects WHERE owner_id = $2
+					UNION
+					SELECT project_id FROM project_members WHERE user_id = $2 AND status = 'approved'
+				)
+			))
+		`, machineID, userID)
+	}
+	if !hasAccess {
+		http.Error(w, "Machine not found or access denied", http.StatusNotFound)
 		return
 	}
-	defer tx.Rollback()
 
 	// Remove from all groups owned by this user
-	tx.Exec(`
+	_, err = h.db.Exec(`
 		DELETE FROM machine_group_members 
 		WHERE machine_id = $1 
 		AND group_id IN (SELECT id FROM machine_groups WHERE owner_id = $2)
 	`, machineID, userID)
+	if err != nil {
+		log.Printf("Failed to remove from groups: %v", err)
+	}
 
 	// Add to new groups
 	for _, groupIDStr := range req.GroupIDs {
@@ -530,16 +633,14 @@ func (h *MachineGroupsHandler) SetMachineGroups(w http.ResponseWriter, r *http.R
 		var maxPos int
 		h.db.Get(&maxPos, "SELECT COALESCE(MAX(position), 0) FROM machine_group_members WHERE group_id = $1", groupID)
 
-		tx.Exec(`
+		_, err = h.db.Exec(`
 			INSERT INTO machine_group_members (group_id, machine_id, position)
 			VALUES ($1, $2, $3)
 			ON CONFLICT (group_id, machine_id) DO NOTHING
 		`, groupID, machineID, maxPos+1)
-	}
-
-	if err := tx.Commit(); err != nil {
-		http.Error(w, "Failed to set groups", http.StatusInternalServerError)
-		return
+		if err != nil {
+			log.Printf("Failed to add to group %s: %v", groupID, err)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

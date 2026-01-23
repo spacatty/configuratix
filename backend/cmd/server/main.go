@@ -150,6 +150,7 @@ func main() {
 	apiRouter.HandleFunc("/machine-groups/{id}", machineGroupsHandler.UpdateMachineGroup).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/machine-groups/{id}", machineGroupsHandler.DeleteMachineGroup).Methods("DELETE", "OPTIONS")
 	apiRouter.HandleFunc("/machine-groups/{id}/members", machineGroupsHandler.GetGroupMembers).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machine-groups/{id}/members", machineGroupsHandler.SetGroupMembers).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/machine-groups/{id}/members", machineGroupsHandler.AddGroupMembers).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/machine-groups/{id}/members/reorder", machineGroupsHandler.ReorderGroupMembers).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/machine-groups/{id}/members/{machineId}", machineGroupsHandler.RemoveGroupMember).Methods("DELETE", "OPTIONS")

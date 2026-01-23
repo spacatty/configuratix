@@ -163,9 +163,9 @@ export default function MachinesPage() {
         groupId = created.id;
       }
       
-      // Update members if we have a groupId
-      if (groupId && groupMachineIds.length > 0) {
-        await api.addGroupMembers(groupId, groupMachineIds);
+      // Update members (replace all) if we have a groupId
+      if (groupId) {
+        await api.setGroupMembers(groupId, groupMachineIds);
       }
       
       toast.success(editingGroup ? "Group updated" : "Group created");
