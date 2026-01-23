@@ -191,6 +191,7 @@ func main() {
 	// DNS Managed Domains (separate from main domains table)
 	apiRouter.HandleFunc("/dns-domains", dnsHandler.ListDNSManagedDomains).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/dns-domains", dnsHandler.CreateDNSManagedDomain).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}", dnsHandler.GetDNSManagedDomain).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/dns-domains/{id}", dnsHandler.UpdateDNSManagedDomain).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/dns-domains/{id}", dnsHandler.DeleteDNSManagedDomain).Methods("DELETE", "OPTIONS")
 	apiRouter.HandleFunc("/dns-domains/{id}/ns-check", dnsHandler.CheckDomainNS).Methods("POST", "OPTIONS")

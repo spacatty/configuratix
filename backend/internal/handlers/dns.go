@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -434,6 +435,40 @@ func (h *DNSHandler) ListDNSManagedDomains(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(domains)
+}
+
+// GetDNSManagedDomain gets a single DNS managed domain by ID
+func (h *DNSHandler) GetDNSManagedDomain(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+	domainID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid domain ID", http.StatusBadRequest)
+		return
+	}
+
+	var domain models.DNSManagedDomainWithAccount
+	err = h.db.Get(&domain, `
+		SELECT 
+			d.*,
+			a.name as dns_account_name,
+			a.provider as dns_account_provider
+		FROM dns_managed_domains d
+		LEFT JOIN dns_accounts a ON d.dns_account_id = a.id
+		WHERE d.id = $1 AND d.owner_id = $2
+	`, domainID, userID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Domain not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("Failed to get DNS managed domain: %v", err)
+		http.Error(w, "Failed to get domain", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(domain)
 }
 
 type CreateDNSManagedDomainRequest struct {

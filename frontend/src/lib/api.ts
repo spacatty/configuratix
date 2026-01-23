@@ -1029,6 +1029,10 @@ class ApiClient {
     return this.request<DNSManagedDomain[]>("/api/dns-domains");
   }
 
+  async getDNSManagedDomain(id: string): Promise<DNSManagedDomain> {
+    return this.request<DNSManagedDomain>(`/api/dns-domains/${id}`);
+  }
+
   async createDNSManagedDomain(data: {
     fqdn: string;
     dns_account_id?: string;
