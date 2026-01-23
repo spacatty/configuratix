@@ -121,6 +121,11 @@ func main() {
 	apiRouter.HandleFunc("/machines/{id}/configs", configsHandler.ListConfigs).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/configs/read", configsHandler.ReadConfig).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/configs/write", configsHandler.WriteConfig).Methods("POST", "OPTIONS")
+	// Custom config categories
+	apiRouter.HandleFunc("/machines/{id}/configs/categories", configsHandler.CreateConfigCategory).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/configs/categories/{categoryId}", configsHandler.DeleteConfigCategory).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/configs/categories/{categoryId}/paths", configsHandler.AddConfigPath).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/configs/categories/{categoryId}/paths/{pathId}", configsHandler.RemoveConfigPath).Methods("DELETE", "OPTIONS")
 
 	// PHP Runtimes
 	phpHandler := handlers.NewPHPRuntimeHandler(db)

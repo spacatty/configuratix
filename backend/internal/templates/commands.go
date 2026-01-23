@@ -436,6 +436,32 @@ var Commands = map[string]*CommandTemplate{
 		},
 	},
 
+	"list_php_versions": {
+		ID:          "list_php_versions",
+		Name:        "List PHP Versions",
+		Description: "List installed PHP versions",
+		Category:    "php",
+		Variables:   []VariableDef{},
+		OnError:     "continue",
+		Steps: []Step{
+			{Action: "exec", Command: "ls /etc/php/ 2>/dev/null | grep -E '^[0-9]+\\.[0-9]+$' || echo ''", Timeout: 10},
+		},
+	},
+
+	"reload_php_version": {
+		ID:          "reload_php_version",
+		Name:        "Reload PHP-FPM Version",
+		Description: "Reload a specific PHP-FPM version",
+		Category:    "php",
+		Variables: []VariableDef{
+			{Name: "version", Description: "PHP version (e.g., 8.2)", Required: true},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			{Action: "exec", Command: "systemctl reload php{{version}}-fpm || systemctl restart php{{version}}-fpm", Timeout: 60},
+		},
+	},
+
 	"deploy_landing": {
 		ID:          "deploy_landing",
 		Name:        "Deploy Landing Page",

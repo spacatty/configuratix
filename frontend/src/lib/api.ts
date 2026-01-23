@@ -1138,8 +1138,39 @@ class ApiClient {
   }
 
   // Machine Configs (file editing)
-  async listMachineConfigs(machineId: string): Promise<ConfigFile[]> {
-    return this.request<ConfigFile[]>(`/api/machines/${machineId}/configs`);
+  async listMachineConfigs(machineId: string): Promise<ConfigListResponse> {
+    return this.request<ConfigListResponse>(`/api/machines/${machineId}/configs`);
+  }
+
+  async createConfigCategory(machineId: string, data: { name: string; emoji?: string; color?: string }): Promise<void> {
+    await this.request(`/api/machines/${machineId}/configs/categories`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteConfigCategory(machineId: string, categoryId: string): Promise<void> {
+    await this.request(`/api/machines/${machineId}/configs/categories/${categoryId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async addConfigPath(machineId: string, categoryId: string, data: { 
+    name: string; 
+    path: string; 
+    file_type?: string; 
+    reload_command?: string;
+  }): Promise<void> {
+    await this.request(`/api/machines/${machineId}/configs/categories/${categoryId}/paths`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async removeConfigPath(machineId: string, categoryId: string, pathId: string): Promise<void> {
+    await this.request(`/api/machines/${machineId}/configs/categories/${categoryId}/paths/${pathId}`, {
+      method: "DELETE",
+    });
   }
 
   async readMachineConfig(machineId: string, path: string): Promise<{ content: string; path: string }> {
@@ -1224,8 +1255,30 @@ export interface PHPExtensionTemplate {
 export interface ConfigFile {
   name: string;
   path: string;
-  type: string; // nginx, nginx_site, php, ssh
+  type: string; // nginx, nginx_site, php, ssh, text
   readonly: boolean;
+  reload_command?: string;
+}
+
+export interface ConfigSubcategory {
+  id: string;
+  name: string;
+  files: ConfigFile[];
+}
+
+export interface ConfigCategory {
+  id: string;
+  name: string;
+  emoji: string;
+  color: string;
+  description?: string;
+  is_built_in: boolean;
+  subcategories?: ConfigSubcategory[];
+  files?: ConfigFile[];
+}
+
+export interface ConfigListResponse {
+  categories: ConfigCategory[];
 }
 
 export const api = new ApiClient(API_URL);

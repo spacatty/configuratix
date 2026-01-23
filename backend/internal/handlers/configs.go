@@ -56,8 +56,8 @@ func (h *ConfigsHandler) ReadConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate path - only allow certain config paths
-	if !isAllowedConfigPath(req.Path) {
+	// Validate path - check built-in paths and custom paths
+	if !isAllowedConfigPath(req.Path) && !h.isCustomAllowedPath(machineID, req.Path) {
 		http.Error(w, "Path not allowed", http.StatusForbidden)
 		return
 	}
@@ -117,8 +117,8 @@ func (h *ConfigsHandler) WriteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate path
-	if !isAllowedConfigPath(req.Path) {
+	// Validate path - check built-in paths and custom paths
+	if !isAllowedConfigPath(req.Path) && !h.isCustomAllowedPath(machineID, req.Path) {
 		http.Error(w, "Path not allowed", http.StatusForbidden)
 		return
 	}
@@ -131,19 +131,48 @@ func (h *ConfigsHandler) WriteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine which template to use based on path
+	// Determine which template to use based on path and build reload command
 	var templateID string
 	var vars_map map[string]string
+	var reloadCommand string
 
 	if strings.HasPrefix(req.Path, "/etc/nginx/") {
 		templateID = "write_nginx_config"
 		vars_map = map[string]string{"path": req.Path, "content": req.Content}
+		reloadCommand = ""  // Template handles nginx reload
 	} else if req.Path == "/etc/ssh/sshd_config" {
-		templateID = "write_sshd_config"
-		vars_map = map[string]string{"content": req.Content}
-	} else {
+		// SSH config - need proper reload
+		templateID = "write_file"
+		vars_map = map[string]string{"path": req.Path, "content": req.Content, "mode": "0600"}
+		reloadCommand = "sshd -t && systemctl daemon-reload && systemctl restart sshd"
+	} else if strings.HasPrefix(req.Path, "/etc/php/") {
+		// PHP config - extract version and reload that specific fpm
 		templateID = "write_file"
 		vars_map = map[string]string{"path": req.Path, "content": req.Content, "mode": "0644"}
+		// Extract PHP version from path like /etc/php/8.2/fpm/php.ini
+		parts := strings.Split(req.Path, "/")
+		if len(parts) >= 4 {
+			phpVersion := parts[3]
+			reloadCommand = "systemctl reload php" + phpVersion + "-fpm || systemctl restart php" + phpVersion + "-fpm"
+		}
+	} else if req.Path == "/root/.ssh/authorized_keys" {
+		templateID = "write_file"
+		vars_map = map[string]string{"path": req.Path, "content": req.Content, "mode": "0600"}
+		reloadCommand = ""  // No reload needed for authorized_keys
+	} else {
+		// Custom path - check if it has a reload command
+		var customReload *string
+		h.db.Get(&customReload, `
+			SELECT cp.reload_command FROM config_paths cp
+			JOIN config_categories cc ON cp.category_id = cc.id
+			WHERE cc.machine_id = $1 AND cp.path = $2
+		`, machineID, req.Path)
+		
+		templateID = "write_file"
+		vars_map = map[string]string{"path": req.Path, "content": req.Content, "mode": "0644"}
+		if customReload != nil {
+			reloadCommand = *customReload
+		}
 	}
 
 	template := templates.Commands[templateID]
@@ -160,11 +189,27 @@ func (h *ConfigsHandler) WriteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Poll for job completion (max 60 seconds for writes with reload)
+	// Poll for job completion (max 60 seconds for writes)
 	result, err := h.waitForJobResult(jobID, 60*time.Second)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Run reload command if specified and different from template
+	if reloadCommand != "" {
+		reloadJobID := uuid.New()
+		reloadPayload := `{"description":"Reload service","steps":[{"action":"exec","command":"` + reloadCommand + `","timeout":60}]}`
+		h.db.Exec(`
+			INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
+			VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
+		`, reloadJobID, agentID, reloadPayload)
+		
+		if reloadResult, err := h.waitForJobResult(reloadJobID, 60*time.Second); err == nil {
+			result = result + "\n\n=== Reload Output ===\n" + reloadResult
+		} else {
+			result = result + "\n\n=== Reload Failed ===\n" + err.Error()
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -175,7 +220,25 @@ func (h *ConfigsHandler) WriteConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListConfigs returns a list of available config files on the machine
+// ConfigCategoryResponse for the new API
+type ConfigCategoryResponse struct {
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	Emoji       string              `json:"emoji"`
+	Color       string              `json:"color"`
+	Description string              `json:"description,omitempty"`
+	IsBuiltIn   bool                `json:"is_built_in"`
+	Subcategories []SubcategoryResponse `json:"subcategories,omitempty"`
+	Files       []ConfigFile        `json:"files,omitempty"`
+}
+
+type SubcategoryResponse struct {
+	ID    string       `json:"id"`
+	Name  string       `json:"name"`
+	Files []ConfigFile `json:"files"`
+}
+
+// ListConfigs returns config files organized by categories
 func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	machineID, err := uuid.Parse(vars["id"])
@@ -192,33 +255,154 @@ func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create a job to list configs
+	// Build built-in categories
+	builtInCategories := []ConfigCategoryResponse{}
+
+	// 1. Nginx Category - run job to list configs
+	nginxCategory := ConfigCategoryResponse{
+		ID:          "nginx",
+		Name:        "Nginx",
+		Emoji:       "🌐",
+		Color:       "#22c55e",
+		Description: "Nginx web server configuration",
+		IsBuiltIn:   true,
+		Subcategories: []SubcategoryResponse{
+			{
+				ID:   "nginx_main",
+				Name: "Main Config",
+				Files: []ConfigFile{
+					{Name: "nginx.conf", Path: "/etc/nginx/nginx.conf", Type: "nginx", Readonly: false},
+				},
+			},
+		},
+	}
+
+	// Get Nginx site configs via job
 	template := templates.Commands["list_nginx_configs"]
 	payload := template.ToPayload(map[string]string{})
-
 	jobID := uuid.New()
-	_, err = h.db.Exec(`
+	h.db.Exec(`
 		INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
 		VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
 	`, jobID, agentID, payload)
-	if err != nil {
-		log.Printf("Failed to create list job: %v", err)
-		http.Error(w, "Failed to create job", http.StatusInternalServerError)
-		return
+
+	if result, err := h.waitForJobResult(jobID, 15*time.Second); err == nil {
+		siteConfigs := parseSiteConfigs(result)
+		if len(siteConfigs) > 0 {
+			nginxCategory.Subcategories = append(nginxCategory.Subcategories, SubcategoryResponse{
+				ID:    "nginx_configuratix",
+				Name:  "Configuratix Sites",
+				Files: siteConfigs,
+			})
+		}
+
+		sitesEnabled := parseSitesEnabled(result)
+		if len(sitesEnabled) > 0 {
+			nginxCategory.Subcategories = append(nginxCategory.Subcategories, SubcategoryResponse{
+				ID:    "nginx_sites_enabled",
+				Name:  "Sites Enabled",
+				Files: sitesEnabled,
+			})
+		}
+	}
+	builtInCategories = append(builtInCategories, nginxCategory)
+
+	// 2. PHP Category - list PHP versions and their config files
+	phpCategory := ConfigCategoryResponse{
+		ID:          "php",
+		Name:        "PHP",
+		Emoji:       "🐘",
+		Color:       "#8b5cf6",
+		Description: "PHP-FPM configuration",
+		IsBuiltIn:   true,
+		Subcategories: []SubcategoryResponse{},
 	}
 
-	// Poll for job completion
-	result, err := h.waitForJobResult(jobID, 30*time.Second)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	// Get PHP versions via job
+	phpTemplate := templates.Commands["list_php_versions"]
+	if phpTemplate != nil {
+		phpPayload := phpTemplate.ToPayload(map[string]string{})
+		phpJobID := uuid.New()
+		h.db.Exec(`
+			INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
+			VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
+		`, phpJobID, agentID, phpPayload)
+
+		if phpResult, err := h.waitForJobResult(phpJobID, 10*time.Second); err == nil {
+			phpVersions := parsePHPVersions(phpResult)
+			for _, version := range phpVersions {
+				phpCategory.Subcategories = append(phpCategory.Subcategories, SubcategoryResponse{
+					ID:   "php_" + version,
+					Name: "PHP " + version,
+					Files: []ConfigFile{
+						{Name: "php.ini", Path: "/etc/php/" + version + "/fpm/php.ini", Type: "php", Readonly: false},
+						{Name: "www.conf", Path: "/etc/php/" + version + "/fpm/pool.d/www.conf", Type: "php", Readonly: false},
+					},
+				})
+			}
+		}
+	}
+	if len(phpCategory.Subcategories) > 0 {
+		builtInCategories = append(builtInCategories, phpCategory)
 	}
 
-	// Parse the result to extract config files
-	configs := parseConfigList(result)
+	// 3. SSH Category
+	sshCategory := ConfigCategoryResponse{
+		ID:          "ssh",
+		Name:        "SSH",
+		Emoji:       "🔐",
+		Color:       "#f59e0b",
+		Description: "SSH daemon configuration",
+		IsBuiltIn:   true,
+		Files: []ConfigFile{
+			{Name: "sshd_config", Path: "/etc/ssh/sshd_config", Type: "ssh", Readonly: false},
+			{Name: "authorized_keys", Path: "/root/.ssh/authorized_keys", Type: "text", Readonly: false},
+		},
+	}
+	builtInCategories = append(builtInCategories, sshCategory)
+
+	// 4. Get custom categories from database
+	var customCategories []models.ConfigCategory
+	h.db.Select(&customCategories, `
+		SELECT * FROM config_categories WHERE machine_id = $1 ORDER BY position, name
+	`, machineID)
+
+	customCategoryResponses := []ConfigCategoryResponse{}
+	for _, cat := range customCategories {
+		var paths []models.ConfigPath
+		h.db.Select(&paths, `
+			SELECT * FROM config_paths WHERE category_id = $1 ORDER BY position, name
+		`, cat.ID)
+
+		files := []ConfigFile{}
+		for _, p := range paths {
+			files = append(files, ConfigFile{
+				Name:     p.Name,
+				Path:     p.Path,
+				Type:     p.FileType,
+				Readonly: false,
+			})
+		}
+
+		customCategoryResponses = append(customCategoryResponses, ConfigCategoryResponse{
+			ID:        cat.ID.String(),
+			Name:      cat.Name,
+			Emoji:     cat.Emoji,
+			Color:     cat.Color,
+			IsBuiltIn: false,
+			Files:     files,
+		})
+	}
+
+	// Return combined response
+	response := struct {
+		Categories []ConfigCategoryResponse `json:"categories"`
+	}{
+		Categories: append(builtInCategories, customCategoryResponses...),
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(configs)
+	json.NewEncoder(w).Encode(response)
 }
 
 // waitForJobResult polls until a job completes and returns the logs
@@ -304,50 +488,54 @@ func isAllowedConfigPath(path string) bool {
 		"/etc/ssh/sshd_config",
 		"/etc/php/",
 		"/etc/fail2ban/",
+		"/root/.ssh/authorized_keys",
 	}
 
 	for _, prefix := range allowedPrefixes {
-		if strings.HasPrefix(path, prefix) {
+		if strings.HasPrefix(path, prefix) || path == prefix {
 			return true
 		}
 	}
 	return false
 }
 
-// parseConfigList extracts config file info from the ls output
-func parseConfigList(output string) []ConfigFile {
-	configs := []ConfigFile{
-		{Name: "nginx.conf", Path: "/etc/nginx/nginx.conf", Type: "nginx", Readonly: false},
-		{Name: "sshd_config", Path: "/etc/ssh/sshd_config", Type: "ssh", Readonly: false},
-	}
+// isCustomAllowedPath checks if a path is in the custom config paths for this machine
+func (h *ConfigsHandler) isCustomAllowedPath(machineID uuid.UUID, path string) bool {
+	var count int
+	err := h.db.Get(&count, `
+		SELECT COUNT(*) FROM config_paths cp
+		JOIN config_categories cc ON cp.category_id = cc.id
+		WHERE cc.machine_id = $1 AND cp.path = $2
+	`, machineID, path)
+	return err == nil && count > 0
+}
 
-	// Parse configuratix site configs from output
+// parseSiteConfigs extracts Configuratix site configs from output
+func parseSiteConfigs(output string) []ConfigFile {
+	configs := []ConfigFile{}
 	lines := strings.Split(output, "\n")
 	inSiteConfigs := false
+	
 	for _, line := range lines {
-		if strings.Contains(line, "Site Configs") {
+		if strings.Contains(line, "Site Configs") || strings.Contains(line, "configuratix") {
 			inSiteConfigs = true
 			continue
 		}
-		if strings.Contains(line, "===") {
+		if strings.Contains(line, "===") || strings.Contains(line, "Sites Enabled") {
 			inSiteConfigs = false
 			continue
 		}
 		if inSiteConfigs && strings.HasSuffix(strings.TrimSpace(line), ".conf") {
-			// Extract filename from ls -la output (last field is the filename/path)
 			parts := strings.Fields(line)
 			if len(parts) > 0 {
 				lastPart := parts[len(parts)-1]
 				if strings.HasSuffix(lastPart, ".conf") {
-					// lastPart might be full path or just filename
 					var filename, fullPath string
 					if strings.HasPrefix(lastPart, "/") {
-						// Full path - extract just the filename
 						fullPath = lastPart
 						pathParts := strings.Split(lastPart, "/")
 						filename = pathParts[len(pathParts)-1]
 					} else {
-						// Just filename - construct full path
 						filename = lastPart
 						fullPath = "/etc/nginx/conf.d/configuratix/" + filename
 					}
@@ -361,7 +549,216 @@ func parseConfigList(output string) []ConfigFile {
 			}
 		}
 	}
-
 	return configs
+}
+
+// parseSitesEnabled extracts sites-enabled configs from output
+func parseSitesEnabled(output string) []ConfigFile {
+	configs := []ConfigFile{}
+	lines := strings.Split(output, "\n")
+	inSitesEnabled := false
+	
+	for _, line := range lines {
+		if strings.Contains(line, "Sites Enabled") {
+			inSitesEnabled = true
+			continue
+		}
+		if strings.Contains(line, "===") {
+			inSitesEnabled = false
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if inSitesEnabled && trimmed != "" && !strings.HasPrefix(trimmed, "$") {
+			parts := strings.Fields(line)
+			if len(parts) > 0 {
+				lastPart := parts[len(parts)-1]
+				if lastPart != "" && !strings.HasPrefix(lastPart, ".") {
+					var filename, fullPath string
+					if strings.HasPrefix(lastPart, "/") {
+						fullPath = lastPart
+						pathParts := strings.Split(lastPart, "/")
+						filename = pathParts[len(pathParts)-1]
+					} else {
+						filename = lastPart
+						fullPath = "/etc/nginx/sites-enabled/" + filename
+					}
+					// Skip if it's a symlink indicator
+					if !strings.Contains(line, "->") || strings.HasSuffix(filename, ".conf") || filename == "default" {
+						configs = append(configs, ConfigFile{
+							Name:     filename,
+							Path:     fullPath,
+							Type:     "nginx_site",
+							Readonly: false,
+						})
+					}
+				}
+			}
+		}
+	}
+	return configs
+}
+
+// parsePHPVersions extracts PHP versions from ls /etc/php output
+func parsePHPVersions(output string) []string {
+	versions := []string{}
+	lines := strings.Split(output, "\n")
+	
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Look for version patterns like 8.1, 8.2, 8.3
+		if trimmed != "" && len(trimmed) <= 4 {
+			// Check if it looks like a version (e.g., "8.1", "8.2")
+			if strings.Contains(trimmed, ".") || (len(trimmed) == 1 && trimmed[0] >= '5' && trimmed[0] <= '9') {
+				versions = append(versions, trimmed)
+			}
+		}
+	}
+	return versions
+}
+
+// parseConfigList is kept for backward compatibility
+func parseConfigList(output string) []ConfigFile {
+	configs := []ConfigFile{
+		{Name: "nginx.conf", Path: "/etc/nginx/nginx.conf", Type: "nginx", Readonly: false},
+		{Name: "sshd_config", Path: "/etc/ssh/sshd_config", Type: "ssh", Readonly: false},
+	}
+	configs = append(configs, parseSiteConfigs(output)...)
+	return configs
+}
+
+// ==================== Custom Config Categories ====================
+
+type CreateConfigCategoryRequest struct {
+	Name  string `json:"name"`
+	Emoji string `json:"emoji"`
+	Color string `json:"color"`
+}
+
+// CreateConfigCategory creates a new custom config category for a machine
+func (h *ConfigsHandler) CreateConfigCategory(w http.ResponseWriter, r *http.Request) {
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	var req CreateConfigCategoryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		http.Error(w, "Name is required", http.StatusBadRequest)
+		return
+	}
+	if req.Emoji == "" {
+		req.Emoji = "📁"
+	}
+	if req.Color == "" {
+		req.Color = "#6366f1"
+	}
+
+	var maxPos int
+	h.db.Get(&maxPos, "SELECT COALESCE(MAX(position), 0) FROM config_categories WHERE machine_id = $1", machineID)
+
+	var category models.ConfigCategory
+	err = h.db.Get(&category, `
+		INSERT INTO config_categories (machine_id, name, emoji, color, position)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING *
+	`, machineID, req.Name, req.Emoji, req.Color, maxPos+1)
+	if err != nil {
+		log.Printf("Failed to create config category: %v", err)
+		http.Error(w, "Failed to create category (name may already exist)", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(category)
+}
+
+// DeleteConfigCategory deletes a custom config category
+func (h *ConfigsHandler) DeleteConfigCategory(w http.ResponseWriter, r *http.Request) {
+	categoryID, err := uuid.Parse(mux.Vars(r)["categoryId"])
+	if err != nil {
+		http.Error(w, "Invalid category ID", http.StatusBadRequest)
+		return
+	}
+
+	_, err = h.db.Exec("DELETE FROM config_categories WHERE id = $1", categoryID)
+	if err != nil {
+		http.Error(w, "Failed to delete category", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type AddConfigPathRequest struct {
+	Name          string  `json:"name"`
+	Path          string  `json:"path"`
+	FileType      string  `json:"file_type"`
+	ReloadCommand *string `json:"reload_command"`
+}
+
+// AddConfigPath adds a file path to a custom category
+func (h *ConfigsHandler) AddConfigPath(w http.ResponseWriter, r *http.Request) {
+	categoryID, err := uuid.Parse(mux.Vars(r)["categoryId"])
+	if err != nil {
+		http.Error(w, "Invalid category ID", http.StatusBadRequest)
+		return
+	}
+
+	var req AddConfigPathRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" || req.Path == "" {
+		http.Error(w, "Name and path are required", http.StatusBadRequest)
+		return
+	}
+	if req.FileType == "" {
+		req.FileType = "text"
+	}
+
+	var maxPos int
+	h.db.Get(&maxPos, "SELECT COALESCE(MAX(position), 0) FROM config_paths WHERE category_id = $1", categoryID)
+
+	var configPath models.ConfigPath
+	err = h.db.Get(&configPath, `
+		INSERT INTO config_paths (category_id, name, path, file_type, reload_command, position)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING *
+	`, categoryID, req.Name, req.Path, req.FileType, req.ReloadCommand, maxPos+1)
+	if err != nil {
+		log.Printf("Failed to add config path: %v", err)
+		http.Error(w, "Failed to add path (may already exist)", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(configPath)
+}
+
+// RemoveConfigPath removes a file path from a category
+func (h *ConfigsHandler) RemoveConfigPath(w http.ResponseWriter, r *http.Request) {
+	pathID, err := uuid.Parse(mux.Vars(r)["pathId"])
+	if err != nil {
+		http.Error(w, "Invalid path ID", http.StatusBadRequest)
+		return
+	}
+
+	_, err = h.db.Exec("DELETE FROM config_paths WHERE id = $1", pathID)
+	if err != nil {
+		http.Error(w, "Failed to remove path", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 

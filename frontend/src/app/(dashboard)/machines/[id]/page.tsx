@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { api, Machine, UFWRule, Job, ConfigFile } from "@/lib/api";
+import { api, Machine, UFWRule, Job, ConfigFile, ConfigCategory } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
 import { ChevronDown, ChevronRight, RefreshCw, FileCode, Save, RotateCcw, Loader2, FileText, Settings, Lock, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -424,19 +424,27 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
 
 // Config Editor Component
 function ConfigEditorTab({ machineId }: { machineId: string }) {
-  const [configs, setConfigs] = useState<ConfigFile[]>([]);
+  const [categories, setCategories] = useState<ConfigCategory[]>([]);
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  const [expandedSubcats, setExpandedSubcats] = useState<Set<string>>(new Set());
   const [selectedConfig, setSelectedConfig] = useState<ConfigFile | null>(null);
   const [content, setContent] = useState("");
   const [originalContent, setOriginalContent] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadingConfigs, setLoadingConfigs] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [isResizing, setIsResizing] = useState(false);
 
   const loadConfigs = useCallback(async () => {
     try {
       setLoadingConfigs(true);
       const data = await api.listMachineConfigs(machineId);
-      setConfigs(data);
+      setCategories(data.categories || []);
+      // Auto-expand first category
+      if (data.categories?.length > 0) {
+        setExpandedCategories(new Set([data.categories[0].id]));
+      }
     } catch (err) {
       console.error("Failed to load configs:", err);
       toast.error("Failed to load config list");
@@ -489,6 +497,47 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
     toast.info("Changes reverted");
   };
 
+  const toggleCategory = (id: string) => {
+    setExpandedCategories(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSubcat = (id: string) => {
+    setExpandedSubcats(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // Handle sidebar resize
+  const handleMouseDown = () => {
+    setIsResizing(true);
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      const newWidth = Math.max(200, Math.min(500, e.clientX - 48)); // 48px for sidebar
+      setSidebarWidth(newWidth);
+    };
+    const handleMouseUp = () => setIsResizing(false);
+    
+    if (isResizing) {
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+    }
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizing]);
+
   const hasChanges = content !== originalContent;
 
   const getConfigIcon = (type: string) => {
@@ -527,11 +576,27 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
     );
   }
 
+  const renderFileItem = (file: ConfigFile) => (
+    <button
+      key={file.path}
+      onClick={() => loadConfigContent(file)}
+      className={`w-full py-2 px-3 text-left hover:bg-muted/50 transition-colors flex items-center gap-2 text-sm ${
+        selectedConfig?.path === file.path ? "bg-primary/10 border-l-2 border-l-primary" : ""
+      }`}
+    >
+      {getConfigIcon(file.type)}
+      <span className="truncate flex-1">{file.name}</span>
+    </button>
+  );
+
   return (
-    <div className="grid grid-cols-4 gap-4 h-[600px]">
-      {/* Config File List */}
-      <Card className="border-border/50 bg-card/50 col-span-1 overflow-hidden">
-        <CardHeader className="pb-2">
+    <div className="flex h-[600px] gap-0">
+      {/* Sidebar with categories */}
+      <Card 
+        className="border-border/50 bg-card/50 overflow-hidden flex-shrink-0 flex flex-col"
+        style={{ width: sidebarWidth }}
+      >
+        <CardHeader className="pb-2 flex-shrink-0 border-b border-border/30">
           <CardTitle className="text-sm flex items-center justify-between">
             Config Files
             <Button variant="ghost" size="sm" onClick={loadConfigs} className="h-7 w-7 p-0">
@@ -539,42 +604,79 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
             </Button>
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-0 overflow-auto">
-          {configs.length === 0 ? (
+        <CardContent className="p-0 overflow-auto flex-1">
+          {categories.length === 0 ? (
             <p className="text-sm text-muted-foreground p-6 text-center">
               No config files found. Make sure the agent is running.
             </p>
           ) : (
-            <div className="divide-y divide-border/30">
-              {configs.map((config) => (
-                <button
-                  key={config.path}
-                  onClick={() => loadConfigContent(config)}
-                  className={`w-full p-4 text-left hover:bg-muted/50 transition-colors flex items-start gap-3 ${
-                    selectedConfig?.path === config.path ? "bg-muted/50 border-l-2 border-l-primary" : ""
-                  }`}
-                >
-                  <div className="mt-0.5">{getConfigIcon(config.type)}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{config.name}</div>
-                    <button
-                      onClick={(e) => copyPath(config.path, e)}
-                      className="text-xs text-muted-foreground truncate hover:text-foreground transition-colors flex items-center gap-1 mt-1 group"
-                      title="Click to copy path"
+            <div className="py-2">
+              {categories.map((category) => (
+                <div key={category.id} className="mb-1">
+                  {/* Category Header */}
+                  <button
+                    onClick={() => toggleCategory(category.id)}
+                    className="w-full px-3 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
+                  >
+                    {expandedCategories.has(category.id) ? (
+                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                    ) : (
+                      <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                    )}
+                    <span 
+                      className="text-sm"
+                      style={{ color: category.color }}
                     >
-                      <span className="truncate">{config.path}</span>
-                      <Copy className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-                    </button>
-                  </div>
-                </button>
+                      {category.emoji}
+                    </span>
+                    <span className="font-medium text-sm flex-1 text-left">{category.name}</span>
+                  </button>
+
+                  {/* Category Content */}
+                  {expandedCategories.has(category.id) && (
+                    <div className="ml-4 border-l border-border/30">
+                      {/* Subcategories */}
+                      {category.subcategories?.map((subcat) => (
+                        <div key={subcat.id}>
+                          <button
+                            onClick={() => toggleSubcat(subcat.id)}
+                            className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-muted/30 transition-colors text-xs text-muted-foreground"
+                          >
+                            {expandedSubcats.has(subcat.id) ? (
+                              <ChevronDown className="h-3 w-3" />
+                            ) : (
+                              <ChevronRight className="h-3 w-3" />
+                            )}
+                            <span>{subcat.name}</span>
+                            <span className="ml-auto text-xs opacity-60">{subcat.files.length}</span>
+                          </button>
+                          {expandedSubcats.has(subcat.id) && (
+                            <div className="ml-4">
+                              {subcat.files.map(renderFileItem)}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      
+                      {/* Direct files (no subcategory) */}
+                      {category.files?.map(renderFileItem)}
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           )}
         </CardContent>
       </Card>
 
+      {/* Resize Handle */}
+      <div
+        className={`w-1 cursor-col-resize hover:bg-primary/50 transition-colors ${isResizing ? "bg-primary" : "bg-transparent"}`}
+        onMouseDown={handleMouseDown}
+      />
+
       {/* Editor */}
-      <Card className="border-border/50 bg-card/50 col-span-3 overflow-hidden flex flex-col">
+      <Card className="border-border/50 bg-card/50 flex-1 overflow-hidden flex flex-col">
         <CardHeader className="pb-2 flex-shrink-0">
           <div className="flex items-center justify-between">
             <div>
