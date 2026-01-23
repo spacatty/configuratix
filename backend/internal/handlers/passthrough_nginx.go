@@ -318,18 +318,47 @@ func (g *PassthroughNginxGenerator) ApplyToMachine(machineID uuid.UUID) error {
 	}
 	
 	// Use 'run' job with multiple steps:
-	// 1. Install stream module if needed
-	// 2. Ensure nginx.conf includes stream.d
-	// 3. Write the config
-	// 4. Reload nginx
+	// 1. Disable conflicting sites-enabled configs
+	// 2. Install stream module if needed
+	// 3. Ensure nginx.conf includes stream.d
+	// 4. Write the config
+	// 5. Reload nginx
 	setupScript := `
-# Setup nginx stream module and configuration
-NGINX_CONF="/etc/nginx/nginx.conf"
+#!/bin/bash
+set -e
 
-# 1. Create directory
+# Setup nginx stream passthrough
+NGINX_CONF="/etc/nginx/nginx.conf"
+SITES_ENABLED="/etc/nginx/sites-enabled"
+SITES_AVAILABLE="/etc/nginx/sites-available"
+
+echo "=== Configuratix Passthrough Setup ==="
+
+# 1. Disable sites-enabled configs that listen on ports 80/443
+# (Stream passthrough needs exclusive access to these ports)
+echo "Checking for conflicting site configs..."
+if [ -d "$SITES_ENABLED" ]; then
+    for conf in "$SITES_ENABLED"/*; do
+        [ -f "$conf" ] || continue
+        # Skip if already a .disabled file
+        [[ "$conf" == *.disabled ]] && continue
+        
+        # Check if this config listens on 80 or 443
+        if grep -qE 'listen\s+(80|443)' "$conf" 2>/dev/null; then
+            confname=$(basename "$conf")
+            echo "Disabling $confname (listens on 80/443)..."
+            mv "$conf" "${conf}.disabled-by-passthrough"
+        fi
+    done
+fi
+
+# Also check sites-available symlinks that might conflict
+# (the above handles symlinks too since we check sites-enabled)
+
+# 2. Create stream.d directory
 mkdir -p /etc/nginx/stream.d
 
-# 2. Check if stream module is available by testing with a temp stream block
+# 3. Check if stream module is available
 STREAM_AVAILABLE=false
 
 # Check if already loaded via modules-enabled
@@ -362,7 +391,7 @@ if [ "$STREAM_AVAILABLE" = false ]; then
     fi
 fi
 
-# 3. Add stream block to nginx.conf if missing
+# 4. Add stream block to nginx.conf if missing
 if ! grep -qE "^stream\s*\{" "$NGINX_CONF"; then
     echo "" >> "$NGINX_CONF"
     echo "# SSL Passthrough configuration (Configuratix)" >> "$NGINX_CONF"
@@ -375,7 +404,7 @@ elif ! grep -q "include /etc/nginx/stream.d" "$NGINX_CONF"; then
     echo "Added stream.d include to existing stream block"
 fi
 
-# 4. Final test
+# 5. Final module test
 if nginx -t 2>&1 | grep -q "unknown directive.*stream"; then
     echo "ERROR: Stream module still not working after setup"
     exit 1
@@ -383,14 +412,26 @@ fi
 
 echo "Stream setup complete"
 `
+	// Final step: test config and restart nginx (not just reload, in case it's stopped)
+	restartScript := `
+nginx -t
+if systemctl is-active --quiet nginx; then
+    echo "Reloading nginx..."
+    systemctl reload nginx
+else
+    echo "Starting nginx..."
+    systemctl start nginx
+fi
+echo "Nginx is running"
+`
 	payload := fmt.Sprintf(`{
 		"steps": [
 			{"action": "exec", "command": %q, "timeout": 300},
 			{"action": "file", "op": "write", "path": %q, "content": %q, "mode": "0644"},
-			{"action": "exec", "command": "nginx -t && systemctl reload nginx"}
+			{"action": "exec", "command": %q, "timeout": 60}
 		],
 		"on_error": "stop"
-	}`, setupScript, configPath, config)
+	}`, setupScript, configPath, config, restartScript)
 	
 	_, err = g.db.Exec(`
 		INSERT INTO jobs (agent_id, type, payload_json, status)
@@ -415,6 +456,87 @@ echo "Stream setup complete"
 	`, machineID)
 
 	log.Printf("Created passthrough config job for machine %s", machineID)
+	return nil
+}
+
+// RemoveFromMachine removes passthrough config and re-enables disabled sites
+func (g *PassthroughNginxGenerator) RemoveFromMachine(machineID uuid.UUID) error {
+	// Check if machine is still in any pools
+	var count int
+	g.db.Get(&count, `
+		SELECT COUNT(*) FROM (
+			SELECT machine_id FROM dns_passthrough_members WHERE machine_id = $1 AND is_enabled = true
+			UNION ALL
+			SELECT machine_id FROM dns_wildcard_pool_members WHERE machine_id = $1 AND is_enabled = true
+		) t
+	`, machineID)
+
+	if count > 0 {
+		// Machine is still in pools, just regenerate the config
+		return g.ApplyToMachine(machineID)
+	}
+
+	// Machine is not in any pools, remove passthrough config
+	var agentID *uuid.UUID
+	err := g.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1", machineID)
+	if err != nil || agentID == nil {
+		return fmt.Errorf("machine %s has no agent", machineID)
+	}
+
+	cleanupScript := `
+#!/bin/bash
+set -e
+
+SITES_ENABLED="/etc/nginx/sites-enabled"
+CONFIG_FILE="/etc/nginx/stream.d/configuratix-passthrough.conf"
+
+echo "=== Configuratix Passthrough Cleanup ==="
+
+# 1. Remove passthrough config
+if [ -f "$CONFIG_FILE" ]; then
+    echo "Removing passthrough config..."
+    rm -f "$CONFIG_FILE"
+fi
+
+# 2. Re-enable sites that were disabled by passthrough
+echo "Re-enabling disabled sites..."
+if [ -d "$SITES_ENABLED" ]; then
+    for conf in "$SITES_ENABLED"/*.disabled-by-passthrough; do
+        [ -f "$conf" ] || continue
+        newname="${conf%.disabled-by-passthrough}"
+        echo "Re-enabling $(basename "$newname")..."
+        mv "$conf" "$newname"
+    done
+fi
+
+# 3. Restart nginx
+nginx -t
+if systemctl is-active --quiet nginx; then
+    systemctl reload nginx
+else
+    systemctl start nginx
+fi
+
+echo "Passthrough cleanup complete"
+`
+
+	payload := fmt.Sprintf(`{
+		"steps": [
+			{"action": "exec", "command": %q, "timeout": 120}
+		],
+		"on_error": "stop"
+	}`, cleanupScript)
+
+	_, err = g.db.Exec(`
+		INSERT INTO jobs (agent_id, type, payload_json, status)
+		VALUES ($1, 'run', $2::jsonb, 'pending')
+	`, agentID, payload)
+
+	if err != nil {
+		return fmt.Errorf("failed to create cleanup job: %w", err)
+	}
+
+	log.Printf("Created passthrough cleanup job for machine %s", machineID)
 	return nil
 }
 
