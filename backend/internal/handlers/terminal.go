@@ -124,6 +124,12 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 	}
 	h.sessionsLock.Unlock()
 
+	// Configure WebSocket ping/pong handlers
+	conn.SetPongHandler(func(appData string) error {
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
 	// Add this connection to session with its own write lock
 	userConn := &connWithLock{conn: conn}
 	session.userConnsLock.Lock()
@@ -161,10 +167,13 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 	}
 	userConn.writeLock.Unlock()
 
-	// Keepalive ping goroutine
+	// Set initial read deadline
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+
+	// Keepalive ping goroutine - use WebSocket ping control frame
 	done := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -173,7 +182,7 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 			case <-ticker.C:
 				userConn.writeLock.Lock()
 				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				err := conn.WriteJSON(TerminalMessage{Type: "ping"})
+				err := conn.WriteMessage(websocket.PingMessage, []byte("keepalive"))
 				userConn.writeLock.Unlock()
 				if err != nil {
 					return
@@ -193,6 +202,9 @@ func (h *TerminalHandler) UserTerminalConnect(w http.ResponseWriter, r *http.Req
 			log.Printf("Terminal read error: %v", err)
 			return
 		}
+
+		// Extend read deadline on any message
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 
 		switch msg.Type {
 		case "input", "resize":
@@ -239,6 +251,12 @@ func (h *TerminalHandler) AgentTerminalConnect(w http.ResponseWriter, r *http.Re
 
 	log.Printf("Agent terminal connected for machine %s", machineID)
 
+	// Configure WebSocket ping/pong handlers
+	conn.SetPongHandler(func(appData string) error {
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
 	// Get or create session
 	h.sessionsLock.Lock()
 	session, exists := h.sessions[machineID]
@@ -278,10 +296,13 @@ func (h *TerminalHandler) AgentTerminalConnect(w http.ResponseWriter, r *http.Re
 		Data: "\r\n\x1b[32mAgent connected. Terminal ready.\x1b[0m\r\n",
 	})
 
-	// Keepalive ping goroutine for agent
+	// Set initial read deadline
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+
+	// Keepalive ping goroutine for agent using WebSocket ping control frame
 	agentDone := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -291,7 +312,8 @@ func (h *TerminalHandler) AgentTerminalConnect(w http.ResponseWriter, r *http.Re
 				session.agentConnLock.Lock()
 				if session.agentConn != nil {
 					session.agentConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-					err := session.agentConn.WriteJSON(TerminalMessage{Type: "ping"})
+					// Use WebSocket ping control frame instead of JSON
+					err := session.agentConn.WriteMessage(websocket.PingMessage, []byte("keepalive"))
 					session.agentConnLock.Unlock()
 					if err != nil {
 						return
@@ -316,18 +338,22 @@ func (h *TerminalHandler) AgentTerminalConnect(w http.ResponseWriter, r *http.Re
 			break
 		}
 
+		// Extend read deadline on any message
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+
 		switch msg.Type {
 		case "output":
 			// Relay output to all users
 			h.broadcastToUsers(session, msg)
 		case "ping":
+			// Respond to JSON ping (fallback)
 			session.agentConnLock.Lock()
 			if session.agentConn != nil {
 				session.agentConn.WriteJSON(TerminalMessage{Type: "pong"})
 			}
 			session.agentConnLock.Unlock()
 		case "pong":
-			// Keepalive response, ignore
+			// Keepalive response, extend deadline
 		}
 	}
 

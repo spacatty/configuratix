@@ -239,6 +239,7 @@ type SubcategoryResponse struct {
 }
 
 // ListConfigs returns config files organized by categories
+// This is now FAST - returns static structure immediately without waiting for jobs
 func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	machineID, err := uuid.Parse(vars["id"])
@@ -247,18 +248,18 @@ func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get agent ID for this machine
-	var agentID uuid.UUID
-	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1", machineID)
-	if err != nil {
+	// Just verify machine exists, don't need agent ID for static list
+	var exists bool
+	err = h.db.Get(&exists, "SELECT EXISTS(SELECT 1 FROM machines WHERE id = $1)", machineID)
+	if err != nil || !exists {
 		http.Error(w, "Machine not found", http.StatusNotFound)
 		return
 	}
 
-	// Build built-in categories
+	// Return STATIC built-in categories immediately (no job polling)
 	builtInCategories := []ConfigCategoryResponse{}
 
-	// 1. Nginx Category
+	// 1. Nginx Category - static paths that exist on most servers
 	nginxCategory := ConfigCategoryResponse{
 		ID:          "nginx",
 		Name:        "Nginx",
@@ -274,10 +275,22 @@ func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 					{Name: "nginx.conf", Path: "/etc/nginx/nginx.conf", Type: "nginx", Readonly: false},
 				},
 			},
+			{
+				ID:   "nginx_sites_enabled",
+				Name: "Sites Enabled",
+				Files: []ConfigFile{
+					{Name: "default", Path: "/etc/nginx/sites-enabled/default", Type: "nginx_site", Readonly: false},
+				},
+			},
+			{
+				ID:   "nginx_configuratix",
+				Name: "Configuratix Sites",
+				Files: []ConfigFile{}, // Will be populated when reading
+			},
 		},
 	}
 
-	// 2. PHP Category
+	// 2. PHP Category - common PHP versions
 	phpCategory := ConfigCategoryResponse{
 		ID:          "php",
 		Name:        "PHP",
@@ -285,96 +298,38 @@ func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 		Color:       "#8b5cf6",
 		Description: "PHP-FPM configuration",
 		IsBuiltIn:   true,
-		Subcategories: []SubcategoryResponse{},
+		Subcategories: []SubcategoryResponse{
+			// Common PHP versions - files will 404 if not installed, which is fine
+			{
+				ID:   "php_8.3",
+				Name: "PHP 8.3",
+				Files: []ConfigFile{
+					{Name: "php.ini", Path: "/etc/php/8.3/fpm/php.ini", Type: "php", Readonly: false},
+					{Name: "www.conf", Path: "/etc/php/8.3/fpm/pool.d/www.conf", Type: "php", Readonly: false},
+				},
+			},
+			{
+				ID:   "php_8.2",
+				Name: "PHP 8.2",
+				Files: []ConfigFile{
+					{Name: "php.ini", Path: "/etc/php/8.2/fpm/php.ini", Type: "php", Readonly: false},
+					{Name: "www.conf", Path: "/etc/php/8.2/fpm/pool.d/www.conf", Type: "php", Readonly: false},
+				},
+			},
+			{
+				ID:   "php_8.1",
+				Name: "PHP 8.1",
+				Files: []ConfigFile{
+					{Name: "php.ini", Path: "/etc/php/8.1/fpm/php.ini", Type: "php", Readonly: false},
+					{Name: "www.conf", Path: "/etc/php/8.1/fpm/pool.d/www.conf", Type: "php", Readonly: false},
+				},
+			},
+		},
 	}
 
-	// Run nginx and PHP jobs in PARALLEL with channels
-	type jobResult struct {
-		jobType string
-		result  string
-		err     error
-	}
-	resultChan := make(chan jobResult, 2)
-
-	// Start nginx job
-	go func() {
-		template := templates.Commands["list_nginx_configs"]
-		if template == nil {
-			resultChan <- jobResult{jobType: "nginx", err: nil}
-			return
-		}
-		payload := template.ToPayload(map[string]string{})
-		jobID := uuid.New()
-		h.db.Exec(`
-			INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
-			VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
-		`, jobID, agentID, payload)
-		result, err := h.waitForJobResult(jobID, 8*time.Second)
-		resultChan <- jobResult{jobType: "nginx", result: result, err: err}
-	}()
-
-	// Start PHP job
-	go func() {
-		phpTemplate := templates.Commands["list_php_versions"]
-		if phpTemplate == nil {
-			resultChan <- jobResult{jobType: "php", err: nil}
-			return
-		}
-		phpPayload := phpTemplate.ToPayload(map[string]string{})
-		phpJobID := uuid.New()
-		h.db.Exec(`
-			INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
-			VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
-		`, phpJobID, agentID, phpPayload)
-		result, err := h.waitForJobResult(phpJobID, 8*time.Second)
-		resultChan <- jobResult{jobType: "php", result: result, err: err}
-	}()
-
-	// Wait for both results (max 10 seconds total)
-	timeout := time.After(10 * time.Second)
-	for i := 0; i < 2; i++ {
-		select {
-		case res := <-resultChan:
-			if res.jobType == "nginx" && res.err == nil {
-				siteConfigs := parseSiteConfigs(res.result)
-				if len(siteConfigs) > 0 {
-					nginxCategory.Subcategories = append(nginxCategory.Subcategories, SubcategoryResponse{
-						ID:    "nginx_configuratix",
-						Name:  "Configuratix Sites",
-						Files: siteConfigs,
-					})
-				}
-				sitesEnabled := parseSitesEnabled(res.result)
-				if len(sitesEnabled) > 0 {
-					nginxCategory.Subcategories = append(nginxCategory.Subcategories, SubcategoryResponse{
-						ID:    "nginx_sites_enabled",
-						Name:  "Sites Enabled",
-						Files: sitesEnabled,
-					})
-				}
-			} else if res.jobType == "php" && res.err == nil {
-				phpVersions := parsePHPVersions(res.result)
-				for _, version := range phpVersions {
-					phpCategory.Subcategories = append(phpCategory.Subcategories, SubcategoryResponse{
-						ID:   "php_" + version,
-						Name: "PHP " + version,
-						Files: []ConfigFile{
-							{Name: "php.ini", Path: "/etc/php/" + version + "/fpm/php.ini", Type: "php", Readonly: false},
-							{Name: "www.conf", Path: "/etc/php/" + version + "/fpm/pool.d/www.conf", Type: "php", Readonly: false},
-						},
-					})
-				}
-			}
-		case <-timeout:
-			// Timeout reached, continue with what we have
-			break
-		}
-	}
-
+	// Add built-in categories (no job waiting - instant response!)
 	builtInCategories = append(builtInCategories, nginxCategory)
-	if len(phpCategory.Subcategories) > 0 {
-		builtInCategories = append(builtInCategories, phpCategory)
-	}
+	builtInCategories = append(builtInCategories, phpCategory)
 
 	// 3. SSH Category
 	sshCategory := ConfigCategoryResponse{

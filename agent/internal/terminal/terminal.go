@@ -77,6 +77,24 @@ func (t *Terminal) Connect() error {
 func (t *Terminal) Run() error {
 	defer t.Close()
 
+	// Configure WebSocket ping/pong handlers
+	t.conn.SetPongHandler(func(appData string) error {
+		// Received pong, extend read deadline
+		t.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+	
+	t.conn.SetPingHandler(func(appData string) error {
+		// Respond to ping with pong
+		t.connLock.Lock()
+		defer t.connLock.Unlock()
+		if t.conn != nil {
+			t.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			return t.conn.WriteMessage(websocket.PongMessage, []byte(appData))
+		}
+		return nil
+	})
+
 	// Start shell
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -95,6 +113,9 @@ func (t *Terminal) Run() error {
 
 	// Set initial size
 	t.setSize(80, 24)
+
+	// Set initial read deadline (60 seconds, will be extended by pings)
+	t.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 
 	// Goroutine: read from PTY, send to websocket
 	go t.readFromPTY()
@@ -149,6 +170,13 @@ func (t *Terminal) readFromWebsocket() error {
 				return err
 			}
 
+			// Extend read deadline on any message received
+			t.connLock.Lock()
+			if t.conn != nil {
+				t.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			}
+			t.connLock.Unlock()
+
 			switch msg.Type {
 			case "input":
 				if t.ptyFile != nil {
@@ -166,7 +194,8 @@ func (t *Terminal) readFromWebsocket() error {
 }
 
 func (t *Terminal) keepalive() {
-	ticker := time.NewTicker(25 * time.Second)
+	// Use 15 second pings to keep connection alive through proxies
+	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -174,7 +203,17 @@ func (t *Terminal) keepalive() {
 		case <-t.done:
 			return
 		case <-ticker.C:
-			t.sendMessage(TerminalMessage{Type: "ping"})
+			t.connLock.Lock()
+			if t.conn != nil {
+				// Use WebSocket ping control frame (more reliable than JSON)
+				t.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				if err := t.conn.WriteMessage(websocket.PingMessage, []byte("keepalive")); err != nil {
+					log.Printf("Terminal ping failed: %v", err)
+					t.connLock.Unlock()
+					return
+				}
+			}
+			t.connLock.Unlock()
 		}
 	}
 }

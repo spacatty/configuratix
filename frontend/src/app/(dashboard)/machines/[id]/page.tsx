@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, Machine, UFWRule, Job, ConfigFile, ConfigCategory } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
-import { ChevronDown, ChevronRight, RefreshCw, FileCode, Save, RotateCcw, Loader2, FileText, Settings, Lock, Copy } from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw, FileCode, Save, RotateCcw, Loader2, FileText, Settings, Lock, Copy, Plus, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
@@ -436,6 +436,14 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [isResizing, setIsResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  
+  // Custom category management
+  const [showAddCategoryDialog, setShowAddCategoryDialog] = useState(false);
+  const [showAddPathDialog, setShowAddPathDialog] = useState(false);
+  const [categoryForm, setCategoryForm] = useState({ name: "", emoji: "📁", color: "#6366f1" });
+  const [pathForm, setPathForm] = useState({ name: "", path: "", file_type: "text", reload_command: "" });
+  const [selectedCategoryForPath, setSelectedCategoryForPath] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const loadConfigs = useCallback(async () => {
     try {
@@ -514,6 +522,83 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
       else next.add(id);
       return next;
     });
+  };
+
+  // Custom category handlers
+  const handleCreateCategory = async () => {
+    if (!categoryForm.name.trim()) {
+      toast.error("Category name is required");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api.createConfigCategory(machineId, categoryForm);
+      toast.success("Category created");
+      setShowAddCategoryDialog(false);
+      setCategoryForm({ name: "", emoji: "📁", color: "#6366f1" });
+      loadConfigs();
+    } catch (err) {
+      console.error("Failed to create category:", err);
+      toast.error("Failed to create category");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeleteCategory = async (categoryId: string) => {
+    if (!confirm("Delete this category and all its paths?")) return;
+    try {
+      await api.deleteConfigCategory(machineId, categoryId);
+      toast.success("Category deleted");
+      loadConfigs();
+    } catch (err) {
+      console.error("Failed to delete category:", err);
+      toast.error("Failed to delete category");
+    }
+  };
+
+  const handleAddPath = async () => {
+    if (!pathForm.name.trim() || !pathForm.path.trim()) {
+      toast.error("Name and path are required");
+      return;
+    }
+    if (!selectedCategoryForPath) return;
+    setSubmitting(true);
+    try {
+      await api.addConfigPath(machineId, selectedCategoryForPath, {
+        name: pathForm.name,
+        path: pathForm.path,
+        file_type: pathForm.file_type,
+        reload_command: pathForm.reload_command || undefined,
+      });
+      toast.success("File path added");
+      setShowAddPathDialog(false);
+      setPathForm({ name: "", path: "", file_type: "text", reload_command: "" });
+      setSelectedCategoryForPath(null);
+      loadConfigs();
+    } catch (err) {
+      console.error("Failed to add path:", err);
+      toast.error("Failed to add file path");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeletePath = async (categoryId: string, pathId: string) => {
+    if (!confirm("Remove this file path from the category?")) return;
+    try {
+      await api.removeConfigPath(machineId, categoryId, pathId);
+      toast.success("File path removed");
+      loadConfigs();
+    } catch (err) {
+      console.error("Failed to remove path:", err);
+      toast.error("Failed to remove file path");
+    }
+  };
+
+  const openAddPathDialog = (categoryId: string) => {
+    setSelectedCategoryForPath(categoryId);
+    setShowAddPathDialog(true);
   };
 
   // Handle sidebar resize
@@ -606,9 +691,20 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
         <CardHeader className="pb-2 flex-shrink-0 border-b border-border/30">
           <CardTitle className="text-sm flex items-center justify-between">
             Config Files
-            <Button variant="ghost" size="sm" onClick={loadConfigs} className="h-7 w-7 p-0">
-              <RefreshCw className="h-3 w-3" />
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setShowAddCategoryDialog(true)} 
+                className="h-7 w-7 p-0"
+                title="Add custom category"
+              >
+                <Plus className="h-3 w-3" />
+              </Button>
+              <Button variant="ghost" size="sm" onClick={loadConfigs} className="h-7 w-7 p-0">
+                <RefreshCw className="h-3 w-3" />
+              </Button>
+            </div>
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0 overflow-auto flex-1">
@@ -618,26 +714,49 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
             </p>
           ) : (
             <div className="py-2">
-              {categories.map((category) => (
-                <div key={category.id} className="mb-1">
+              {categories.map((category) => {
+                const isCustom = !category.is_built_in;
+                return (
+                <div key={category.id} className="mb-1 group/cat">
                   {/* Category Header */}
-                  <button
-                    onClick={() => toggleCategory(category.id)}
-                    className="w-full px-3 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
-                  >
-                    {expandedCategories.has(category.id) ? (
-                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="h-3 w-3 text-muted-foreground" />
-                    )}
-                    <span 
-                      className="text-sm"
-                      style={{ color: category.color }}
+                  <div className="flex items-center hover:bg-muted/50 transition-colors">
+                    <button
+                      onClick={() => toggleCategory(category.id)}
+                      className="flex-1 px-3 py-2 flex items-center gap-2"
                     >
-                      {category.emoji}
-                    </span>
-                    <span className="font-medium text-sm flex-1 text-left">{category.name}</span>
-                  </button>
+                      {expandedCategories.has(category.id) ? (
+                        <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                      )}
+                      <span 
+                        className="text-sm"
+                        style={{ color: category.color }}
+                      >
+                        {category.emoji}
+                      </span>
+                      <span className="font-medium text-sm flex-1 text-left">{category.name}</span>
+                    </button>
+                    {/* Custom category actions */}
+                    {isCustom && (
+                      <div className="opacity-0 group-hover/cat:opacity-100 transition-opacity flex items-center gap-0.5 pr-2">
+                        <button
+                          onClick={() => openAddPathDialog(category.id)}
+                          className="p-1 rounded hover:bg-muted"
+                          title="Add file path"
+                        >
+                          <Plus className="h-3 w-3" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteCategory(category.id)}
+                          className="p-1 rounded hover:bg-destructive hover:text-white"
+                          title="Delete category"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
 
                   {/* Category Content */}
                   {expandedCategories.has(category.id) && (
@@ -667,10 +786,21 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
                       
                       {/* Direct files (no subcategory) */}
                       {category.files?.map(renderFileItem)}
+                      
+                      {/* Add file hint for empty custom categories */}
+                      {isCustom && (!category.files || category.files.length === 0) && (!category.subcategories || category.subcategories.length === 0) && (
+                        <button
+                          onClick={() => openAddPathDialog(category.id)}
+                          className="w-full px-3 py-2 text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                        >
+                          <Plus className="h-3 w-3" />
+                          Add file path...
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
-              ))}
+              );})}
             </div>
           )}
         </CardContent>
@@ -768,6 +898,135 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
           )}
         </CardContent>
       </Card>
+
+      {/* Add Category Dialog */}
+      <Dialog open={showAddCategoryDialog} onOpenChange={setShowAddCategoryDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Custom Category</DialogTitle>
+            <DialogDescription>
+              Create a new category to organize custom config files.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input
+                placeholder="My App Configs"
+                value={categoryForm.name}
+                onChange={(e) => setCategoryForm(prev => ({ ...prev, name: e.target.value }))}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Emoji</Label>
+                <div className="flex flex-wrap gap-1">
+                  {["📁", "⚙️", "🔧", "📄", "🗂️", "💾", "🔒", "🌐"].map(emoji => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => setCategoryForm(prev => ({ ...prev, emoji }))}
+                      className={`p-2 rounded border ${categoryForm.emoji === emoji ? "border-primary bg-primary/10" : "border-transparent hover:bg-muted"}`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Color</Label>
+                <div className="flex flex-wrap gap-1">
+                  {["#6366f1", "#22c55e", "#8b5cf6", "#f59e0b", "#ef4444", "#06b6d4"].map(color => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => setCategoryForm(prev => ({ ...prev, color }))}
+                      className={`w-8 h-8 rounded ${categoryForm.color === color ? "ring-2 ring-white ring-offset-2 ring-offset-background" : ""}`}
+                      style={{ backgroundColor: color }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddCategoryDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateCategory} disabled={submitting}>
+              {submitting ? "Creating..." : "Create Category"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Path Dialog */}
+      <Dialog open={showAddPathDialog} onOpenChange={setShowAddPathDialog}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Add File Path</DialogTitle>
+            <DialogDescription>
+              Add a configuration file to this category.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Display Name</Label>
+              <Input
+                placeholder="app.conf"
+                value={pathForm.name}
+                onChange={(e) => setPathForm(prev => ({ ...prev, name: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Full File Path</Label>
+              <Input
+                placeholder="/etc/myapp/app.conf"
+                value={pathForm.path}
+                onChange={(e) => setPathForm(prev => ({ ...prev, path: e.target.value }))}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>File Type</Label>
+                <Select
+                  value={pathForm.file_type}
+                  onValueChange={(v) => setPathForm(prev => ({ ...prev, file_type: v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="text">Plain Text</SelectItem>
+                    <SelectItem value="nginx">Nginx</SelectItem>
+                    <SelectItem value="php">PHP</SelectItem>
+                    <SelectItem value="yaml">YAML</SelectItem>
+                    <SelectItem value="json">JSON</SelectItem>
+                    <SelectItem value="shell">Shell</SelectItem>
+                    <SelectItem value="ini">INI</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Reload Command (optional)</Label>
+                <Input
+                  placeholder="systemctl reload myapp"
+                  value={pathForm.reload_command}
+                  onChange={(e) => setPathForm(prev => ({ ...prev, reload_command: e.target.value }))}
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddPathDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleAddPath} disabled={submitting}>
+              {submitting ? "Adding..." : "Add File"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
