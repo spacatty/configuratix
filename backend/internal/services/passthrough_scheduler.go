@@ -9,6 +9,7 @@ import (
 	"configuratix/backend/internal/models"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // PassthroughScheduler handles automatic DNS rotation
@@ -131,13 +132,16 @@ func (s *PassthroughScheduler) shouldRotate(mode string, intervalMinutes int, sc
 
 // rotateRecordPool rotates a record pool to the next machine
 func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
-	// Get available members
-	var members []struct {
+	// Get available members (direct members + machines from groups)
+	type MemberInfo struct {
 		MachineID uuid.UUID  `db:"machine_id"`
 		MachineIP string     `db:"machine_ip"`
 		LastSeen  *time.Time `db:"last_seen"`
 		Priority  int        `db:"priority"`
 	}
+	var members []MemberInfo
+	
+	// Get direct members
 	s.db.Select(&members, `
 		SELECT pm.machine_id, m.ip_address as machine_ip, a.last_seen, pm.priority
 		FROM dns_passthrough_members pm
@@ -147,6 +151,32 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 		ORDER BY pm.priority, m.name
 	`, pool.ID)
 
+	// Also get machines from groups if pool has group_ids
+	if len(pool.GroupIDs) > 0 {
+		var groupMembers []MemberInfo
+		s.db.Select(&groupMembers, `
+			SELECT gm.machine_id, m.ip_address as machine_ip, a.last_seen, 100 as priority
+			FROM machine_group_members gm
+			JOIN machines m ON gm.machine_id = m.id
+			LEFT JOIN agents a ON m.agent_id = a.id
+			WHERE gm.group_id = ANY($1::uuid[])
+		`, pq.Array(pool.GroupIDs))
+		
+		// Add group members that aren't already in direct members
+		for _, gm := range groupMembers {
+			found := false
+			for _, m := range members {
+				if m.MachineID == gm.MachineID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				members = append(members, gm)
+			}
+		}
+	}
+
 	if len(members) == 0 {
 		log.Printf("Passthrough scheduler: no members in pool %s", pool.ID)
 		return
@@ -154,12 +184,7 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 
 	// Filter by health if enabled
 	if pool.HealthCheckEnabled {
-		var healthy []struct {
-			MachineID uuid.UUID  `db:"machine_id"`
-			MachineIP string     `db:"machine_ip"`
-			LastSeen  *time.Time `db:"last_seen"`
-			Priority  int        `db:"priority"`
-		}
+		var healthy []MemberInfo
 		for _, m := range members {
 			if m.LastSeen != nil && time.Since(*m.LastSeen) < 5*time.Minute {
 				healthy = append(healthy, m)
@@ -226,12 +251,15 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 
 // rotateWildcardPool rotates a wildcard pool
 func (s *PassthroughScheduler) rotateWildcardPool(pool models.WildcardPool) {
-	var members []struct {
+	type WMemberInfo struct {
 		MachineID uuid.UUID  `db:"machine_id"`
 		MachineIP string     `db:"machine_ip"`
 		LastSeen  *time.Time `db:"last_seen"`
 		Priority  int        `db:"priority"`
 	}
+	var members []WMemberInfo
+	
+	// Get direct members
 	s.db.Select(&members, `
 		SELECT wm.machine_id, m.ip_address as machine_ip, a.last_seen, wm.priority
 		FROM dns_wildcard_pool_members wm
@@ -241,17 +269,38 @@ func (s *PassthroughScheduler) rotateWildcardPool(pool models.WildcardPool) {
 		ORDER BY wm.priority, m.name
 	`, pool.ID)
 
+	// Also get machines from groups if pool has group_ids
+	if len(pool.GroupIDs) > 0 {
+		var groupMembers []WMemberInfo
+		s.db.Select(&groupMembers, `
+			SELECT gm.machine_id, m.ip_address as machine_ip, a.last_seen, 100 as priority
+			FROM machine_group_members gm
+			JOIN machines m ON gm.machine_id = m.id
+			LEFT JOIN agents a ON m.agent_id = a.id
+			WHERE gm.group_id = ANY($1::uuid[])
+		`, pq.Array(pool.GroupIDs))
+		
+		// Add group members that aren't already in direct members
+		for _, gm := range groupMembers {
+			found := false
+			for _, m := range members {
+				if m.MachineID == gm.MachineID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				members = append(members, gm)
+			}
+		}
+	}
+
 	if len(members) == 0 {
 		return
 	}
 
 	if pool.HealthCheckEnabled {
-		var healthy []struct {
-			MachineID uuid.UUID  `db:"machine_id"`
-			MachineIP string     `db:"machine_ip"`
-			LastSeen  *time.Time `db:"last_seen"`
-			Priority  int        `db:"priority"`
-		}
+		var healthy []WMemberInfo
 		for _, m := range members {
 			if m.LastSeen != nil && time.Since(*m.LastSeen) < 5*time.Minute {
 				healthy = append(healthy, m)

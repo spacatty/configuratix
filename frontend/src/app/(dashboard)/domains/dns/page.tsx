@@ -996,25 +996,35 @@ function DNSSettingsDialog({
     try {
       let recordId = editingPassthrough?.id;
       
-      // If creating new, first create the DNS record
+      // If creating new, first create or find the DNS record
       if (!editingPassthrough) {
-        // Create A record with mode=dynamic
-        const newRec = await api.createDNSRecord(domain.id, {
-          name: passthroughForm.name,
-          record_type: "A",
-          value: "0.0.0.0", // Placeholder, will be managed by pool
-          ttl: 60,
-          priority: 0,
-          proxied: false,
-          httpInPort: 80,
-          httpOutPort: 80,
-          httpsInPort: 443,
-          httpsOutPort: 443,
-        });
-        recordId = newRec.id;
+        // Check if record already exists
+        const existingRecord = records.find(r => 
+          r.name === passthroughForm.name && r.record_type === "A"
+        );
+        
+        if (existingRecord) {
+          // Use existing record
+          recordId = existingRecord.id;
+        } else {
+          // Create A record with placeholder (won't sync to provider yet)
+          const newRec = await api.createDNSRecord(domain.id, {
+            name: passthroughForm.name,
+            record_type: "A",
+            value: "0.0.0.0", // Placeholder, will be managed by pool
+            ttl: 60,
+            priority: 0,
+            proxied: false,
+            httpInPort: 80,
+            httpOutPort: 80,
+            httpsInPort: 443,
+            httpsOutPort: 443,
+          });
+          recordId = newRec.id;
+        }
       }
       
-      // Create/update the passthrough pool
+      // Create/update the passthrough pool - this handles the DNS sync
       await api.createOrUpdateRecordPool(recordId!, {
         target_ip: passthroughForm.target_ip,
         target_port: passthroughForm.target_port,

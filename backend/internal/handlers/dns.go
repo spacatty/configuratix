@@ -742,7 +742,10 @@ func (h *DNSHandler) CreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 	syncStatus := "pending"
 	var syncError string
 
-	if domain.DNSAccountID != nil {
+	// Don't sync placeholder records (0.0.0.0) to provider - passthrough will handle it
+	isPlaceholder := req.Value == "0.0.0.0"
+	
+	if domain.DNSAccountID != nil && !isPlaceholder {
 		var account models.DNSAccount
 		err = h.db.Get(&account, "SELECT * FROM dns_accounts WHERE id = $1", *domain.DNSAccountID)
 		if err == nil {
@@ -777,6 +780,9 @@ func (h *DNSHandler) CreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 				syncStatus = "synced"
 			}
 		}
+	} else if isPlaceholder {
+		// Placeholder for passthrough - will be synced when pool is created
+		syncStatus = "pending"
 	}
 
 	// Save to database
