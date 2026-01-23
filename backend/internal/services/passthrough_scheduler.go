@@ -131,6 +131,8 @@ func (s *PassthroughScheduler) shouldRotate(mode string, intervalMinutes int, sc
 
 // rotateRecordPool rotates a record pool to the next machine
 func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
+	log.Printf("Scheduler: rotateRecordPool pool=%s, group_ids=%v (%d groups)", pool.ID, pool.GroupIDs, len(pool.GroupIDs))
+	
 	// Get available members (direct members + machines from groups)
 	type MemberInfo struct {
 		MachineID uuid.UUID  `db:"machine_id"`
@@ -141,7 +143,7 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 	var members []MemberInfo
 	
 	// Get direct members
-	s.db.Select(&members, `
+	err := s.db.Select(&members, `
 		SELECT pm.machine_id, m.ip_address as machine_ip, a.last_seen, pm.priority
 		FROM dns_passthrough_members pm
 		JOIN machines m ON pm.machine_id = m.id
@@ -149,17 +151,25 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 		WHERE pm.pool_id = $1 AND pm.is_enabled = true
 		ORDER BY pm.priority, m.name
 	`, pool.ID)
+	if err != nil {
+		log.Printf("Scheduler: failed to get direct members: %v", err)
+	}
+	log.Printf("Scheduler: found %d direct members", len(members))
 
 	// Also get machines from groups if pool has group_ids
 	if len(pool.GroupIDs) > 0 {
 		var groupMembers []MemberInfo
-		s.db.Select(&groupMembers, `
+		err := s.db.Select(&groupMembers, `
 			SELECT gm.machine_id, m.ip_address as machine_ip, a.last_seen, 100 as priority
 			FROM machine_group_members gm
 			JOIN machines m ON gm.machine_id = m.id
 			LEFT JOIN agents a ON m.agent_id = a.id
 			WHERE gm.group_id = ANY($1::uuid[])
 		`, pool.GroupIDs)
+		if err != nil {
+			log.Printf("Scheduler: failed to get group members: %v", err)
+		}
+		log.Printf("Scheduler: found %d machines from groups", len(groupMembers))
 		
 		// Add group members that aren't already in direct members
 		for _, gm := range groupMembers {
@@ -176,6 +186,7 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 		}
 	}
 
+	log.Printf("Scheduler: total %d members available for pool %s", len(members), pool.ID)
 	if len(members) == 0 {
 		log.Printf("Passthrough scheduler: no members in pool %s", pool.ID)
 		return

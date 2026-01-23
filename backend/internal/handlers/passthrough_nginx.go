@@ -311,6 +311,13 @@ func (g *PassthroughNginxGenerator) ApplyToMachine(machineID uuid.UUID) error {
 	// The config goes to /etc/nginx/stream.d/ or /etc/nginx/conf.d/stream/
 	configPath := "/etc/nginx/stream.d/configuratix-passthrough.conf"
 	
+	// Get agent_id for this machine
+	var agentID *uuid.UUID
+	err = g.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1", machineID)
+	if err != nil || agentID == nil {
+		return fmt.Errorf("machine %s has no agent", machineID)
+	}
+	
 	// Use 'run' job with multiple steps: create dir, write file, reload nginx
 	payload := fmt.Sprintf(`{
 		"steps": [
@@ -322,9 +329,9 @@ func (g *PassthroughNginxGenerator) ApplyToMachine(machineID uuid.UUID) error {
 	}`, configPath, config)
 	
 	_, err = g.db.Exec(`
-		INSERT INTO jobs (machine_id, type, payload, status)
+		INSERT INTO jobs (agent_id, type, payload_json, status)
 		VALUES ($1, 'run', $2::jsonb, 'pending')
-	`, machineID, payload)
+	`, agentID, payload)
 
 	if err != nil {
 		return fmt.Errorf("failed to create job: %w", err)
