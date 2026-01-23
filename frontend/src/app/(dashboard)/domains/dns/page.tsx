@@ -505,6 +505,105 @@ export default function DNSManagementPage() {
   );
 }
 
+// Passthrough Record Row Component (for Separate mode)
+function PassthroughRecordRow({
+  record,
+  domain,
+  onEdit,
+  onDelete,
+  onRotate,
+  onPauseResume,
+}: {
+  record: DNSRecord;
+  domain: DNSManagedDomain;
+  onEdit: () => void;
+  onDelete: () => void;
+  onRotate: (poolId: string, isWildcard: boolean) => void;
+  onPauseResume: (poolId: string, isWildcard: boolean, isPaused: boolean) => void;
+}) {
+  const [poolData, setPoolData] = useState<PassthroughPoolResponse | null>(null);
+  const [loadingPool, setLoadingPool] = useState(true);
+
+  useEffect(() => {
+    const loadPool = async () => {
+      try {
+        const data = await api.getRecordPool(record.id);
+        setPoolData(data);
+      } catch {
+        // Pool might not exist
+      } finally {
+        setLoadingPool(false);
+      }
+    };
+    loadPool();
+  }, [record.id]);
+
+  if (loadingPool) {
+    return (
+      <tr className="border-t">
+        <td colSpan={5} className="p-3 text-center text-muted-foreground">
+          <RefreshCw className="h-4 w-4 animate-spin inline mr-2" />
+          Loading...
+        </td>
+      </tr>
+    );
+  }
+
+  const currentMachine = poolData?.members.find(m => m.machine_id === poolData.pool.current_machine_id);
+
+  return (
+    <tr className="border-t hover:bg-muted/30">
+      <td className="p-3">
+        <div className="font-mono font-medium">{record.name === "@" ? domain.fqdn : `${record.name}.${domain.fqdn}`}</div>
+      </td>
+      <td className="p-3">
+        <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
+          {poolData?.pool.target_ip}:{poolData?.pool.target_port}
+        </code>
+      </td>
+      <td className="p-3">
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="text-xs">
+            {poolData?.members.length || 0} machines
+          </Badge>
+          {currentMachine && (
+            <span className="text-xs text-muted-foreground">
+              → {currentMachine.machine_name}
+            </span>
+          )}
+        </div>
+      </td>
+      <td className="p-3">
+        {poolData?.pool.is_paused ? (
+          <Badge variant="secondary" className="text-xs">⏸ Paused</Badge>
+        ) : (
+          <Badge variant="default" className="text-xs bg-green-600">▶ Active</Badge>
+        )}
+      </td>
+      <td className="p-3 text-right">
+        <div className="flex items-center justify-end gap-1">
+          {poolData && (
+            <>
+              <Button variant="ghost" size="sm" onClick={() => onRotate(poolData.pool.id, false)} title="Rotate now">
+                <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => onPauseResume(poolData.pool.id, false, poolData.pool.is_paused)} title={poolData.pool.is_paused ? "Resume" : "Pause"}>
+                {poolData.pool.is_paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+              </Button>
+            </>
+          )}
+          <Button variant="ghost" size="sm" onClick={onEdit} title="Edit">
+            <Settings2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onDelete} className="text-destructive hover:text-destructive" title="Delete">
+            <Trash className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 // DNS Settings Dialog Component
 function DNSSettingsDialog({
   open,
@@ -570,6 +669,22 @@ function DNSSettingsDialog({
     include_root: true,
     machine_ids: [] as string[],
   });
+  
+  // Separate mode passthrough records
+  const [showAddPassthrough, setShowAddPassthrough] = useState(false);
+  const [editingPassthrough, setEditingPassthrough] = useState<DNSRecord | null>(null);
+  const [passthroughForm, setPassthroughForm] = useState({
+    name: "",
+    target_ip: "",
+    target_port: 443,
+    rotation_strategy: "round_robin",
+    interval_minutes: 60,
+    health_check_enabled: true,
+    machine_ids: [] as string[],
+  });
+  
+  // Get passthrough records (mode = 'dynamic')
+  const passthroughRecords = records.filter(r => r.mode === "dynamic" && r.record_type === "A");
 
   // Get selected account provider
   const selectedAccount = dnsAccounts.find(a => a.id === dnsAccountId);
@@ -837,6 +952,104 @@ function DNSSettingsDialog({
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to delete pool");
     }
+  };
+
+  // Separate mode: Create/Edit passthrough record
+  const handleSavePassthroughRecord = async () => {
+    if (!domain || !passthroughForm.name || !passthroughForm.target_ip || passthroughForm.machine_ids.length === 0) {
+      toast.error("Please fill all required fields");
+      return;
+    }
+    setLoading(true);
+    try {
+      let recordId = editingPassthrough?.id;
+      
+      // If creating new, first create the DNS record
+      if (!editingPassthrough) {
+        // Create A record with mode=dynamic
+        const newRec = await api.createDNSRecord(domain.id, {
+          name: passthroughForm.name,
+          record_type: "A",
+          value: "0.0.0.0", // Placeholder, will be managed by pool
+          ttl: 60,
+          priority: 0,
+          proxied: false,
+          httpInPort: 80,
+          httpOutPort: 80,
+          httpsInPort: 443,
+          httpsOutPort: 443,
+        });
+        recordId = newRec.id;
+      }
+      
+      // Create/update the passthrough pool
+      await api.createOrUpdateRecordPool(recordId!, {
+        target_ip: passthroughForm.target_ip,
+        target_port: passthroughForm.target_port,
+        rotation_strategy: passthroughForm.rotation_strategy,
+        rotation_mode: "interval",
+        interval_minutes: passthroughForm.interval_minutes,
+        health_check_enabled: passthroughForm.health_check_enabled,
+        machine_ids: passthroughForm.machine_ids,
+      });
+      
+      toast.success(editingPassthrough ? "Passthrough record updated" : "Passthrough record created");
+      setShowAddPassthrough(false);
+      setEditingPassthrough(null);
+      resetPassthroughForm();
+      loadRecords();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save passthrough record");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeletePassthroughRecord = async (record: DNSRecord) => {
+    if (!domain) return;
+    try {
+      // Delete the pool first (sets mode back to static)
+      await api.deleteRecordPool(record.id);
+      // Then delete the record itself
+      await api.deleteDNSRecord(domain.id, record.id);
+      toast.success("Passthrough record deleted");
+      loadRecords();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete");
+    }
+  };
+
+  const editPassthroughRecord = async (record: DNSRecord) => {
+    setEditingPassthrough(record);
+    setShowAddPassthrough(true);
+    // Load existing pool config
+    try {
+      const poolData = await api.getRecordPool(record.id);
+      setPassthroughForm({
+        name: record.name,
+        target_ip: poolData.pool.target_ip,
+        target_port: poolData.pool.target_port,
+        rotation_strategy: poolData.pool.rotation_strategy,
+        interval_minutes: poolData.pool.interval_minutes,
+        health_check_enabled: poolData.pool.health_check_enabled,
+        machine_ids: poolData.members.map(m => m.machine_id),
+      });
+    } catch {
+      // Pool might not exist yet
+      setPassthroughForm(f => ({ ...f, name: record.name }));
+    }
+  };
+
+  const resetPassthroughForm = () => {
+    setPassthroughForm({
+      name: "",
+      target_ip: "",
+      target_port: 443,
+      rotation_strategy: "round_robin",
+      interval_minutes: 60,
+      health_check_enabled: true,
+      machine_ids: [],
+    });
   };
 
   const openPoolConfig = (record: DNSRecord) => {
@@ -1431,26 +1644,187 @@ function DNSSettingsDialog({
             {proxyMode === "separate" && (
               <div className="space-y-4">
                 <div className="p-4 border rounded-lg bg-gradient-to-r from-purple-500/10 to-blue-500/10">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Settings2 className="h-5 w-5 text-purple-500" />
-                    <h3 className="font-semibold">Separate Records Passthrough</h3>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <Settings2 className="h-5 w-5 text-purple-500" />
+                        <h3 className="font-semibold">Separate Records Passthrough</h3>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        Each subdomain has its own proxy pool and target server.
+                      </p>
+                    </div>
+                    <Button onClick={() => { resetPassthroughForm(); setEditingPassthrough(null); setShowAddPassthrough(true); }}>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Record
+                    </Button>
                   </div>
-                  <p className="text-sm text-muted-foreground">
-                    Create passthrough records below. Each record has its own proxy pool and target configuration.
-                  </p>
                 </div>
                 
-                {/* TODO: Add passthrough records management UI here */}
-                <div className="p-6 text-center border rounded-lg border-dashed">
-                  <Plus className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
-                  <p className="text-muted-foreground text-sm">
-                    Add passthrough records to configure individual proxy pools.
-                  </p>
-                  <Button variant="outline" className="mt-3">
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Passthrough Record
-                  </Button>
-                </div>
+                {/* Passthrough Records List */}
+                {passthroughRecords.length === 0 ? (
+                  <div className="p-6 text-center border rounded-lg border-dashed">
+                    <Zap className="h-8 w-8 mx-auto mb-3 text-purple-500 opacity-50" />
+                    <p className="text-muted-foreground text-sm">
+                      No passthrough records configured yet.
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Click "Add Record" to create your first passthrough subdomain.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="border rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50">
+                        <tr>
+                          <th className="text-left p-3 font-medium">Subdomain</th>
+                          <th className="text-left p-3 font-medium">Target</th>
+                          <th className="text-left p-3 font-medium">Pool</th>
+                          <th className="text-left p-3 font-medium">Status</th>
+                          <th className="text-right p-3 font-medium">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {passthroughRecords.map((record) => (
+                          <PassthroughRecordRow 
+                            key={record.id} 
+                            record={record} 
+                            domain={domain}
+                            onEdit={() => editPassthroughRecord(record)}
+                            onDelete={() => handleDeletePassthroughRecord(record)}
+                            onRotate={handleRotateNow}
+                            onPauseResume={handlePauseResume}
+                          />
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Add/Edit Passthrough Record Form */}
+                {showAddPassthrough && (
+                  <div className="p-4 border rounded-lg bg-muted/10 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-medium">{editingPassthrough ? "Edit" : "New"} Passthrough Record</h4>
+                      <Button variant="ghost" size="sm" onClick={() => { setShowAddPassthrough(false); setEditingPassthrough(null); }}>
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Subdomain</Label>
+                        <div className="flex items-center gap-1">
+                          <Input
+                            placeholder="www"
+                            value={passthroughForm.name}
+                            onChange={(e) => setPassthroughForm(f => ({ ...f, name: e.target.value }))}
+                            disabled={!!editingPassthrough}
+                          />
+                          <span className="text-xs text-muted-foreground">.{domain?.fqdn}</span>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Target IP</Label>
+                        <Input
+                          placeholder="192.168.1.100"
+                          value={passthroughForm.target_ip}
+                          onChange={(e) => setPassthroughForm(f => ({ ...f, target_ip: e.target.value }))}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Target Port</Label>
+                        <Input
+                          type="number"
+                          placeholder="443"
+                          value={passthroughForm.target_port}
+                          onChange={(e) => setPassthroughForm(f => ({ ...f, target_port: parseInt(e.target.value) || 443 }))}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Rotation Strategy</Label>
+                        <Select value={passthroughForm.rotation_strategy} onValueChange={(v) => setPassthroughForm(f => ({ ...f, rotation_strategy: v }))}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="round_robin">Round Robin</SelectItem>
+                            <SelectItem value="random">Random</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Rotate Every (minutes)</Label>
+                        <Input
+                          type="number"
+                          value={passthroughForm.interval_minutes}
+                          onChange={(e) => setPassthroughForm(f => ({ ...f, interval_minutes: parseInt(e.target.value) || 60 }))}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="pt_health_check"
+                        checked={passthroughForm.health_check_enabled}
+                        onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, health_check_enabled: !!c }))}
+                      />
+                      <Label htmlFor="pt_health_check" className="text-sm">Skip offline servers</Label>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs">Select Proxy Machines</Label>
+                      <div className="border rounded-md max-h-40 overflow-y-auto">
+                        {machines.length === 0 ? (
+                          <p className="p-3 text-sm text-muted-foreground text-center">No machines available</p>
+                        ) : (
+                          machines.map((machine) => {
+                            const isSelected = passthroughForm.machine_ids.includes(machine.id);
+                            const isOnline = machine.status === "online";
+                            return (
+                              <label
+                                key={machine.id}
+                                className={`flex items-center gap-3 p-2 hover:bg-muted/30 cursor-pointer border-b last:border-b-0 ${isSelected ? "bg-primary/5" : ""}`}
+                              >
+                                <Checkbox
+                                  checked={isSelected}
+                                  onCheckedChange={(checked) => {
+                                    setPassthroughForm(f => ({
+                                      ...f,
+                                      machine_ids: checked
+                                        ? [...f.machine_ids, machine.id]
+                                        : f.machine_ids.filter(id => id !== machine.id)
+                                    }));
+                                  }}
+                                />
+                                <Server className="h-4 w-4 text-muted-foreground" />
+                                <div className="flex-1">
+                                  <span className="font-medium text-sm">{machine.name}</span>
+                                  <span className="text-xs text-muted-foreground ml-2">{machine.ip_address}</span>
+                                </div>
+                                <div className={`h-2 w-2 rounded-full ${isOnline ? "bg-green-500" : "bg-red-500"}`} />
+                              </label>
+                            );
+                          })
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">{passthroughForm.machine_ids.length} machine(s) selected</p>
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-2 border-t">
+                      <Button variant="outline" onClick={() => { setShowAddPassthrough(false); setEditingPassthrough(null); }}>
+                        Cancel
+                      </Button>
+                      <Button 
+                        onClick={handleSavePassthroughRecord} 
+                        disabled={loading || !passthroughForm.name || !passthroughForm.target_ip || passthroughForm.machine_ids.length === 0}
+                      >
+                        {loading ? "Saving..." : (editingPassthrough ? "Update" : "Create")} Record
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
