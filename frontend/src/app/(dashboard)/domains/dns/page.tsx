@@ -1079,6 +1079,48 @@ function DNSSettingsDialog({
               )}
             </div>
 
+            {/* Proxy Mode Selector - Right after DNS Account */}
+            {dnsAccountId && (
+              <div className="p-4 border rounded-lg bg-muted/20 space-y-3">
+                <div>
+                  <Label className="text-sm font-medium">Proxy Mode</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">How to manage DNS records for this domain</p>
+                </div>
+                <div className="flex gap-4">
+                  <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "separate" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
+                    <input
+                      type="radio"
+                      name="proxy_mode"
+                      value="separate"
+                      checked={proxyMode === "separate"}
+                      onChange={() => setProxyMode("separate")}
+                      className="sr-only"
+                    />
+                    <div className="flex items-center gap-2 mb-1">
+                      <Settings2 className="h-4 w-4" />
+                      <span className="font-medium text-sm">Separate Records</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Manage each subdomain individually. Configure static or dynamic mode per record.</p>
+                  </label>
+                  <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "wildcard" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
+                    <input
+                      type="radio"
+                      name="proxy_mode"
+                      value="wildcard"
+                      checked={proxyMode === "wildcard"}
+                      onChange={() => setProxyMode("wildcard")}
+                      className="sr-only"
+                    />
+                    <div className="flex items-center gap-2 mb-1">
+                      <Zap className="h-4 w-4" />
+                      <span className="font-medium text-sm">Wildcard Passthrough</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Route all subdomains (*.{domain?.fqdn}) through a rotating proxy pool.</p>
+                  </label>
+                </div>
+              </div>
+            )}
+
             {/* NS Status */}
             {dnsAccountId && (
               <div className="p-4 border rounded-lg bg-muted/20">
@@ -1118,48 +1160,6 @@ function DNSSettingsDialog({
                     )}
                   </div>
                 )}
-              </div>
-            )}
-
-            {/* Proxy Mode Selector */}
-            {dnsAccountId && (
-              <div className="p-4 border rounded-lg bg-muted/20 space-y-3">
-                <div>
-                  <Label className="text-sm font-medium">Proxy Mode</Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">How to manage DNS records for this domain</p>
-                </div>
-                <div className="flex gap-4">
-                  <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "separate" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
-                    <input
-                      type="radio"
-                      name="proxy_mode"
-                      value="separate"
-                      checked={proxyMode === "separate"}
-                      onChange={() => setProxyMode("separate")}
-                      className="sr-only"
-                    />
-                    <div className="flex items-center gap-2 mb-1">
-                      <Settings2 className="h-4 w-4" />
-                      <span className="font-medium text-sm">Separate Records</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">Manage each subdomain individually. Configure static or dynamic mode per record.</p>
-                  </label>
-                  <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "wildcard" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
-                    <input
-                      type="radio"
-                      name="proxy_mode"
-                      value="wildcard"
-                      checked={proxyMode === "wildcard"}
-                      onChange={() => setProxyMode("wildcard")}
-                      className="sr-only"
-                    />
-                    <div className="flex items-center gap-2 mb-1">
-                      <Zap className="h-4 w-4" />
-                      <span className="font-medium text-sm">Wildcard Passthrough</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">Route all subdomains (*.{domain?.fqdn}) through a rotating proxy pool.</p>
-                  </label>
-                </div>
               </div>
             )}
 
