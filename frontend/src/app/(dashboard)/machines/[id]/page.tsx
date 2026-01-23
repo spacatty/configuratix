@@ -449,10 +449,70 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
     try {
       setLoadingConfigs(true);
       const data = await api.listMachineConfigs(machineId);
-      setCategories(data.categories || []);
+      let cats = data.categories || [];
+      
+      // Scan for PHP versions using the fast file module
+      try {
+        const phpResult = await api.listDirectory(machineId, "/etc/php", false);
+        if (phpResult.success && Array.isArray(phpResult.result)) {
+          const phpVersions = (phpResult.result as { name: string; is_dir: boolean }[])
+            .filter(f => f.is_dir && /^\d+\.\d+$/.test(f.name))
+            .map(f => f.name)
+            .sort((a, b) => parseFloat(b) - parseFloat(a)); // Newest first
+          
+          // Find and update the PHP category
+          const phpCatIndex = cats.findIndex(c => c.id === "php");
+          if (phpCatIndex >= 0 && phpVersions.length > 0) {
+            cats[phpCatIndex] = {
+              ...cats[phpCatIndex],
+              subcategories: phpVersions.map(version => ({
+                id: `php_${version}`,
+                name: `PHP ${version}`,
+                files: [
+                  { name: "php.ini", path: `/etc/php/${version}/fpm/php.ini`, type: "php", readonly: false },
+                  { name: "www.conf", path: `/etc/php/${version}/fpm/pool.d/www.conf`, type: "php", readonly: false },
+                ],
+              })),
+            };
+          } else if (phpCatIndex >= 0 && phpVersions.length === 0) {
+            // Remove PHP category if no versions found
+            cats = cats.filter(c => c.id !== "php");
+          }
+        }
+      } catch (phpErr) {
+        console.log("PHP scan failed (file module may not be connected):", phpErr);
+        // If file module not available, remove empty PHP category
+        cats = cats.filter(c => c.id !== "php" || (c.subcategories && c.subcategories.length > 0));
+      }
+      
+      // Similarly scan for nginx sites-enabled
+      try {
+        const sitesResult = await api.listDirectory(machineId, "/etc/nginx/sites-enabled", false);
+        if (sitesResult.success && Array.isArray(sitesResult.result)) {
+          const siteFiles = (sitesResult.result as { name: string; is_dir: boolean; path: string }[])
+            .filter(f => !f.is_dir && f.name !== "." && f.name !== "..")
+            .map(f => ({ name: f.name, path: f.path, type: "nginx_site", readonly: false }));
+          
+          // Find and update nginx category's sites-enabled subcategory
+          const nginxCatIndex = cats.findIndex(c => c.id === "nginx");
+          if (nginxCatIndex >= 0) {
+            const sitesSubcatIndex = cats[nginxCatIndex].subcategories?.findIndex(s => s.id === "nginx_sites_enabled") ?? -1;
+            if (sitesSubcatIndex >= 0 && cats[nginxCatIndex].subcategories) {
+              cats[nginxCatIndex].subcategories[sitesSubcatIndex] = {
+                ...cats[nginxCatIndex].subcategories[sitesSubcatIndex],
+                files: siteFiles,
+              };
+            }
+          }
+        }
+      } catch (sitesErr) {
+        console.log("Sites-enabled scan failed:", sitesErr);
+      }
+      
+      setCategories(cats);
       // Auto-expand first category
-      if (data.categories?.length > 0) {
-        setExpandedCategories(new Set([data.categories[0].id]));
+      if (cats.length > 0) {
+        setExpandedCategories(new Set([cats[0].id]));
       }
     } catch (err) {
       console.error("Failed to load configs:", err);
