@@ -52,6 +52,11 @@ func main() {
 	agentHandler := handlers.NewAgentHandler(db)
 	router.HandleFunc("/api/agent/enroll", agentHandler.Enroll).Methods("POST", "OPTIONS")
 
+	// Agent update (public - agents check for updates)
+	agentUpdateHandler := handlers.NewAgentUpdateHandler(db, "./agent-binaries")
+	router.HandleFunc("/api/agent/version", agentUpdateHandler.GetVersion).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/agent/download", agentUpdateHandler.DownloadAgent).Methods("GET", "OPTIONS")
+
 	// Agent routes (requires agent API key)
 	agentRouter := router.PathPrefix("/api/agent").Subrouter()
 	agentRouter.Use(handlers.AgentAuthMiddleware(db))
@@ -74,6 +79,8 @@ func main() {
 	// Admin routes
 	adminHandler := handlers.NewAdminHandler(db)
 	apiRouter.HandleFunc("/admin/stats", adminHandler.AdminStats).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/admin/agent/upload", agentUpdateHandler.UploadAgent).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/admin/agent/reload", agentUpdateHandler.ReloadVersion).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/admin/users", adminHandler.ListUsers).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/admin/users", adminHandler.CreateAdmin).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/admin/users/{id}", adminHandler.GetUser).Methods("GET", "OPTIONS")

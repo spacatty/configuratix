@@ -15,6 +15,7 @@ import (
 	"configuratix/agent/internal/executor"
 	"configuratix/agent/internal/files"
 	"configuratix/agent/internal/terminal"
+	"configuratix/agent/internal/updater"
 )
 
 const Version = "0.1.0"
@@ -113,6 +114,9 @@ func run() error {
 
 	// Start file handler connection in background
 	go files.RunFileLoop(cfg.ServerURL, cfg.APIKey)
+
+	// Start auto-updater in background
+	go updater.New(cfg.ServerURL, Version).Run()
 
 	// Heartbeat ticker
 	heartbeatTicker := time.NewTicker(30 * time.Second)

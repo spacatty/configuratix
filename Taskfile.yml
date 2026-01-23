@@ -223,6 +223,31 @@ tasks:
       - echo "Agent binary ready at agent/bin/configuratix-agent"
       - 'echo "Copy to server with: scp agent/bin/configuratix-agent user@server:/usr/local/bin/"'
 
+  agent:publish:
+    desc: Build agent and publish to backend for auto-updates
+    vars:
+      AGENT_VERSION: '{{.AGENT_VERSION | default "0.1.0"}}'
+    cmds:
+      - task: build:agent
+      - echo "Publishing agent version {{.AGENT_VERSION}} to backend..."
+      - powershell -Command "New-Item -ItemType Directory -Force -Path backend/agent-binaries | Out-Null"
+      - powershell -Command "Copy-Item agent/bin/configuratix-agent backend/agent-binaries/configuratix-agent"
+      - |
+        powershell -Command "
+          $$hash = (Get-FileHash -Algorithm SHA256 backend/agent-binaries/configuratix-agent).Hash.ToLower()
+          $$size = (Get-Item backend/agent-binaries/configuratix-agent).Length
+          $$json = @{
+            version = '{{.AGENT_VERSION}}'
+            checksum = $$hash
+            size = $$size
+            updated_at = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
+          } | ConvertTo-Json
+          $$json | Out-File -FilePath backend/agent-binaries/version.json -Encoding UTF8
+          Write-Host 'Published agent version {{.AGENT_VERSION}}'
+          Write-Host \"Checksum: $$hash\"
+          Write-Host \"Size: $$size bytes\"
+        "
+
   # ============================================
   # CLEAN
   # ============================================
