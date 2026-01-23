@@ -206,20 +206,21 @@ export interface Domain {
   machine_ip: string | null;
   config_id: string | null;
   config_name: string | null;
-  // DNS settings (all nullable for backwards compatibility)
-  dns_account_id?: string | null;
-  dns_mode?: string; // managed, external
-  ns_status?: string; // unknown, pending, valid, invalid
-  ns_last_check?: string | null;
-  ns_expected?: string[] | null;
-  ns_actual?: string[] | null;
-  is_wildcard?: boolean;
-  ip_address?: string | null;
-  https_send_proxy?: boolean;
-  http_incoming_ports?: number[] | null;
-  http_outgoing_ports?: number[] | null;
-  https_incoming_ports?: number[] | null;
-  https_outgoing_ports?: number[] | null;
+}
+
+// DNS Managed Domain - completely separate from main domains
+export interface DNSManagedDomain {
+  id: string;
+  owner_id: string;
+  fqdn: string;
+  dns_account_id: string | null;
+  ns_status: string; // unknown, pending, valid, invalid
+  ns_last_check: string | null;
+  ns_expected: string[] | null;
+  ns_actual: string[] | null;
+  notes_md: string | null;
+  created_at: string;
+  updated_at: string;
   dns_account_name?: string | null;
   dns_account_provider?: string | null;
 }
@@ -236,7 +237,7 @@ export interface DNSAccount {
 
 export interface DNSRecord {
   id: string;
-  domain_id: string;
+  dns_domain_id: string; // References dns_managed_domains
   name: string; // subdomain: www, @, *
   record_type: string; // A, AAAA, CNAME, TXT, MX
   value: string;
@@ -800,36 +801,47 @@ class ApiClient {
     return this.request(`/api/dns-accounts/${accountId}/nameservers?domain=${encodeURIComponent(domain)}`);
   }
 
-  // Domain DNS settings
-  async updateDomainDNS(id: string, data: {
+  // DNS Managed Domains (separate from main domains)
+  async listDNSManagedDomains(): Promise<DNSManagedDomain[]> {
+    return this.request<DNSManagedDomain[]>("/api/dns-domains");
+  }
+
+  async createDNSManagedDomain(data: {
+    fqdn: string;
+    dns_account_id?: string;
+  }): Promise<DNSManagedDomain> {
+    return this.request<DNSManagedDomain>("/api/dns-domains", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDNSManagedDomain(id: string, data: {
     dns_account_id?: string | null;
-    dns_mode?: string;
-    is_wildcard?: boolean;
-    ip_address?: string;
-    https_send_proxy?: boolean;
-    http_incoming_ports?: number[];
-    http_outgoing_ports?: number[];
-    https_incoming_ports?: number[];
-    https_outgoing_ports?: number[];
+    notes_md?: string;
   }): Promise<void> {
-    await this.request(`/api/domains/${id}/dns`, {
+    await this.request(`/api/dns-domains/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
   }
 
-  async checkDomainNS(id: string): Promise<NSStatus> {
-    return this.request<NSStatus>(`/api/domains/${id}/ns-check`, {
+  async deleteDNSManagedDomain(id: string): Promise<void> {
+    await this.request(`/api/dns-domains/${id}`, { method: "DELETE" });
+  }
+
+  async checkDNSDomainNS(id: string): Promise<NSStatus> {
+    return this.request<NSStatus>(`/api/dns-domains/${id}/ns-check`, {
       method: "POST",
     });
   }
 
-  // DNS Records
-  async listDNSRecords(domainId: string): Promise<DNSRecord[]> {
-    return this.request<DNSRecord[]>(`/api/domains/${domainId}/records`);
+  // DNS Records (for DNS Managed Domains)
+  async listDNSRecords(dnsDomainId: string): Promise<DNSRecord[]> {
+    return this.request<DNSRecord[]>(`/api/dns-domains/${dnsDomainId}/records`);
   }
 
-  async createDNSRecord(domainId: string, data: {
+  async createDNSRecord(dnsDomainId: string, data: {
     name: string;
     record_type: string;
     value: string;
@@ -841,13 +853,13 @@ class ApiClient {
     https_incoming_port?: number;
     https_outgoing_port?: number;
   }): Promise<DNSRecord> {
-    return this.request<DNSRecord>(`/api/domains/${domainId}/records`, {
+    return this.request<DNSRecord>(`/api/dns-domains/${dnsDomainId}/records`, {
       method: "POST",
       body: JSON.stringify(data),
     });
   }
 
-  async updateDNSRecord(domainId: string, recordId: string, data: {
+  async updateDNSRecord(dnsDomainId: string, recordId: string, data: {
     name: string;
     record_type: string;
     value: string;
@@ -859,44 +871,44 @@ class ApiClient {
     https_incoming_port?: number;
     https_outgoing_port?: number;
   }): Promise<void> {
-    await this.request(`/api/domains/${domainId}/records/${recordId}`, {
+    await this.request(`/api/dns-domains/${dnsDomainId}/records/${recordId}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
   }
 
-  async deleteDNSRecord(domainId: string, recordId: string): Promise<void> {
-    await this.request(`/api/domains/${domainId}/records/${recordId}`, { method: "DELETE" });
+  async deleteDNSRecord(dnsDomainId: string, recordId: string): Promise<void> {
+    await this.request(`/api/dns-domains/${dnsDomainId}/records/${recordId}`, { method: "DELETE" });
   }
 
   // DNS Sync
-  async compareDNSRecords(domainId: string): Promise<DNSSyncResult> {
-    return this.request<DNSSyncResult>(`/api/domains/${domainId}/dns-sync`);
+  async compareDNSRecords(dnsDomainId: string): Promise<DNSSyncResult> {
+    return this.request<DNSSyncResult>(`/api/dns-domains/${dnsDomainId}/sync`);
   }
 
-  async applyDNSToRemote(domainId: string): Promise<DNSSyncResult> {
-    return this.request<DNSSyncResult>(`/api/domains/${domainId}/dns-sync/apply`, {
+  async applyDNSToRemote(dnsDomainId: string): Promise<DNSSyncResult> {
+    return this.request<DNSSyncResult>(`/api/dns-domains/${dnsDomainId}/sync/apply`, {
       method: "POST",
     });
   }
 
-  async importDNSFromRemote(domainId: string): Promise<{ imported: number; message: string }> {
-    return this.request<{ imported: number; message: string }>(`/api/domains/${domainId}/dns-sync/import`, {
+  async importDNSFromRemote(dnsDomainId: string): Promise<{ imported: number; message: string }> {
+    return this.request<{ imported: number; message: string }>(`/api/dns-domains/${dnsDomainId}/sync/import`, {
       method: "POST",
     });
   }
 
-  async lookupDNS(domainId: string, subdomain?: string): Promise<{
+  async lookupDNS(dnsDomainId: string, subdomain?: string): Promise<{
     domain: string;
     subdomain: string;
     lookup: string;
     results: Record<string, { type: string; records: string[]; error?: string }>;
   }> {
     const params = subdomain ? `?subdomain=${encodeURIComponent(subdomain)}` : "";
-    return this.request(`/api/domains/${domainId}/dns-lookup${params}`);
+    return this.request(`/api/dns-domains/${dnsDomainId}/lookup${params}`);
   }
 
-  async listRemoteRecords(domainId: string): Promise<{
+  async listRemoteRecords(dnsDomainId: string): Promise<{
     domain: string;
     provider: string;
     records: Array<{
@@ -909,7 +921,7 @@ class ApiClient {
       proxied: boolean;
     }>;
   }> {
-    return this.request(`/api/domains/${domainId}/dns-remote`);
+    return this.request(`/api/dns-domains/${dnsDomainId}/remote-records`);
   }
 
   // Nginx Configs

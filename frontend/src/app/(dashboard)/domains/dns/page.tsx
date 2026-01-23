@@ -8,23 +8,28 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable } from "@/components/ui/data-table";
-import { api, Domain, DNSAccount, DNSRecord, NSStatus, DNSSyncResult } from "@/lib/api";
+import { api, DNSManagedDomain, DNSAccount, DNSRecord, NSStatus, DNSSyncResult } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
 import { Globe, CheckCircle, XCircle, Cloud, Plus, RefreshCw, AlertTriangle, X, Copy, Trash, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 
 export default function DNSManagementPage() {
-  const [domains, setDomains] = useState<Domain[]>([]);
+  const [domains, setDomains] = useState<DNSManagedDomain[]>([]);
   const [dnsAccounts, setDnsAccounts] = useState<DNSAccount[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showAddDomainDialog, setShowAddDomainDialog] = useState(false);
   const [showDNSAccountDialog, setShowDNSAccountDialog] = useState(false);
   const [showDNSSettingsDialog, setShowDNSSettingsDialog] = useState(false);
-  const [selectedDomain, setSelectedDomain] = useState<Domain | null>(null);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [selectedDomain, setSelectedDomain] = useState<DNSManagedDomain | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [newFqdn, setNewFqdn] = useState("");
+  const [newDnsAccountId, setNewDnsAccountId] = useState("");
 
   // DNS Account form
   const [dnsAccountForm, setDnsAccountForm] = useState({
@@ -38,7 +43,7 @@ export default function DNSManagementPage() {
   const loadData = async () => {
     try {
       const [domainsData, accountsData] = await Promise.all([
-        api.listDomains(),
+        api.listDNSManagedDomains().catch(() => []),
         api.listDNSAccounts().catch(() => []),
       ]);
       setDomains(domainsData);
@@ -53,6 +58,43 @@ export default function DNSManagementPage() {
   useEffect(() => {
     loadData();
   }, []);
+
+  const handleAddDomain = async () => {
+    if (!newFqdn.trim() || submitting) return;
+    setSubmitting(true);
+    try {
+      await api.createDNSManagedDomain({
+        fqdn: newFqdn.trim(),
+        dns_account_id: newDnsAccountId || undefined,
+      });
+      setNewFqdn("");
+      setNewDnsAccountId("");
+      setShowAddDomainDialog(false);
+      loadData();
+      toast.success("Domain added for DNS management");
+    } catch (err: unknown) {
+      console.error("Failed to add domain:", err);
+      toast.error(err instanceof Error ? err.message : "Failed to add domain");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeleteDomain = async () => {
+    if (!selectedDomain || submitting) return;
+    setSubmitting(true);
+    try {
+      await api.deleteDNSManagedDomain(selectedDomain.id);
+      setShowDeleteDialog(false);
+      setSelectedDomain(null);
+      loadData();
+      toast.success("Domain removed from DNS management");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete domain");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const handleCreateDNSAccount = async () => {
     if (submitting) return;
@@ -87,9 +129,14 @@ export default function DNSManagementPage() {
     }
   };
 
-  const openDNSSettings = (domain: Domain) => {
+  const openDNSSettings = (domain: DNSManagedDomain) => {
     setSelectedDomain(domain);
     setShowDNSSettingsDialog(true);
+  };
+
+  const openDeleteDialog = (domain: DNSManagedDomain) => {
+    setSelectedDomain(domain);
+    setShowDeleteDialog(true);
   };
 
   const getNSStatusBadge = (status: string | null) => {
@@ -115,24 +162,17 @@ export default function DNSManagementPage() {
             Invalid NS
           </Badge>
         );
-      case "external":
-        return (
-          <Badge className="bg-zinc-500/20 text-zinc-400 border-zinc-500/30 text-xs">
-            <Globe className="h-3 w-3 mr-1" />
-            External
-          </Badge>
-        );
       default:
         return (
           <Badge className="bg-zinc-500/20 text-zinc-400 border-zinc-500/30 text-xs">
             <Globe className="h-3 w-3 mr-1" />
-            Not Configured
+            Unknown
           </Badge>
         );
     }
   };
 
-  const columns: ColumnDef<Domain>[] = [
+  const columns: ColumnDef<DNSManagedDomain>[] = [
     {
       accessorKey: "fqdn",
       header: "Domain",
@@ -145,28 +185,9 @@ export default function DNSManagementPage() {
             </div>
             <div className="flex flex-col gap-1">
               <span className="font-medium">{domain.fqdn}</span>
-              {domain.dns_mode === "managed" && domain.ns_status && getNSStatusBadge(domain.ns_status)}
+              {getNSStatusBadge(domain.ns_status)}
             </div>
           </div>
-        );
-      },
-    },
-    {
-      accessorKey: "dns_mode",
-      header: "DNS Mode",
-      cell: ({ row }) => {
-        const domain = row.original;
-        if (domain.dns_mode === "managed") {
-          return (
-            <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
-              Managed
-            </Badge>
-          );
-        }
-        return (
-          <Badge variant="secondary">
-            External
-          </Badge>
         );
       },
     },
@@ -175,7 +196,7 @@ export default function DNSManagementPage() {
       header: "DNS Account",
       cell: ({ row }) => {
         const domain = row.original;
-        if (domain.dns_mode === "managed" && domain.dns_account_name) {
+        if (domain.dns_account_name) {
           return (
             <div className="flex items-center gap-2">
               <Badge variant="outline" className="text-xs">
@@ -185,33 +206,37 @@ export default function DNSManagementPage() {
             </div>
           );
         }
-        return <span className="text-muted-foreground text-sm">—</span>;
+        return <span className="text-muted-foreground text-sm">Not configured</span>;
       },
     },
     {
       accessorKey: "ns_status",
       header: "NS Status",
-      cell: ({ row }) => {
-        const domain = row.original;
-        if (domain.dns_mode !== "managed") {
-          return <span className="text-muted-foreground text-sm">—</span>;
-        }
-        return getNSStatusBadge(domain.ns_status);
-      },
+      cell: ({ row }) => getNSStatusBadge(row.original.ns_status),
     },
     {
       id: "actions",
       cell: ({ row }) => {
         const domain = row.original;
         return (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => openDNSSettings(domain)}
-          >
-            <Settings2 className="h-4 w-4 mr-2" />
-            Configure
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => openDNSSettings(domain)}
+            >
+              <Settings2 className="h-4 w-4 mr-2" />
+              Configure
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => openDeleteDialog(domain)}
+              className="text-destructive hover:text-destructive"
+            >
+              <Trash className="h-4 w-4" />
+            </Button>
+          </div>
         );
       },
     },
@@ -232,10 +257,16 @@ export default function DNSManagementPage() {
           <h1 className="text-3xl font-semibold tracking-tight">DNS Management</h1>
           <p className="text-muted-foreground mt-1">Manage DNS records for your domains via Cloudflare or DNSPod.</p>
         </div>
-        <Button variant="outline" onClick={() => setShowDNSAccountDialog(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          Add DNS Account
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setShowDNSAccountDialog(true)}>
+            <Plus className="h-4 w-4 mr-2" />
+            DNS Account
+          </Button>
+          <Button onClick={() => setShowAddDomainDialog(true)}>
+            <Plus className="h-4 w-4 mr-2" />
+            Add Domain
+          </Button>
+        </div>
       </div>
 
       {/* DNS Accounts Summary */}
@@ -286,13 +317,75 @@ export default function DNSManagementPage() {
       {/* Domains Table */}
       <Card className="border-border/50 bg-card/50">
         <CardHeader>
-          <CardTitle className="text-lg">Domain DNS Configuration</CardTitle>
-          <CardDescription>Configure DNS settings and manage records for each domain.</CardDescription>
+          <CardTitle className="text-lg">DNS Managed Domains</CardTitle>
+          <CardDescription>Domains configured for DNS management through this system.</CardDescription>
         </CardHeader>
         <CardContent>
-          <DataTable columns={columns} data={domains} searchKey="fqdn" searchPlaceholder="Search domains..." />
+          {domains.length === 0 ? (
+            <div className="py-12 text-center">
+              <Globe className="h-12 w-12 mx-auto mb-4 opacity-30" />
+              <h3 className="text-lg font-medium mb-2">No DNS Managed Domains</h3>
+              <p className="text-muted-foreground mb-4">
+                Add a domain to start managing its DNS records.
+              </p>
+              <Button onClick={() => setShowAddDomainDialog(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Domain
+              </Button>
+            </div>
+          ) : (
+            <DataTable columns={columns} data={domains} searchKey="fqdn" searchPlaceholder="Search domains..." />
+          )}
         </CardContent>
       </Card>
+
+      {/* Add Domain Dialog */}
+      <Dialog open={showAddDomainDialog} onOpenChange={setShowAddDomainDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Domain for DNS Management</DialogTitle>
+            <DialogDescription>
+              Add a domain to manage its DNS records through this system.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="fqdn">Domain Name</Label>
+              <Input
+                id="fqdn"
+                className="h-11"
+                placeholder="example.com"
+                value={newFqdn}
+                onChange={(e) => setNewFqdn(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>DNS Account (optional)</Label>
+              <Select value={newDnsAccountId || "_none"} onValueChange={(v) => setNewDnsAccountId(v === "_none" ? "" : v)}>
+                <SelectTrigger className="h-11">
+                  <SelectValue placeholder="Select account" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_none">None (configure later)</SelectItem>
+                  {dnsAccounts.map((acc) => (
+                    <SelectItem key={acc.id} value={acc.id}>
+                      {acc.provider === "cloudflare" ? "☁️ Cloudflare" : "🌐 DNSPod"}: {acc.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddDomainDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleAddDomain} disabled={submitting || !newFqdn.trim()}>
+              {submitting ? "Adding..." : "Add Domain"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Create DNS Account Dialog */}
       <Dialog open={showDNSAccountDialog} onOpenChange={setShowDNSAccountDialog}>
@@ -389,6 +482,25 @@ export default function DNSManagementPage() {
           setShowDNSSettingsDialog(false);
         }}
       />
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove Domain from DNS Management</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove <strong>{selectedDomain?.fqdn}</strong> from DNS management?
+              This will delete all local DNS record data. Records on the provider will NOT be affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteDomain} disabled={submitting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {submitting ? "Removing..." : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -403,7 +515,7 @@ function DNSSettingsDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  domain: Domain | null;
+  domain: DNSManagedDomain | null;
   dnsAccounts: DNSAccount[];
   onSave: () => void;
 }) {
@@ -437,14 +549,13 @@ function DNSSettingsDialog({
   const [loadingProviderRecords, setLoadingProviderRecords] = useState(false);
 
   // Form state
-  const [dnsMode, setDnsMode] = useState("external");
   const [dnsAccountId, setDnsAccountId] = useState<string>("");
 
   // Get selected account provider
   const selectedAccount = dnsAccounts.find(a => a.id === dnsAccountId);
   const isCloudflare = selectedAccount?.provider === "cloudflare";
 
-  // New record form - proxied defaults to true for Cloudflare
+  // New record form
   const [newRecord, setNewRecord] = useState({
     name: "",
     record_type: "A",
@@ -461,7 +572,6 @@ function DNSSettingsDialog({
 
   useEffect(() => {
     if (domain && open) {
-      setDnsMode(domain.dns_mode || "external");
       setDnsAccountId(domain.dns_account_id || "");
       setExpectedNS(null);
       setNsStatus(null);
@@ -515,9 +625,8 @@ function DNSSettingsDialog({
     if (!domain) return;
     setLoading(true);
     try {
-      await api.updateDomainDNS(domain.id, {
-        dns_mode: dnsMode,
-        dns_account_id: dnsAccountId || "",
+      await api.updateDNSManagedDomain(domain.id, {
+        dns_account_id: dnsAccountId || null,
       });
       toast.success("DNS settings saved");
       onSave();
@@ -532,7 +641,7 @@ function DNSSettingsDialog({
     if (!domain) return;
     setLoading(true);
     try {
-      const status = await api.checkDomainNS(domain.id);
+      const status = await api.checkDNSDomainNS(domain.id);
       setNsStatus(status);
       toast.success("NS check completed");
     } catch (err: unknown) {
@@ -678,248 +787,228 @@ function DNSSettingsDialog({
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="settings">Settings</TabsTrigger>
-            <TabsTrigger value="records" disabled={dnsMode !== "managed"}>Records</TabsTrigger>
-            <TabsTrigger value="sync" disabled={dnsMode !== "managed"}>Sync</TabsTrigger>
+            <TabsTrigger value="records" disabled={!dnsAccountId}>Records</TabsTrigger>
+            <TabsTrigger value="sync" disabled={!dnsAccountId}>Sync</TabsTrigger>
           </TabsList>
 
           <TabsContent value="settings" className="space-y-6 mt-6">
-            {/* DNS Mode Selection */}
+            {/* DNS Account */}
             <div className="space-y-2">
-              <Label className="text-sm font-medium">DNS Mode</Label>
-              <Select value={dnsMode} onValueChange={setDnsMode}>
+              <Label className="text-sm font-medium">DNS Account</Label>
+              <Select value={dnsAccountId || "_none"} onValueChange={handleAccountChange}>
                 <SelectTrigger className="h-10 w-full sm:w-80">
-                  <SelectValue />
+                  <SelectValue placeholder="Select account" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="external">External (manage DNS elsewhere)</SelectItem>
-                  <SelectItem value="managed">Managed (use provider below)</SelectItem>
+                  <SelectItem value="_none">None</SelectItem>
+                  {dnsAccounts.map((acc) => (
+                    <SelectItem key={acc.id} value={acc.id}>
+                      {acc.provider === "cloudflare" ? "☁️ Cloudflare" : "🌐 DNSPod"}: {acc.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">
-                {dnsMode === "external" 
-                  ? "You manage DNS records outside of this system" 
-                  : "We will manage DNS records via the selected provider"}
-              </p>
+              {dnsAccounts.length === 0 && (
+                <p className="text-xs text-muted-foreground">No DNS accounts configured. Add one from the main page.</p>
+              )}
+              
+              {/* Expected Nameservers */}
+              {dnsAccountId && (
+                <div className="mt-3 p-3 rounded-md bg-muted/30 border">
+                  {loadingNS ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <RefreshCw className="h-3 w-3 animate-spin" />
+                      Loading nameservers...
+                    </div>
+                  ) : expectedNS ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        {expectedNS.found ? (
+                          <CheckCircle className="h-4 w-4 text-green-500" />
+                        ) : (
+                          <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                        )}
+                        <span className="text-sm font-medium">{expectedNS.message}</span>
+                      </div>
+                      {expectedNS.found && expectedNS.nameservers.length > 0 && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs text-muted-foreground">Point your domain to these nameservers:</p>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-xs"
+                              onClick={async () => {
+                                await copyToClipboard(expectedNS.nameservers.join("\n"));
+                                toast.success("Nameservers copied to clipboard");
+                              }}
+                            >
+                              <Copy className="h-3 w-3 mr-1" />
+                              Copy
+                            </Button>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {expectedNS.nameservers.map((ns, i) => (
+                              <code
+                                key={i}
+                                className="px-2 py-1 bg-background rounded text-xs font-mono cursor-pointer hover:bg-muted transition-colors"
+                                onClick={async () => {
+                                  await copyToClipboard(ns);
+                                  toast.success(`Copied: ${ns}`);
+                                }}
+                                title="Click to copy"
+                              >
+                                {ns}
+                              </code>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              )}
             </div>
 
-            {/* Managed Mode Configuration */}
-            {dnsMode === "managed" && (
-              <>
-                {/* DNS Account */}
-                <div className="space-y-2">
-                  <Label className="text-sm font-medium">DNS Account</Label>
-                  <Select value={dnsAccountId || "_none"} onValueChange={handleAccountChange}>
-                    <SelectTrigger className="h-10 w-full sm:w-80">
-                      <SelectValue placeholder="Select account" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="_none">None</SelectItem>
-                      {dnsAccounts.map((acc) => (
-                        <SelectItem key={acc.id} value={acc.id}>
-                          {acc.provider === "cloudflare" ? "☁️ Cloudflare" : "🌐 DNSPod"}: {acc.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {dnsAccounts.length === 0 && (
-                    <p className="text-xs text-muted-foreground">No DNS accounts configured. Add one from the main page.</p>
-                  )}
-                  
-                  {/* Expected Nameservers */}
-                  {dnsAccountId && (
-                    <div className="mt-3 p-3 rounded-md bg-muted/30 border">
-                      {loadingNS ? (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <RefreshCw className="h-3 w-3 animate-spin" />
-                          Loading nameservers...
-                        </div>
-                      ) : expectedNS ? (
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            {expectedNS.found ? (
-                              <CheckCircle className="h-4 w-4 text-green-500" />
-                            ) : (
-                              <AlertTriangle className="h-4 w-4 text-yellow-500" />
-                            )}
-                            <span className="text-sm font-medium">{expectedNS.message}</span>
-                          </div>
-                          {expectedNS.found && expectedNS.nameservers.length > 0 && (
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <p className="text-xs text-muted-foreground">Point your domain to these nameservers:</p>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 px-2 text-xs"
-                                  onClick={async () => {
-                                    await copyToClipboard(expectedNS.nameservers.join("\n"));
-                                    toast.success("Nameservers copied to clipboard");
-                                  }}
-                                >
-                                  <Copy className="h-3 w-3 mr-1" />
-                                  Copy
-                                </Button>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                {expectedNS.nameservers.map((ns, i) => (
-                                  <code
-                                    key={i}
-                                    className="px-2 py-1 bg-background rounded text-xs font-mono cursor-pointer hover:bg-muted transition-colors"
-                                    onClick={async () => {
-                                      await copyToClipboard(ns);
-                                      toast.success(`Copied: ${ns}`);
-                                    }}
-                                    title="Click to copy"
-                                  >
-                                    {ns}
-                                  </code>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
-
-                {/* NS Status */}
-                <div className="p-4 border rounded-lg bg-muted/20">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <Label className="text-sm font-medium">Nameserver Status</Label>
-                      <p className="text-xs text-muted-foreground mt-0.5">Check if domain nameservers point to the DNS provider</p>
-                    </div>
-                    <Button variant="outline" size="sm" onClick={handleCheckNS} disabled={loading || !dnsAccountId}>
-                      <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-                      Check Now
-                    </Button>
-                  </div>
-                  {nsStatus && (
-                    <div className="mt-3 p-3 rounded-md bg-background/50 space-y-2 text-sm">
-                      <div className="flex items-center gap-2">
-                        {nsStatus.status === "valid" ? (
-                          <CheckCircle className="h-4 w-4 text-green-500" />
-                        ) : nsStatus.status === "pending" ? (
-                          <RefreshCw className="h-4 w-4 text-yellow-500" />
-                        ) : (
-                          <XCircle className="h-4 w-4 text-red-500" />
-                        )}
-                        <span className="font-medium">{nsStatus.message}</span>
-                      </div>
-                      {nsStatus.expected && nsStatus.expected.length > 0 && (
-                        <div className="text-xs">
-                          <span className="text-muted-foreground">Expected: </span>
-                          <code className="bg-muted px-1 py-0.5 rounded">{nsStatus.expected.join(", ")}</code>
-                        </div>
-                      )}
-                      {nsStatus.actual && nsStatus.actual.length > 0 && (
-                        <div className="text-xs">
-                          <span className="text-muted-foreground">Current: </span>
-                          <code className="bg-muted px-1 py-0.5 rounded">{nsStatus.actual.join(", ")}</code>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* DNS Debug Tools */}
-                <div className="p-4 border rounded-lg bg-muted/20 space-y-4">
+            {/* NS Status */}
+            {dnsAccountId && (
+              <div className="p-4 border rounded-lg bg-muted/20">
+                <div className="flex items-center justify-between">
                   <div>
-                    <Label className="text-sm font-medium">DNS Debug Tools</Label>
-                    <p className="text-xs text-muted-foreground mt-0.5">Query DNS records for debugging</p>
+                    <Label className="text-sm font-medium">Nameserver Status</Label>
+                    <p className="text-xs text-muted-foreground mt-0.5">Check if domain nameservers point to the DNS provider</p>
                   </div>
-
-                  {/* List all from provider */}
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Button variant="outline" size="sm" onClick={handleListProviderRecords} disabled={loadingProviderRecords || !dnsAccountId}>
-                        <RefreshCw className={`h-4 w-4 mr-2 ${loadingProviderRecords ? "animate-spin" : ""}`} />
-                        List All from Provider
-                      </Button>
-                      <span className="text-xs text-muted-foreground">Fetch all records from {isCloudflare ? "Cloudflare" : "DNSPod"}</span>
-                    </div>
-                    {providerRecords && (
-                      <div className="mt-2 border rounded overflow-hidden">
-                        <table className="w-full text-xs">
-                          <thead className="bg-muted/50">
-                            <tr>
-                              <th className="text-left p-1.5 font-medium">Name</th>
-                              <th className="text-left p-1.5 font-medium">Type</th>
-                              <th className="text-left p-1.5 font-medium">Value</th>
-                              <th className="text-left p-1.5 font-medium">TTL</th>
-                              {isCloudflare && <th className="text-left p-1.5 font-medium">Proxy</th>}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {providerRecords.length === 0 ? (
-                              <tr><td colSpan={isCloudflare ? 5 : 4} className="p-2 text-center text-muted-foreground">No records on provider</td></tr>
-                            ) : (
-                              providerRecords.map((r, i) => (
-                                <tr key={i} className="border-t">
-                                  <td className="p-1.5 font-mono">{r.name}</td>
-                                  <td className="p-1.5"><Badge variant="outline" className="text-xs py-0">{r.type}</Badge></td>
-                                  <td className="p-1.5 font-mono max-w-[200px] truncate" title={r.value}>{r.value}</td>
-                                  <td className="p-1.5">{r.ttl}</td>
-                                  {isCloudflare && (
-                                    <td className="p-1.5">
-                                      <Cloud className={`h-3 w-3 ${r.proxied ? "text-orange-400" : "text-muted-foreground/30"}`} />
-                                    </td>
-                                  )}
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Public DNS Lookup */}
-                  <div className="border-t pt-4 space-y-2">
-                    <div className="flex gap-2 items-center">
-                      <Input
-                        className="h-8 w-28 text-sm"
-                        placeholder="@ or www"
-                        value={lookupSubdomain}
-                        onChange={(e) => setLookupSubdomain(e.target.value || "@")}
-                      />
-                      <span className="text-xs text-muted-foreground">.{domain?.fqdn}</span>
-                      <Button variant="outline" size="sm" onClick={handleDNSLookup} disabled={loadingLookup}>
-                        <RefreshCw className={`h-4 w-4 mr-2 ${loadingLookup ? "animate-spin" : ""}`} />
-                        Public Lookup
-                      </Button>
-                    </div>
-                    {dnsLookupResult && (
-                      <div className="grid grid-cols-3 gap-2">
-                        {Object.entries(dnsLookupResult.results).map(([type, data]) => (
-                          <div key={type} className="p-2 rounded bg-background/50 text-xs">
-                            <div className="font-medium text-muted-foreground mb-1">{type}</div>
-                            {data.records.length > 0 ? (
-                              <div className="space-y-0.5">
-                                {data.records.map((r, i) => (
-                                  <code key={i} className="block font-mono text-foreground truncate" title={r}>{r}</code>
-                                ))}
-                              </div>
-                            ) : (
-                              <span className="text-muted-foreground/50">—</span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  <Button variant="outline" size="sm" onClick={handleCheckNS} disabled={loading}>
+                    <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+                    Check Now
+                  </Button>
                 </div>
-              </>
+                {nsStatus && (
+                  <div className="mt-3 p-3 rounded-md bg-background/50 space-y-2 text-sm">
+                    <div className="flex items-center gap-2">
+                      {nsStatus.status === "valid" ? (
+                        <CheckCircle className="h-4 w-4 text-green-500" />
+                      ) : nsStatus.status === "pending" ? (
+                        <RefreshCw className="h-4 w-4 text-yellow-500" />
+                      ) : (
+                        <XCircle className="h-4 w-4 text-red-500" />
+                      )}
+                      <span className="font-medium">{nsStatus.message}</span>
+                    </div>
+                    {nsStatus.expected && nsStatus.expected.length > 0 && (
+                      <div className="text-xs">
+                        <span className="text-muted-foreground">Expected: </span>
+                        <code className="bg-muted px-1 py-0.5 rounded">{nsStatus.expected.join(", ")}</code>
+                      </div>
+                    )}
+                    {nsStatus.actual && nsStatus.actual.length > 0 && (
+                      <div className="text-xs">
+                        <span className="text-muted-foreground">Current: </span>
+                        <code className="bg-muted px-1 py-0.5 rounded">{nsStatus.actual.join(", ")}</code>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
 
-            {/* External Mode Message */}
-            {dnsMode === "external" && (
+            {/* DNS Debug Tools */}
+            {dnsAccountId && (
+              <div className="p-4 border rounded-lg bg-muted/20 space-y-4">
+                <div>
+                  <Label className="text-sm font-medium">DNS Debug Tools</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Query DNS records for debugging</p>
+                </div>
+
+                {/* List all from provider */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={handleListProviderRecords} disabled={loadingProviderRecords}>
+                      <RefreshCw className={`h-4 w-4 mr-2 ${loadingProviderRecords ? "animate-spin" : ""}`} />
+                      List All from Provider
+                    </Button>
+                    <span className="text-xs text-muted-foreground">Fetch all records from {isCloudflare ? "Cloudflare" : "DNSPod"}</span>
+                  </div>
+                  {providerRecords && (
+                    <div className="mt-2 border rounded overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead className="bg-muted/50">
+                          <tr>
+                            <th className="text-left p-1.5 font-medium">Name</th>
+                            <th className="text-left p-1.5 font-medium">Type</th>
+                            <th className="text-left p-1.5 font-medium">Value</th>
+                            <th className="text-left p-1.5 font-medium">TTL</th>
+                            {isCloudflare && <th className="text-left p-1.5 font-medium">Proxy</th>}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {providerRecords.length === 0 ? (
+                            <tr><td colSpan={isCloudflare ? 5 : 4} className="p-2 text-center text-muted-foreground">No records on provider</td></tr>
+                          ) : (
+                            providerRecords.map((r, i) => (
+                              <tr key={i} className="border-t">
+                                <td className="p-1.5 font-mono">{r.name}</td>
+                                <td className="p-1.5"><Badge variant="outline" className="text-xs py-0">{r.type}</Badge></td>
+                                <td className="p-1.5 font-mono max-w-[200px] truncate" title={r.value}>{r.value}</td>
+                                <td className="p-1.5">{r.ttl}</td>
+                                {isCloudflare && (
+                                  <td className="p-1.5">
+                                    <Cloud className={`h-3 w-3 ${r.proxied ? "text-orange-400" : "text-muted-foreground/30"}`} />
+                                  </td>
+                                )}
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* Public DNS Lookup */}
+                <div className="border-t pt-4 space-y-2">
+                  <div className="flex gap-2 items-center">
+                    <Input
+                      className="h-8 w-28 text-sm"
+                      placeholder="@ or www"
+                      value={lookupSubdomain}
+                      onChange={(e) => setLookupSubdomain(e.target.value || "@")}
+                    />
+                    <span className="text-xs text-muted-foreground">.{domain?.fqdn}</span>
+                    <Button variant="outline" size="sm" onClick={handleDNSLookup} disabled={loadingLookup}>
+                      <RefreshCw className={`h-4 w-4 mr-2 ${loadingLookup ? "animate-spin" : ""}`} />
+                      Public Lookup
+                    </Button>
+                  </div>
+                  {dnsLookupResult && (
+                    <div className="grid grid-cols-3 gap-2">
+                      {Object.entries(dnsLookupResult.results).map(([type, data]) => (
+                        <div key={type} className="p-2 rounded bg-background/50 text-xs">
+                          <div className="font-medium text-muted-foreground mb-1">{type}</div>
+                          {data.records.length > 0 ? (
+                            <div className="space-y-0.5">
+                              {data.records.map((r, i) => (
+                                <code key={i} className="block font-mono text-foreground truncate" title={r}>{r}</code>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground/50">—</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* No Account Message */}
+            {!dnsAccountId && (
               <div className="p-6 text-center border rounded-lg bg-muted/10">
                 <Globe className="h-10 w-10 mx-auto mb-3 opacity-30" />
-                <p className="text-muted-foreground">DNS is managed externally.</p>
+                <p className="text-muted-foreground">No DNS account selected.</p>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Switch to &quot;Managed&quot; mode to configure DNS records through this interface.
+                  Select a DNS account above to manage records for this domain.
                 </p>
               </div>
             )}
@@ -931,11 +1020,11 @@ function DNSSettingsDialog({
           </TabsContent>
 
           <TabsContent value="records" className="space-y-6 mt-6">
-            {dnsMode !== "managed" ? (
+            {!dnsAccountId ? (
               <div className="p-12 text-center border rounded-lg bg-muted/10">
                 <Globe className="h-12 w-12 mx-auto mb-4 opacity-30" />
-                <p className="text-muted-foreground">DNS records management requires managed DNS mode.</p>
-                <p className="text-sm text-muted-foreground mt-1">Switch to &quot;Managed&quot; in Settings tab and select a DNS account.</p>
+                <p className="text-muted-foreground">DNS records management requires a configured DNS account.</p>
+                <p className="text-sm text-muted-foreground mt-1">Select a DNS account in the Settings tab.</p>
               </div>
             ) : (
               <>
@@ -943,7 +1032,6 @@ function DNSSettingsDialog({
                 <div className="p-4 border rounded-lg bg-muted/10 space-y-4">
                   <Label className="text-sm font-medium">Add New Record</Label>
                   
-                  {/* Main fields row */}
                   <div className="grid grid-cols-12 gap-3 items-end">
                     <div className="col-span-2 space-y-1.5">
                       <Label className="text-xs text-muted-foreground">Name</Label>
@@ -1000,7 +1088,6 @@ function DNSSettingsDialog({
 
                   {/* Options row */}
                   <div className="flex flex-wrap items-center gap-6 pt-2 border-t border-border/50">
-                    {/* Proxied toggle - Cloudflare only */}
                     {isCloudflare && (
                       <div className="flex items-center space-x-2">
                         <Checkbox
@@ -1015,7 +1102,6 @@ function DNSSettingsDialog({
                       </div>
                     )}
 
-                    {/* Custom Ports toggle */}
                     <div className="flex items-center space-x-2">
                       <Checkbox
                         id="newRecordCustomPorts"
@@ -1027,7 +1113,6 @@ function DNSSettingsDialog({
                       </Label>
                     </div>
 
-                    {/* Port inputs - only show if customPorts enabled */}
                     {newRecord.customPorts && (
                       <div className="flex items-center gap-3 ml-4">
                         <div className="flex items-center gap-1">
@@ -1077,7 +1162,6 @@ function DNSSettingsDialog({
                         <th className="text-left p-2 font-medium">Value</th>
                         <th className="text-left p-2 font-medium">TTL</th>
                         {isCloudflare && <th className="text-left p-2 font-medium">Proxy</th>}
-                        <th className="text-left p-2 font-medium">Ports</th>
                         <th className="text-left p-2 font-medium">Status</th>
                         <th className="w-10"></th>
                       </tr>
@@ -1085,69 +1169,57 @@ function DNSSettingsDialog({
                     <tbody>
                       {records.length === 0 ? (
                         <tr>
-                          <td colSpan={isCloudflare ? 8 : 7} className="p-8 text-center text-muted-foreground">
+                          <td colSpan={isCloudflare ? 7 : 6} className="p-8 text-center text-muted-foreground">
                             No records yet. Add one above or import from provider.
                           </td>
                         </tr>
                       ) : (
-                        records.map((record) => {
-                          const hasCustomPorts = record.http_incoming_port || record.https_incoming_port;
-                          return (
-                            <tr key={record.id} className="border-t hover:bg-muted/30">
-                              <td className="p-2 font-mono">{record.name}</td>
+                        records.map((record) => (
+                          <tr key={record.id} className="border-t hover:bg-muted/30">
+                            <td className="p-2 font-mono">{record.name}</td>
+                            <td className="p-2">
+                              <Badge variant="outline">{record.record_type}</Badge>
+                            </td>
+                            <td className="p-2 font-mono text-xs max-w-[180px] truncate" title={record.value}>{record.value}</td>
+                            <td className="p-2">{record.ttl}</td>
+                            {isCloudflare && (
                               <td className="p-2">
-                                <Badge variant="outline">{record.record_type}</Badge>
-                              </td>
-                              <td className="p-2 font-mono text-xs max-w-[180px] truncate" title={record.value}>{record.value}</td>
-                              <td className="p-2">{record.ttl}</td>
-                              {isCloudflare && (
-                                <td className="p-2">
-                                  {record.proxied ? (
-                                    <Cloud className="h-4 w-4 text-orange-400" title="Proxied" />
-                                  ) : (
-                                    <Cloud className="h-4 w-4 text-muted-foreground/30" title="DNS only" />
-                                  )}
-                                </td>
-                              )}
-                              <td className="p-2 text-xs text-muted-foreground">
-                                {hasCustomPorts ? (
-                                  <span title={`HTTP: ${record.http_incoming_port || 80}→${record.http_outgoing_port || 80}, HTTPS: ${record.https_incoming_port || 443}→${record.https_outgoing_port || 443}`}>
-                                    {record.http_incoming_port || 80}/{record.https_incoming_port || 443}
-                                  </span>
+                                {record.proxied ? (
+                                  <Cloud className="h-4 w-4 text-orange-400" title="Proxied" />
                                 ) : (
-                                  <span className="text-muted-foreground/50">default</span>
+                                  <Cloud className="h-4 w-4 text-muted-foreground/30" title="DNS only" />
                                 )}
                               </td>
-                              <td className="p-2">
-                                {record.sync_status === "synced" && (
-                                  <Badge className="bg-green-500/20 text-green-400 text-xs">Synced</Badge>
-                                )}
-                                {record.sync_status === "pending" && (
-                                  <Badge className="bg-yellow-500/20 text-yellow-400 text-xs">Pending</Badge>
-                                )}
-                                {record.sync_status === "conflict" && (
-                                  <Badge className="bg-red-500/20 text-red-400 text-xs">Conflict</Badge>
-                                )}
-                                {record.sync_status === "local_only" && (
-                                  <Badge className="bg-blue-500/20 text-blue-400 text-xs">Local Only</Badge>
-                                )}
-                                {record.sync_status === "error" && (
-                                  <Badge className="bg-red-500/20 text-red-400 text-xs">Error</Badge>
-                                )}
-                              </td>
-                              <td className="p-2">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 w-6 p-0 hover:text-destructive"
-                                  onClick={() => handleDeleteRecord(record.id)}
-                                >
-                                  <X className="h-4 w-4" />
-                                </Button>
-                              </td>
-                            </tr>
-                          );
-                        })
+                            )}
+                            <td className="p-2">
+                              {record.sync_status === "synced" && (
+                                <Badge className="bg-green-500/20 text-green-400 text-xs">Synced</Badge>
+                              )}
+                              {record.sync_status === "pending" && (
+                                <Badge className="bg-yellow-500/20 text-yellow-400 text-xs">Pending</Badge>
+                              )}
+                              {record.sync_status === "conflict" && (
+                                <Badge className="bg-red-500/20 text-red-400 text-xs">Conflict</Badge>
+                              )}
+                              {record.sync_status === "local_only" && (
+                                <Badge className="bg-blue-500/20 text-blue-400 text-xs">Local Only</Badge>
+                              )}
+                              {record.sync_status === "error" && (
+                                <Badge className="bg-red-500/20 text-red-400 text-xs">Error</Badge>
+                              )}
+                            </td>
+                            <td className="p-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 w-6 p-0 hover:text-destructive"
+                                onClick={() => handleDeleteRecord(record.id)}
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </td>
+                          </tr>
+                        ))
                       )}
                     </tbody>
                   </table>
@@ -1157,10 +1229,10 @@ function DNSSettingsDialog({
           </TabsContent>
 
           <TabsContent value="sync" className="space-y-4 mt-4">
-            {dnsMode !== "managed" || !dnsAccountId ? (
+            {!dnsAccountId ? (
               <div className="p-8 text-center text-muted-foreground">
                 <AlertTriangle className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>DNS sync requires managed DNS mode with a configured account.</p>
+                <p>DNS sync requires a configured DNS account.</p>
               </div>
             ) : (
               <>
@@ -1260,4 +1332,3 @@ function DNSSettingsDialog({
     </Dialog>
   );
 }
-

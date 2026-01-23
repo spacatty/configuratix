@@ -146,7 +146,7 @@ func main() {
 	apiRouter.HandleFunc("/domains/{id}/notes", domainsHandler.UpdateDomainNotes).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}", domainsHandler.DeleteDomain).Methods("DELETE", "OPTIONS")
 
-	// DNS Management
+	// DNS Management (completely separate module from main domains)
 	dnsHandler := handlers.NewDNSHandler(db)
 	// DNS Accounts
 	apiRouter.HandleFunc("/dns-accounts", dnsHandler.ListDNSAccounts).Methods("GET", "OPTIONS")
@@ -155,20 +155,23 @@ func main() {
 	apiRouter.HandleFunc("/dns-accounts/{id}", dnsHandler.DeleteDNSAccount).Methods("DELETE", "OPTIONS")
 	apiRouter.HandleFunc("/dns-accounts/{id}/test", dnsHandler.TestDNSAccount).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/dns-accounts/{id}/nameservers", dnsHandler.GetExpectedNameservers).Methods("GET", "OPTIONS")
-	// Domain DNS settings
-	apiRouter.HandleFunc("/domains/{id}/dns", dnsHandler.UpdateDomainDNS).Methods("PUT", "OPTIONS")
-	apiRouter.HandleFunc("/domains/{id}/ns-check", dnsHandler.CheckDomainNS).Methods("POST", "OPTIONS")
+	// DNS Managed Domains (separate from main domains table)
+	apiRouter.HandleFunc("/dns-domains", dnsHandler.ListDNSManagedDomains).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains", dnsHandler.CreateDNSManagedDomain).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}", dnsHandler.UpdateDNSManagedDomain).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}", dnsHandler.DeleteDNSManagedDomain).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}/ns-check", dnsHandler.CheckDomainNS).Methods("POST", "OPTIONS")
 	// DNS Records
-	apiRouter.HandleFunc("/domains/{id}/records", dnsHandler.ListDNSRecords).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/domains/{id}/records", dnsHandler.CreateDNSRecord).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/domains/{id}/records/{recordId}", dnsHandler.UpdateDNSRecord).Methods("PUT", "OPTIONS")
-	apiRouter.HandleFunc("/domains/{id}/records/{recordId}", dnsHandler.DeleteDNSRecord).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}/records", dnsHandler.ListDNSRecords).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}/records", dnsHandler.CreateDNSRecord).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}/records/{recordId}", dnsHandler.UpdateDNSRecord).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}/records/{recordId}", dnsHandler.DeleteDNSRecord).Methods("DELETE", "OPTIONS")
 	// DNS Sync
-	apiRouter.HandleFunc("/domains/{id}/dns-sync", dnsHandler.CompareDNSRecords).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/domains/{id}/dns-sync/apply", dnsHandler.ApplyDNSToRemote).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/domains/{id}/dns-sync/import", dnsHandler.ImportDNSFromRemote).Methods("POST", "OPTIONS")
-	apiRouter.HandleFunc("/domains/{id}/dns-lookup", dnsHandler.LookupDNS).Methods("GET", "OPTIONS")
-	apiRouter.HandleFunc("/domains/{id}/dns-remote", dnsHandler.ListRemoteRecords).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}/sync", dnsHandler.CompareDNSRecords).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}/sync/apply", dnsHandler.ApplyDNSToRemote).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}/sync/import", dnsHandler.ImportDNSFromRemote).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}/lookup", dnsHandler.LookupDNS).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{id}/remote-records", dnsHandler.ListRemoteRecords).Methods("GET", "OPTIONS")
 
 	// Nginx Configs
 	nginxConfigsHandler := handlers.NewNginxConfigsHandler(db)

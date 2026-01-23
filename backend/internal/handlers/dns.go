@@ -279,11 +279,11 @@ func (h *DNSHandler) DeleteDNSAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if any domains use this account
+	// Check if any DNS managed domains use this account
 	var count int
-	h.db.Get(&count, "SELECT COUNT(*) FROM domains WHERE dns_account_id = $1", accountID)
+	h.db.Get(&count, "SELECT COUNT(*) FROM dns_managed_domains WHERE dns_account_id = $1", accountID)
 	if count > 0 {
-		http.Error(w, "Cannot delete account: domains are using it", http.StatusBadRequest)
+		http.Error(w, "Cannot delete account: DNS domains are using it", http.StatusBadRequest)
 		return
 	}
 
@@ -404,22 +404,96 @@ func (h *DNSHandler) GetExpectedNameservers(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// ==================== Domain DNS Settings ====================
+// ==================== DNS Managed Domains ====================
 
-type UpdateDomainDNSRequest struct {
-	DNSAccountID       *string `json:"dns_account_id"` // Use string to detect null vs not-provided
-	DNSMode            *string `json:"dns_mode"`       // managed, external
-	IsWildcard         *bool   `json:"is_wildcard"`
-	IPAddress          *string `json:"ip_address"`
-	HTTPSSendProxy     *bool   `json:"https_send_proxy"`
-	HTTPIncomingPorts  []int   `json:"http_incoming_ports"`
-	HTTPOutgoingPorts  []int   `json:"http_outgoing_ports"`
-	HTTPSIncomingPorts []int   `json:"https_incoming_ports"`
-	HTTPSOutgoingPorts []int   `json:"https_outgoing_ports"`
+// ListDNSManagedDomains returns all DNS managed domains for the current user
+func (h *DNSHandler) ListDNSManagedDomains(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
+	var domains []models.DNSManagedDomainWithAccount
+	err := h.db.Select(&domains, `
+		SELECT 
+			d.*,
+			a.name as dns_account_name,
+			a.provider as dns_account_provider
+		FROM dns_managed_domains d
+		LEFT JOIN dns_accounts a ON d.dns_account_id = a.id
+		WHERE d.owner_id = $1
+		ORDER BY d.fqdn
+	`, userID)
+	if err != nil {
+		log.Printf("Failed to list DNS managed domains: %v", err)
+		http.Error(w, "Failed to list domains", http.StatusInternalServerError)
+		return
+	}
+
+	if domains == nil {
+		domains = []models.DNSManagedDomainWithAccount{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(domains)
 }
 
-// UpdateDomainDNS updates DNS settings for a domain
-func (h *DNSHandler) UpdateDomainDNS(w http.ResponseWriter, r *http.Request) {
+type CreateDNSManagedDomainRequest struct {
+	FQDN         string  `json:"fqdn"`
+	DNSAccountID *string `json:"dns_account_id"`
+}
+
+// CreateDNSManagedDomain adds a new domain for DNS management
+func (h *DNSHandler) CreateDNSManagedDomain(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
+	var req CreateDNSManagedDomainRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.FQDN == "" {
+		http.Error(w, "fqdn is required", http.StatusBadRequest)
+		return
+	}
+
+	var dnsAccountID *uuid.UUID
+	if req.DNSAccountID != nil && *req.DNSAccountID != "" {
+		id, err := uuid.Parse(*req.DNSAccountID)
+		if err != nil {
+			http.Error(w, "Invalid dns_account_id", http.StatusBadRequest)
+			return
+		}
+		dnsAccountID = &id
+	}
+
+	var domain models.DNSManagedDomain
+	err := h.db.Get(&domain, `
+		INSERT INTO dns_managed_domains (owner_id, fqdn, dns_account_id)
+		VALUES ($1, $2, $3)
+		RETURNING *
+	`, userID, req.FQDN, dnsAccountID)
+	if err != nil {
+		log.Printf("Failed to create DNS managed domain: %v", err)
+		http.Error(w, "Failed to create domain (may already exist)", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(domain)
+}
+
+type UpdateDNSManagedDomainRequest struct {
+	DNSAccountID *string `json:"dns_account_id"` // Use string to detect null vs not-provided
+	NotesMD      *string `json:"notes_md"`
+}
+
+// UpdateDNSManagedDomain updates DNS settings for a managed domain
+func (h *DNSHandler) UpdateDNSManagedDomain(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	vars := mux.Vars(r)
 	domainID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -427,7 +501,7 @@ func (h *DNSHandler) UpdateDomainDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req UpdateDomainDNSRequest
+	var req UpdateDNSManagedDomainRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -441,10 +515,8 @@ func (h *DNSHandler) UpdateDomainDNS(w http.ResponseWriter, r *http.Request) {
 	// Handle dns_account_id - can be set to NULL explicitly
 	if req.DNSAccountID != nil {
 		if *req.DNSAccountID == "" {
-			// Explicitly set to NULL
 			updates = append(updates, "dns_account_id = NULL")
 		} else {
-			// Parse and set the UUID
 			accountID, err := uuid.Parse(*req.DNSAccountID)
 			if err != nil {
 				http.Error(w, "Invalid dns_account_id", http.StatusBadRequest)
@@ -455,67 +527,63 @@ func (h *DNSHandler) UpdateDomainDNS(w http.ResponseWriter, r *http.Request) {
 			argNum++
 		}
 	}
-	if req.DNSMode != nil {
-		updates = append(updates, fmt.Sprintf("dns_mode = $%d", argNum))
-		args = append(args, *req.DNSMode)
-		argNum++
-	}
-	if req.IsWildcard != nil {
-		updates = append(updates, fmt.Sprintf("is_wildcard = $%d", argNum))
-		args = append(args, *req.IsWildcard)
-		argNum++
-	}
-	if req.IPAddress != nil {
-		updates = append(updates, fmt.Sprintf("ip_address = $%d", argNum))
-		args = append(args, *req.IPAddress)
-		argNum++
-	}
-	if req.HTTPSSendProxy != nil {
-		updates = append(updates, fmt.Sprintf("https_send_proxy = $%d", argNum))
-		args = append(args, *req.HTTPSSendProxy)
-		argNum++
-	}
-	if req.HTTPIncomingPorts != nil {
-		updates = append(updates, fmt.Sprintf("http_incoming_ports = $%d", argNum))
-		args = append(args, pq.Array(req.HTTPIncomingPorts))
-		argNum++
-	}
-	if req.HTTPOutgoingPorts != nil {
-		updates = append(updates, fmt.Sprintf("http_outgoing_ports = $%d", argNum))
-		args = append(args, pq.Array(req.HTTPOutgoingPorts))
-		argNum++
-	}
-	if req.HTTPSIncomingPorts != nil {
-		updates = append(updates, fmt.Sprintf("https_incoming_ports = $%d", argNum))
-		args = append(args, pq.Array(req.HTTPSIncomingPorts))
-		argNum++
-	}
-	if req.HTTPSOutgoingPorts != nil {
-		updates = append(updates, fmt.Sprintf("https_outgoing_ports = $%d", argNum))
-		args = append(args, pq.Array(req.HTTPSOutgoingPorts))
+	if req.NotesMD != nil {
+		updates = append(updates, fmt.Sprintf("notes_md = $%d", argNum))
+		args = append(args, *req.NotesMD)
 		argNum++
 	}
 
-	query := "UPDATE domains SET " + updates[0]
+	query := "UPDATE dns_managed_domains SET " + updates[0]
 	for i := 1; i < len(updates); i++ {
 		query += ", " + updates[i]
 	}
-	query += fmt.Sprintf(" WHERE id = $%d", argNum)
-	args = append(args, domainID)
+	query += fmt.Sprintf(" WHERE id = $%d AND owner_id = $%d", argNum, argNum+1)
+	args = append(args, domainID, userID)
 
 	_, err = h.db.Exec(query, args...)
 	if err != nil {
-		log.Printf("Failed to update domain DNS: %v", err)
+		log.Printf("Failed to update DNS managed domain: %v", err)
 		http.Error(w, "Failed to update domain", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "DNS settings updated"})
+	json.NewEncoder(w).Encode(map[string]string{"message": "Domain updated"})
 }
 
-// CheckDomainNS checks nameserver status for a domain
+// DeleteDNSManagedDomain removes a domain from DNS management
+func (h *DNSHandler) DeleteDNSManagedDomain(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
+	vars := mux.Vars(r)
+	domainID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid domain ID", http.StatusBadRequest)
+		return
+	}
+
+	result, err := h.db.Exec("DELETE FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
+	if err != nil {
+		log.Printf("Failed to delete DNS managed domain: %v", err)
+		http.Error(w, "Failed to delete domain", http.StatusInternalServerError)
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// CheckDomainNS checks nameserver status for a DNS managed domain
 func (h *DNSHandler) CheckDomainNS(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	vars := mux.Vars(r)
 	domainID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -524,22 +592,18 @@ func (h *DNSHandler) CheckDomainNS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get domain and its DNS account
-	var domain struct {
-		FQDN         string     `db:"fqdn"`
-		DNSAccountID *uuid.UUID `db:"dns_account_id"`
-		DNSMode      string     `db:"dns_mode"`
-	}
-	err = h.db.Get(&domain, "SELECT fqdn, dns_account_id, dns_mode FROM domains WHERE id = $1", domainID)
+	var domain models.DNSManagedDomain
+	err = h.db.Get(&domain, "SELECT * FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
 	if err != nil {
 		http.Error(w, "Domain not found", http.StatusNotFound)
 		return
 	}
 
-	if domain.DNSMode == "external" || domain.DNSAccountID == nil {
+	if domain.DNSAccountID == nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(dns.NSStatus{
-			Status:  "external",
-			Message: "DNS is managed externally",
+			Status:  "unknown",
+			Message: "No DNS account configured",
 		})
 		return
 	}
@@ -573,7 +637,7 @@ func (h *DNSHandler) CheckDomainNS(w http.ResponseWriter, r *http.Request) {
 
 	// Update domain with results
 	h.db.Exec(`
-		UPDATE domains 
+		UPDATE dns_managed_domains 
 		SET ns_status = $1, ns_last_check = NOW(), ns_expected = $2, ns_actual = $3
 		WHERE id = $4
 	`, status.Status, pq.Array(expected), pq.Array(status.Actual), domainID)
@@ -584,8 +648,11 @@ func (h *DNSHandler) CheckDomainNS(w http.ResponseWriter, r *http.Request) {
 
 // ==================== DNS Records ====================
 
-// ListDNSRecords returns all DNS records for a domain
+// ListDNSRecords returns all DNS records for a managed domain
 func (h *DNSHandler) ListDNSRecords(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	vars := mux.Vars(r)
 	domainID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -593,10 +660,18 @@ func (h *DNSHandler) ListDNSRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Verify ownership
+	var count int
+	h.db.Get(&count, "SELECT COUNT(*) FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
+	if count == 0 {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
+	}
+
 	var records []models.DNSRecord
 	err = h.db.Select(&records, `
 		SELECT * FROM dns_records 
-		WHERE domain_id = $1 
+		WHERE dns_domain_id = $1 
 		ORDER BY name, record_type
 	`, domainID)
 	if err != nil {
@@ -628,6 +703,9 @@ type CreateDNSRecordRequest struct {
 
 // CreateDNSRecord creates a new DNS record
 func (h *DNSHandler) CreateDNSRecord(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	vars := mux.Vars(r)
 	domainID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -652,11 +730,8 @@ func (h *DNSHandler) CreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get domain and DNS account info
-	var domainInfo struct {
-		FQDN         string     `db:"fqdn"`
-		DNSAccountID *uuid.UUID `db:"dns_account_id"`
-	}
-	err = h.db.Get(&domainInfo, "SELECT fqdn, dns_account_id FROM domains WHERE id = $1", domainID)
+	var domain models.DNSManagedDomain
+	err = h.db.Get(&domain, "SELECT * FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
 	if err != nil {
 		http.Error(w, "Domain not found", http.StatusNotFound)
 		return
@@ -667,9 +742,9 @@ func (h *DNSHandler) CreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 	syncStatus := "pending"
 	var syncError string
 
-	if domainInfo.DNSAccountID != nil {
+	if domain.DNSAccountID != nil {
 		var account models.DNSAccount
-		err = h.db.Get(&account, "SELECT * FROM dns_accounts WHERE id = $1", *domainInfo.DNSAccountID)
+		err = h.db.Get(&account, "SELECT * FROM dns_accounts WHERE id = $1", *domain.DNSAccountID)
 		if err == nil {
 			apiID := ""
 			if account.ApiID != nil {
@@ -684,7 +759,7 @@ func (h *DNSHandler) CreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 			if req.Priority != nil {
 				priority = *req.Priority
 			}
-			remoteRecord, err := provider.CreateRecord(ctx, domainInfo.FQDN, dns.Record{
+			remoteRecord, err := provider.CreateRecord(ctx, domain.FQDN, dns.Record{
 				Name:     req.Name,
 				Type:     req.RecordType,
 				Value:    req.Value,
@@ -708,7 +783,7 @@ func (h *DNSHandler) CreateDNSRecord(w http.ResponseWriter, r *http.Request) {
 	var record models.DNSRecord
 	err = h.db.Get(&record, `
 		INSERT INTO dns_records (
-			domain_id, name, record_type, value, ttl, priority, proxied,
+			dns_domain_id, name, record_type, value, ttl, priority, proxied,
 			http_incoming_port, http_outgoing_port, https_incoming_port, https_outgoing_port,
 			sync_status, sync_error, remote_record_id, last_synced_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 
@@ -738,6 +813,9 @@ func nullString(s string) interface{} {
 
 // UpdateDNSRecord updates an existing DNS record
 func (h *DNSHandler) UpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	vars := mux.Vars(r)
 	domainID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -747,6 +825,14 @@ func (h *DNSHandler) UpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
 	recordID, err := uuid.Parse(vars["recordId"])
 	if err != nil {
 		http.Error(w, "Invalid record ID", http.StatusBadRequest)
+		return
+	}
+
+	// Verify ownership
+	var count int
+	h.db.Get(&count, "SELECT COUNT(*) FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
+	if count == 0 {
+		http.Error(w, "Domain not found", http.StatusNotFound)
 		return
 	}
 
@@ -762,7 +848,7 @@ func (h *DNSHandler) UpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
 			http_incoming_port = $7, http_outgoing_port = $8, 
 			https_incoming_port = $9, https_outgoing_port = $10,
 			sync_status = 'pending', updated_at = NOW()
-		WHERE id = $11 AND domain_id = $12
+		WHERE id = $11 AND dns_domain_id = $12
 	`, req.Name, req.RecordType, req.Value, req.TTL, req.Priority, req.Proxied,
 		req.HTTPIncomingPort, req.HTTPOutgoingPort, req.HTTPSIncomingPort, req.HTTPSOutgoingPort,
 		recordID, domainID)
@@ -778,6 +864,9 @@ func (h *DNSHandler) UpdateDNSRecord(w http.ResponseWriter, r *http.Request) {
 
 // DeleteDNSRecord deletes a DNS record
 func (h *DNSHandler) DeleteDNSRecord(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	vars := mux.Vars(r)
 	domainID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -790,7 +879,15 @@ func (h *DNSHandler) DeleteDNSRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.db.Exec("DELETE FROM dns_records WHERE id = $1 AND domain_id = $2", recordID, domainID)
+	// Verify ownership
+	var count int
+	h.db.Get(&count, "SELECT COUNT(*) FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
+	if count == 0 {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
+	}
+
+	_, err = h.db.Exec("DELETE FROM dns_records WHERE id = $1 AND dns_domain_id = $2", recordID, domainID)
 	if err != nil {
 		log.Printf("Failed to delete DNS record: %v", err)
 		http.Error(w, "Failed to delete record", http.StatusInternalServerError)
@@ -804,6 +901,9 @@ func (h *DNSHandler) DeleteDNSRecord(w http.ResponseWriter, r *http.Request) {
 
 // CompareDNSRecords compares local records with remote provider
 func (h *DNSHandler) CompareDNSRecords(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	vars := mux.Vars(r)
 	domainID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -812,19 +912,15 @@ func (h *DNSHandler) CompareDNSRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get domain and account
-	var domain struct {
-		FQDN         string     `db:"fqdn"`
-		DNSAccountID *uuid.UUID `db:"dns_account_id"`
-		DNSMode      string     `db:"dns_mode"`
-	}
-	err = h.db.Get(&domain, "SELECT fqdn, dns_account_id, dns_mode FROM domains WHERE id = $1", domainID)
+	var domain models.DNSManagedDomain
+	err = h.db.Get(&domain, "SELECT * FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
 	if err != nil {
 		http.Error(w, "Domain not found", http.StatusNotFound)
 		return
 	}
 
-	if domain.DNSMode == "external" || domain.DNSAccountID == nil {
-		http.Error(w, "Domain uses external DNS management", http.StatusBadRequest)
+	if domain.DNSAccountID == nil {
+		http.Error(w, "No DNS account configured", http.StatusBadRequest)
 		return
 	}
 
@@ -837,7 +933,7 @@ func (h *DNSHandler) CompareDNSRecords(w http.ResponseWriter, r *http.Request) {
 
 	// Get local records
 	var localDBRecords []models.DNSRecord
-	h.db.Select(&localDBRecords, "SELECT * FROM dns_records WHERE domain_id = $1", domainID)
+	h.db.Select(&localDBRecords, "SELECT * FROM dns_records WHERE dns_domain_id = $1", domainID)
 
 	// Convert to dns.Record
 	localRecords := make([]dns.Record, len(localDBRecords))
@@ -900,6 +996,9 @@ func (h *DNSHandler) CompareDNSRecords(w http.ResponseWriter, r *http.Request) {
 
 // ApplyDNSToRemote pushes local records to remote provider
 func (h *DNSHandler) ApplyDNSToRemote(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	vars := mux.Vars(r)
 	domainID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -907,11 +1006,13 @@ func (h *DNSHandler) ApplyDNSToRemote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var domain struct {
-		FQDN         string     `db:"fqdn"`
-		DNSAccountID *uuid.UUID `db:"dns_account_id"`
+	var domain models.DNSManagedDomain
+	err = h.db.Get(&domain, "SELECT * FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
+	if err != nil {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
 	}
-	h.db.Get(&domain, "SELECT fqdn, dns_account_id FROM domains WHERE id = $1", domainID)
+
 	if domain.DNSAccountID == nil {
 		http.Error(w, "No DNS account configured", http.StatusBadRequest)
 		return
@@ -922,7 +1023,7 @@ func (h *DNSHandler) ApplyDNSToRemote(w http.ResponseWriter, r *http.Request) {
 
 	// Get local records
 	var localDBRecords []models.DNSRecord
-	h.db.Select(&localDBRecords, "SELECT * FROM dns_records WHERE domain_id = $1", domainID)
+	h.db.Select(&localDBRecords, "SELECT * FROM dns_records WHERE dns_domain_id = $1", domainID)
 
 	localRecords := make([]dns.Record, len(localDBRecords))
 	for i, r := range localDBRecords {
@@ -974,6 +1075,9 @@ func (h *DNSHandler) ApplyDNSToRemote(w http.ResponseWriter, r *http.Request) {
 
 // ImportDNSFromRemote imports records from remote provider to local DB
 func (h *DNSHandler) ImportDNSFromRemote(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	vars := mux.Vars(r)
 	domainID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -981,11 +1085,13 @@ func (h *DNSHandler) ImportDNSFromRemote(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var domain struct {
-		FQDN         string     `db:"fqdn"`
-		DNSAccountID *uuid.UUID `db:"dns_account_id"`
+	var domain models.DNSManagedDomain
+	err = h.db.Get(&domain, "SELECT * FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
+	if err != nil {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
 	}
-	h.db.Get(&domain, "SELECT fqdn, dns_account_id FROM domains WHERE id = $1", domainID)
+
 	if domain.DNSAccountID == nil {
 		http.Error(w, "No DNS account configured", http.StatusBadRequest)
 		return
@@ -1010,7 +1116,7 @@ func (h *DNSHandler) ImportDNSFromRemote(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Delete existing local records
-	h.db.Exec("DELETE FROM dns_records WHERE domain_id = $1", domainID)
+	h.db.Exec("DELETE FROM dns_records WHERE dns_domain_id = $1", domainID)
 
 	// Import remote records
 	imported := 0
@@ -1023,7 +1129,7 @@ func (h *DNSHandler) ImportDNSFromRemote(w http.ResponseWriter, r *http.Request)
 
 		_, err := h.db.Exec(`
 			INSERT INTO dns_records (
-				domain_id, name, record_type, value, ttl, priority, proxied,
+				dns_domain_id, name, record_type, value, ttl, priority, proxied,
 				remote_record_id, sync_status, last_synced_at
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'synced', $9)
 		`, domainID, r.Name, r.Type, r.Value, r.TTL, priority, r.Proxied, r.ID, now)
@@ -1045,6 +1151,9 @@ func (h *DNSHandler) ImportDNSFromRemote(w http.ResponseWriter, r *http.Request)
 
 // ListRemoteRecords fetches all records directly from the DNS provider
 func (h *DNSHandler) ListRemoteRecords(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	vars := mux.Vars(r)
 	domainID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -1052,12 +1161,8 @@ func (h *DNSHandler) ListRemoteRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get domain with DNS account
-	var domain struct {
-		FQDN         string     `db:"fqdn"`
-		DNSAccountID *uuid.UUID `db:"dns_account_id"`
-	}
-	err = h.db.Get(&domain, "SELECT fqdn, dns_account_id FROM domains WHERE id = $1", domainID)
+	var domain models.DNSManagedDomain
+	err = h.db.Get(&domain, "SELECT * FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
 	if err != nil {
 		http.Error(w, "Domain not found", http.StatusNotFound)
 		return
@@ -1108,6 +1213,9 @@ type DNSLookupResult struct {
 
 // LookupDNS performs a public DNS lookup for debugging
 func (h *DNSHandler) LookupDNS(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
 	vars := mux.Vars(r)
 	domainID, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -1117,7 +1225,7 @@ func (h *DNSHandler) LookupDNS(w http.ResponseWriter, r *http.Request) {
 
 	// Get domain FQDN
 	var fqdn string
-	err = h.db.Get(&fqdn, "SELECT fqdn FROM domains WHERE id = $1", domainID)
+	err = h.db.Get(&fqdn, "SELECT fqdn FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
 	if err != nil {
 		http.Error(w, "Domain not found", http.StatusNotFound)
 		return
@@ -1165,7 +1273,6 @@ func (h *DNSHandler) LookupDNS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		results["CNAME"] = DNSLookupResult{Type: "CNAME", Records: []string{}, Error: err.Error()}
 	} else {
-		// LookupCNAME returns the canonical name, which might be the same as input
 		cname = strings.TrimSuffix(cname, ".")
 		if cname != lookupName {
 			results["CNAME"] = DNSLookupResult{Type: "CNAME", Records: []string{cname}}
@@ -1216,4 +1323,3 @@ func (h *DNSHandler) LookupDNS(w http.ResponseWriter, r *http.Request) {
 		"results":   results,
 	})
 }
-

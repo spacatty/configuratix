@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { DataTable } from "@/components/ui/data-table";
 import { api, Domain, Machine, NginxConfig } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
-import { ExternalLink, MoreHorizontal, Trash, Link2, FileText, Server, Globe, CheckCircle, XCircle, Cloud, Circle, RefreshCw, Settings2 } from "lucide-react";
+import { ExternalLink, MoreHorizontal, Trash, Link2, FileText, Server, Globe, Circle, Settings2, CheckCircle, XCircle, Cloud } from "lucide-react";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -192,33 +192,6 @@ export default function DomainsPage() {
     }
   };
 
-  const getNSStatusBadge = (status: string | null) => {
-    switch (status) {
-      case "valid":
-        return (
-          <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
-            <CheckCircle className="h-3 w-3 mr-1" />
-            NS OK
-          </Badge>
-        );
-      case "pending":
-        return (
-          <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 text-xs">
-            <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
-            Pending
-          </Badge>
-        );
-      case "invalid":
-        return (
-          <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-xs">
-            <XCircle className="h-3 w-3 mr-1" />
-            Invalid NS
-          </Badge>
-        );
-      default:
-        return null;
-    }
-  };
 
   const columns: ColumnDef<Domain>[] = [
     {
@@ -231,19 +204,16 @@ export default function DomainsPage() {
             <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-blue-500/20 to-blue-500/5 flex items-center justify-center">
               <Globe className="h-5 w-5 text-blue-500" />
             </div>
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2">
-                <span className="font-medium">{domain.fqdn}</span>
-                <a
-                  href={`https://${domain.fqdn}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              </div>
-              {domain.dns_mode === "managed" && domain.ns_status && getNSStatusBadge(domain.ns_status)}
+            <div className="flex items-center gap-2">
+              <span className="font-medium">{domain.fqdn}</span>
+              <a
+                href={`https://${domain.fqdn}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ExternalLink className="h-3 w-3" />
+              </a>
             </div>
           </div>
         );
@@ -253,24 +223,6 @@ export default function DomainsPage() {
       accessorKey: "status",
       header: "Status",
       cell: ({ row }) => getStatusBadge(row.original.status),
-    },
-    {
-      accessorKey: "dns_mode",
-      header: "DNS",
-      cell: ({ row }) => {
-        const domain = row.original;
-        if (domain.dns_mode === "managed" && domain.dns_account_name) {
-          return (
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="text-xs">
-                {domain.dns_account_provider === "cloudflare" ? "CF" : "DNSPod"}
-              </Badge>
-              <span className="text-sm text-muted-foreground">{domain.dns_account_name}</span>
-            </div>
-          );
-        }
-        return <span className="text-muted-foreground text-sm">External</span>;
-      },
     },
     {
       accessorKey: "machine_name",
