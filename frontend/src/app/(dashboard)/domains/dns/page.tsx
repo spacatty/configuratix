@@ -1926,7 +1926,16 @@ function DNSSettingsDialog({
                       </div>
 
                       <p className="text-xs text-muted-foreground pt-2">
-                        {passthroughForm.group_ids.length} group(s) + {passthroughForm.machine_ids.length} machine(s) selected
+                        {passthroughForm.group_ids.length > 0 && (
+                          <span className="text-primary font-medium">{passthroughForm.group_ids.length} group(s)</span>
+                        )}
+                        {passthroughForm.group_ids.length > 0 && passthroughForm.machine_ids.length > 0 && " + "}
+                        {passthroughForm.machine_ids.length > 0 && (
+                          <span>{passthroughForm.machine_ids.length} individual machine(s)</span>
+                        )}
+                        {passthroughForm.group_ids.length === 0 && passthroughForm.machine_ids.length === 0 && (
+                          <span className="text-destructive">No machines selected</span>
+                        )}
                       </p>
                     </div>
 

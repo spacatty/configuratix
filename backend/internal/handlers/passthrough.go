@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
+	"configuratix/backend/internal/dns"
 	"configuratix/backend/internal/models"
 
 	"github.com/google/uuid"
@@ -191,31 +194,60 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 	// Update record mode to 'dynamic'
 	h.db.Exec("UPDATE dns_records SET mode = 'dynamic' WHERE id = $1", recordID)
 
-	// Update members
-	if len(req.MachineIDs) > 0 {
-		// Delete existing members
-		h.db.Exec("DELETE FROM dns_passthrough_members WHERE pool_id = $1", pool.ID)
+	// Update members - delete existing and insert new
+	h.db.Exec("DELETE FROM dns_passthrough_members WHERE pool_id = $1", pool.ID)
 
-		// Insert new members
-		for i, machineIDStr := range req.MachineIDs {
-			machineID, err := uuid.Parse(machineIDStr)
-			if err != nil {
-				continue
+	for i, machineIDStr := range req.MachineIDs {
+		machineID, err := uuid.Parse(machineIDStr)
+		if err != nil {
+			continue
+		}
+		h.db.Exec(`
+			INSERT INTO dns_passthrough_members (pool_id, machine_id, priority, is_enabled)
+			VALUES ($1, $2, $3, true)
+		`, pool.ID, machineID, i)
+	}
+
+	// Collect all machines (direct + from groups) to select first one
+	allMachineIDs := make([]uuid.UUID, 0)
+	for _, idStr := range req.MachineIDs {
+		if id, err := uuid.Parse(idStr); err == nil {
+			allMachineIDs = append(allMachineIDs, id)
+		}
+	}
+	
+	// Add machines from groups
+	if len(req.GroupIDs) > 0 {
+		var groupMachines []uuid.UUID
+		h.db.Select(&groupMachines, `
+			SELECT DISTINCT gm.machine_id 
+			FROM machine_group_members gm 
+			WHERE gm.group_id = ANY($1::uuid[])
+		`, pq.Array(req.GroupIDs))
+		for _, machineID := range groupMachines {
+			// Only add if not already in direct list
+			found := false
+			for _, existing := range allMachineIDs {
+				if existing == machineID {
+					found = true
+					break
+				}
 			}
-			h.db.Exec(`
-				INSERT INTO dns_passthrough_members (pool_id, machine_id, priority, is_enabled)
-				VALUES ($1, $2, $3, true)
-			`, pool.ID, machineID, i)
+			if !found {
+				allMachineIDs = append(allMachineIDs, machineID)
+			}
 		}
 	}
 
-	// If no current machine is set, select the first one
-	if pool.CurrentMachineID == nil && len(req.MachineIDs) > 0 {
-		firstMachineID, _ := uuid.Parse(req.MachineIDs[0])
+	// If no current machine is set, select the first available one
+	if pool.CurrentMachineID == nil && len(allMachineIDs) > 0 {
+		firstMachineID := allMachineIDs[0]
 		h.db.Exec("UPDATE dns_passthrough_pools SET current_machine_id = $1 WHERE id = $2", firstMachineID, pool.ID)
 		
-		// Update DNS record to point to this machine
-		h.updateDNSRecordToMachine(recordID, firstMachineID, "manual")
+		// Update DNS record to point to this machine (syncs to provider)
+		if err := h.updateDNSRecordToMachine(recordID, firstMachineID, "initial"); err != nil {
+			log.Printf("Failed to update DNS record to first machine: %v", err)
+		}
 	}
 
 	// Regenerate and deploy nginx configs to all pool members
@@ -886,50 +918,136 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 	var machineIP string
 	err := h.db.Get(&machineIP, "SELECT ip_address FROM machines WHERE id = $1", machineID)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get machine IP: %w", err)
 	}
 
-	// Get record and domain info
-	var record struct {
-		Name         string    `db:"name"`
-		DNSDomainID  uuid.UUID `db:"dns_domain_id"`
-		DNSAccountID uuid.UUID `db:"dns_account_id"`
+	// Get full record info with domain and account
+	var recordInfo struct {
+		ID           uuid.UUID  `db:"id"`
+		Name         string     `db:"name"`
+		RecordType   string     `db:"record_type"`
+		Value        string     `db:"value"`
+		TTL          int        `db:"ttl"`
+		Priority     int        `db:"priority"`
+		Proxied      bool       `db:"proxied"`
+		ProviderID   *string    `db:"provider_record_id"`
+		DNSDomainID  uuid.UUID  `db:"dns_domain_id"`
+		DomainFQDN   string     `db:"domain_fqdn"`
+		DNSAccountID *uuid.UUID `db:"dns_account_id"`
 	}
-	err = h.db.Get(&record, `
-		SELECT r.name, r.dns_domain_id, d.dns_account_id
+	err = h.db.Get(&recordInfo, `
+		SELECT r.id, r.name, r.record_type, r.value, r.ttl, r.priority, r.proxied,
+			   r.provider_record_id, r.dns_domain_id, d.fqdn as domain_fqdn, d.dns_account_id
 		FROM dns_records r
 		JOIN dns_managed_domains d ON r.dns_domain_id = d.id
 		WHERE r.id = $1
 	`, recordID)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get record info: %w", err)
 	}
 
-	// Get DNS account and provider
-	var account struct {
-		Provider    string `db:"provider"`
-		Credentials string `db:"credentials"`
-	}
-	err = h.db.Get(&account, "SELECT provider, credentials FROM dns_accounts WHERE id = $1", record.DNSAccountID)
-	if err != nil {
-		return err
-	}
+	log.Printf("DNS Passthrough: Updating %s.%s from %s to %s (trigger: %s)", 
+		recordInfo.Name, recordInfo.DomainFQDN, recordInfo.Value, machineIP, trigger)
 
-	// Get domain name
-	var domainName string
-	h.db.Get(&domainName, "SELECT name FROM dns_managed_domains WHERE id = $1", record.DNSDomainID)
-
-	// Update via DNS provider
-	// This would call the appropriate provider's UpdateRecord method
-	log.Printf("DNS Passthrough: Updating %s.%s to %s (trigger: %s)", record.Name, domainName, machineIP, trigger)
-
-	// Update local record
+	// Update local record first
 	h.db.Exec("UPDATE dns_records SET value = $1, sync_status = 'pending', updated_at = NOW() WHERE id = $2", machineIP, recordID)
 
-	// TODO: Actually call the DNS provider to update the record
-	// For now, mark as synced (in production, this would be async)
-	h.db.Exec("UPDATE dns_records SET sync_status = 'synced' WHERE id = $1", recordID)
+	// If no DNS account, just update locally
+	if recordInfo.DNSAccountID == nil {
+		h.db.Exec("UPDATE dns_records SET sync_status = 'synced' WHERE id = $1", recordID)
+		return nil
+	}
 
+	// Get DNS account and create provider
+	var account models.DNSAccount
+	err = h.db.Get(&account, "SELECT * FROM dns_accounts WHERE id = $1", *recordInfo.DNSAccountID)
+	if err != nil {
+		h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", 
+			"DNS account not found", recordID)
+		return fmt.Errorf("failed to get DNS account: %w", err)
+	}
+
+	// Build apiID (DNSPod needs it, Cloudflare doesn't)
+	apiID := ""
+	if account.ApiID != nil {
+		apiID = *account.ApiID
+	}
+	provider, err := dns.NewProvider(account.Provider, apiID, account.ApiToken)
+	if err != nil {
+		h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", 
+			err.Error(), recordID)
+		return fmt.Errorf("failed to create DNS provider: %w", err)
+	}
+
+	// Build record for update
+	providerRecordID := ""
+	if recordInfo.ProviderID != nil {
+		providerRecordID = *recordInfo.ProviderID
+	}
+	
+	dnsRecord := dns.Record{
+		ID:       providerRecordID,
+		Type:     recordInfo.RecordType,
+		Name:     recordInfo.Name,
+		Value:    machineIP,
+		TTL:      recordInfo.TTL,
+		Priority: recordInfo.Priority,
+		Proxied:  recordInfo.Proxied,
+	}
+
+	ctx := context.Background()
+	
+	// Try to update existing record, or create if it doesn't exist
+	if providerRecordID != "" {
+		// Update existing record
+		_, err = provider.UpdateRecord(ctx, recordInfo.DomainFQDN, providerRecordID, dnsRecord)
+		if err != nil {
+			log.Printf("Failed to update record on provider, trying delete+create: %v", err)
+			// Try delete and recreate
+			provider.DeleteRecord(ctx, recordInfo.DomainFQDN, providerRecordID)
+			createdRecord, createErr := provider.CreateRecord(ctx, recordInfo.DomainFQDN, dnsRecord)
+			if createErr != nil {
+				h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", 
+					createErr.Error(), recordID)
+				return fmt.Errorf("failed to sync DNS record: %w", createErr)
+			}
+			providerRecordID = createdRecord.ID
+		}
+	} else {
+		// Create new record on provider
+		createdRecord, createErr := provider.CreateRecord(ctx, recordInfo.DomainFQDN, dnsRecord)
+		if createErr != nil {
+			// Record might already exist - try to find it and update
+			remoteRecords, listErr := provider.ListRecords(ctx, recordInfo.DomainFQDN)
+			if listErr == nil {
+				for _, remote := range remoteRecords {
+					if remote.Name == recordInfo.Name && remote.Type == recordInfo.RecordType {
+						// Found existing record - update it
+						dnsRecord.ID = remote.ID
+						updatedRecord, updateErr := provider.UpdateRecord(ctx, recordInfo.DomainFQDN, remote.ID, dnsRecord)
+						if updateErr == nil {
+							providerRecordID = updatedRecord.ID
+							createErr = nil
+						}
+						break
+					}
+				}
+			}
+			if createErr != nil {
+				h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", 
+					createErr.Error(), recordID)
+				return fmt.Errorf("failed to create DNS record on provider: %w", createErr)
+			}
+		} else {
+			providerRecordID = createdRecord.ID
+		}
+	}
+
+	// Update local record with provider ID and mark as synced
+	h.db.Exec("UPDATE dns_records SET provider_record_id = $1, sync_status = 'synced', sync_error = NULL WHERE id = $2", 
+		providerRecordID, recordID)
+
+	log.Printf("DNS Passthrough: Successfully synced %s.%s = %s", recordInfo.Name, recordInfo.DomainFQDN, machineIP)
 	return nil
 }
 
