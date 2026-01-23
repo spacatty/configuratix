@@ -235,6 +235,7 @@ export interface DNSManagedDomain {
   owner_id: string;
   fqdn: string;
   dns_account_id: string | null;
+  proxy_mode: string; // 'separate' or 'wildcard'
   ns_status: string; // unknown, pending, valid, invalid
   ns_last_check: string | null;
   ns_expected: string[] | null;
@@ -273,8 +274,125 @@ export interface DNSRecord {
   sync_status: string; // synced, pending, conflict, local_only, remote_only, error
   sync_error: string | null;
   last_synced_at: string | null;
+  mode: string; // 'static' or 'dynamic'
   created_at: string;
   updated_at: string;
+}
+
+// DNS Passthrough (Dynamic rotation) types
+export interface PassthroughPool {
+  id: string;
+  dns_record_id: string;
+  target_ip: string;
+  target_port: number;
+  rotation_strategy: string; // 'round_robin' or 'random'
+  rotation_mode: string; // 'interval' or 'scheduled'
+  interval_minutes: number;
+  scheduled_times: string[];
+  health_check_enabled: boolean;
+  current_machine_id: string | null;
+  current_index: number;
+  is_paused: boolean;
+  last_rotated_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PassthroughMember {
+  id: string;
+  pool_id: string;
+  machine_id: string;
+  priority: number;
+  is_enabled: boolean;
+  nginx_config_applied: boolean;
+  created_at: string;
+  // Extended fields
+  machine_name?: string;
+  machine_ip?: string;
+  last_seen?: string;
+  is_online?: boolean;
+}
+
+export interface PassthroughPoolResponse {
+  pool: PassthroughPool;
+  members: PassthroughMember[];
+}
+
+export interface PassthroughPoolRequest {
+  target_ip: string;
+  target_port?: number;
+  rotation_strategy?: string;
+  rotation_mode?: string;
+  interval_minutes?: number;
+  scheduled_times?: string[];
+  health_check_enabled?: boolean;
+  machine_ids: string[];
+}
+
+export interface WildcardPool {
+  id: string;
+  dns_domain_id: string;
+  include_root: boolean;
+  target_ip: string;
+  target_port: number;
+  rotation_strategy: string;
+  rotation_mode: string;
+  interval_minutes: number;
+  scheduled_times: string[];
+  health_check_enabled: boolean;
+  current_machine_id: string | null;
+  current_index: number;
+  is_paused: boolean;
+  last_rotated_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WildcardPoolMember {
+  id: string;
+  pool_id: string;
+  machine_id: string;
+  priority: number;
+  is_enabled: boolean;
+  nginx_config_applied: boolean;
+  created_at: string;
+  machine_name?: string;
+  machine_ip?: string;
+  last_seen?: string;
+  is_online?: boolean;
+}
+
+export interface WildcardPoolResponse {
+  pool: WildcardPool;
+  members: WildcardPoolMember[];
+}
+
+export interface WildcardPoolRequest {
+  include_root?: boolean;
+  target_ip: string;
+  target_port?: number;
+  rotation_strategy?: string;
+  rotation_mode?: string;
+  interval_minutes?: number;
+  scheduled_times?: string[];
+  health_check_enabled?: boolean;
+  machine_ids: string[];
+}
+
+export interface RotationHistory {
+  id: string;
+  pool_type: string;
+  pool_id: string;
+  dns_domain_id: string | null;
+  record_name: string | null;
+  from_machine_id: string | null;
+  from_ip: string;
+  to_machine_id: string | null;
+  to_ip: string;
+  trigger: string; // 'scheduled', 'manual', 'health'
+  rotated_at: string;
+  from_machine_name?: string;
+  to_machine_name?: string;
 }
 
 export interface NSStatus {
@@ -1013,6 +1131,78 @@ class ApiClient {
     }>;
   }> {
     return this.request(`/api/dns-domains/${dnsDomainId}/remote-records`);
+  }
+
+  // DNS Passthrough (Dynamic rotation)
+  async getDomainProxyMode(domainId: string): Promise<{ proxy_mode: string }> {
+    return this.request(`/api/dns-domains/${domainId}/proxy-mode`);
+  }
+
+  async setDomainProxyMode(domainId: string, proxyMode: string): Promise<void> {
+    return this.request(`/api/dns-domains/${domainId}/proxy-mode`, {
+      method: "PUT",
+      body: JSON.stringify({ proxy_mode: proxyMode }),
+    });
+  }
+
+  // Record pool (for separate mode)
+  async getRecordPool(recordId: string): Promise<PassthroughPoolResponse> {
+    return this.request(`/api/dns/records/${recordId}/passthrough`);
+  }
+
+  async createOrUpdateRecordPool(recordId: string, data: PassthroughPoolRequest): Promise<PassthroughPool> {
+    return this.request(`/api/dns/records/${recordId}/passthrough`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteRecordPool(recordId: string): Promise<void> {
+    return this.request(`/api/dns/records/${recordId}/passthrough`, { method: "DELETE" });
+  }
+
+  async rotateRecordPool(poolId: string): Promise<void> {
+    return this.request(`/api/dns/passthrough/${poolId}/rotate`, { method: "POST" });
+  }
+
+  async pauseRecordPool(poolId: string): Promise<void> {
+    return this.request(`/api/dns/passthrough/${poolId}/pause`, { method: "POST" });
+  }
+
+  async resumeRecordPool(poolId: string): Promise<void> {
+    return this.request(`/api/dns/passthrough/${poolId}/resume`, { method: "POST" });
+  }
+
+  async getRotationHistory(poolId: string): Promise<RotationHistory[]> {
+    return this.request(`/api/dns/passthrough/${poolId}/history`);
+  }
+
+  // Wildcard pool (for wildcard mode)
+  async getWildcardPool(domainId: string): Promise<WildcardPoolResponse> {
+    return this.request(`/api/dns-domains/${domainId}/wildcard`);
+  }
+
+  async createOrUpdateWildcardPool(domainId: string, data: WildcardPoolRequest): Promise<WildcardPool> {
+    return this.request(`/api/dns-domains/${domainId}/wildcard`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteWildcardPool(domainId: string): Promise<void> {
+    return this.request(`/api/dns-domains/${domainId}/wildcard`, { method: "DELETE" });
+  }
+
+  async rotateWildcardPool(poolId: string): Promise<void> {
+    return this.request(`/api/dns/wildcard/${poolId}/rotate`, { method: "POST" });
+  }
+
+  async pauseWildcardPool(poolId: string): Promise<void> {
+    return this.request(`/api/dns/wildcard/${poolId}/pause`, { method: "POST" });
+  }
+
+  async resumeWildcardPool(poolId: string): Promise<void> {
+    return this.request(`/api/dns/wildcard/${poolId}/resume`, { method: "POST" });
   }
 
   // Nginx Configs

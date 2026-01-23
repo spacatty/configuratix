@@ -10,6 +10,7 @@ import (
 	"configuratix/backend/internal/handlers"
 	"configuratix/backend/internal/middleware"
 	"configuratix/backend/internal/scheduler"
+	"configuratix/backend/internal/services"
 
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
@@ -205,6 +206,27 @@ func main() {
 	apiRouter.HandleFunc("/dns-domains/{id}/lookup", dnsHandler.LookupDNS).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/dns-domains/{id}/remote-records", dnsHandler.ListRemoteRecords).Methods("GET", "OPTIONS")
 
+	// DNS Passthrough (Dynamic rotation pools)
+	passthroughHandler := handlers.NewPassthroughHandler(db, dnsHandler)
+	// Domain proxy mode
+	apiRouter.HandleFunc("/dns-domains/{domainId}/proxy-mode", passthroughHandler.GetDomainProxyMode).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{domainId}/proxy-mode", passthroughHandler.SetDomainProxyMode).Methods("PUT", "OPTIONS")
+	// Record pools (for separate record mode)
+	apiRouter.HandleFunc("/dns/records/{recordId}/passthrough", passthroughHandler.GetRecordPool).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/dns/records/{recordId}/passthrough", passthroughHandler.CreateOrUpdateRecordPool).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns/records/{recordId}/passthrough", passthroughHandler.DeleteRecordPool).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/dns/passthrough/{poolId}/rotate", passthroughHandler.RotateRecordPool).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns/passthrough/{poolId}/pause", passthroughHandler.PauseRecordPool).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns/passthrough/{poolId}/resume", passthroughHandler.ResumeRecordPool).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns/passthrough/{poolId}/history", passthroughHandler.GetRotationHistory).Methods("GET", "OPTIONS")
+	// Wildcard pools (for wildcard mode)
+	apiRouter.HandleFunc("/dns-domains/{domainId}/wildcard", passthroughHandler.GetWildcardPool).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{domainId}/wildcard", passthroughHandler.CreateOrUpdateWildcardPool).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{domainId}/wildcard", passthroughHandler.DeleteWildcardPool).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/dns/wildcard/{poolId}/rotate", passthroughHandler.RotateWildcardPool).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns/wildcard/{poolId}/pause", passthroughHandler.PauseWildcardPool).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns/wildcard/{poolId}/resume", passthroughHandler.ResumeWildcardPool).Methods("POST", "OPTIONS")
+
 	// Nginx Configs
 	nginxConfigsHandler := handlers.NewNginxConfigsHandler(db)
 	apiRouter.HandleFunc("/nginx-configs", nginxConfigsHandler.ListNginxConfigs).Methods("GET", "OPTIONS")
@@ -266,6 +288,11 @@ func main() {
 	sched := scheduler.New(db, checkInterval)
 	sched.Start()
 	defer sched.Stop()
+
+	// Start passthrough scheduler for DNS rotation
+	passthroughSched := services.NewPassthroughScheduler(db)
+	go passthroughSched.Start()
+	defer passthroughSched.Stop()
 
 	port := os.Getenv("PORT")
 	if port == "" {

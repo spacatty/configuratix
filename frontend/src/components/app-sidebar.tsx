@@ -204,6 +204,16 @@ export function AppSidebar({ user }: AppSidebarProps) {
                   </a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+
+              {/* DNS Management - Last in Workspace */}
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/domains/dns")}>
+                  <a href="/domains/dns" className="flex items-center gap-3">
+                    <Settings className="h-4 w-4" />
+                    <span>DNS Management</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -215,14 +225,6 @@ export function AppSidebar({ user }: AppSidebarProps) {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/domains/dns")}>
-                  <a href="/domains/dns" className="flex items-center gap-3">
-                    <Settings className="h-4 w-4" />
-                    <span>DNS Management</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild isActive={isActive("/static")}>
                   <a href="/static" className="flex items-center gap-3">
