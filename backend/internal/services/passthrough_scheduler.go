@@ -252,13 +252,19 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 	`, nextMachine.MachineID, newIndex, pool.ID)
 
 	// Log history
-	_, histErr := s.db.Exec(`
+	log.Printf("Scheduler: inserting history - pool=%s, from=%v, from_ip=%s, to=%s, to_ip=%s",
+		pool.ID, pool.CurrentMachineID, fromIP, nextMachine.MachineID, nextMachine.MachineIP)
+	
+	result, histErr := s.db.Exec(`
 		INSERT INTO dns_rotation_history 
 			(pool_type, pool_id, from_machine_id, from_ip, to_machine_id, to_ip, trigger)
 		VALUES ('record', $1, $2, $3, $4, $5, 'scheduled')
 	`, pool.ID, pool.CurrentMachineID, fromIP, nextMachine.MachineID, nextMachine.MachineIP)
 	if histErr != nil {
 		log.Printf("Scheduler: failed to insert rotation history: %v", histErr)
+	} else {
+		rows, _ := result.RowsAffected()
+		log.Printf("Scheduler: history inserted, %d rows affected", rows)
 	}
 
 	log.Printf("Passthrough scheduler: rotated pool %s to %s (%s)", pool.ID, nextMachine.MachineID, nextMachine.MachineIP)

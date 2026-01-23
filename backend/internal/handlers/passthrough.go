@@ -372,7 +372,7 @@ func (h *PassthroughHandler) GetRotationHistory(w http.ResponseWriter, r *http.R
 	}
 
 	var history []models.RotationHistoryWithDetails
-	h.db.Select(&history, `
+	err = h.db.Select(&history, `
 		SELECT rh.*,
 			COALESCE(NULLIF(fm.title, ''), fm.hostname, '') as from_machine_name,
 			COALESCE(NULLIF(tm.title, ''), tm.hostname, '') as to_machine_name
@@ -383,6 +383,10 @@ func (h *PassthroughHandler) GetRotationHistory(w http.ResponseWriter, r *http.R
 		ORDER BY rh.rotated_at DESC
 		LIMIT 50
 	`, poolID)
+	if err != nil {
+		log.Printf("Failed to get rotation history for pool %s: %v", poolID, err)
+	}
+	log.Printf("GetRotationHistory: pool=%s, found %d records", poolID, len(history))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(history)
