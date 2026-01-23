@@ -4,7 +4,6 @@
 package files
 
 import (
-	"encoding/json"
 	"io/fs"
 	"log"
 	"net/http"
