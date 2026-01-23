@@ -562,16 +562,22 @@ export default function MachinesPage() {
               if (isSelected) {
                 setSelectedGroupFilter(null);
               } else {
-                // Load members if not already loaded
-                if (!groupMembers[group.id] || groupMembers[group.id].length === 0) {
-                  try {
-                    const members = await api.getGroupMembers(group.id);
-                    setGroupMembers(prev => ({ ...prev, [group.id]: members || [] }));
-                  } catch (err) {
-                    console.error("Failed to load group members:", err);
-                  }
+                // Load members and set filter
+                try {
+                  const members = await api.getGroupMembers(group.id);
+                  const membersList = members || [];
+                  // Update both at once - React batches these
+                  setGroupMembers(prev => {
+                    const updated = { ...prev, [group.id]: membersList };
+                    // Debug log
+                    console.log(`Loaded ${membersList.length} members for group ${group.id}`, membersList.map(m => m.id));
+                    return updated;
+                  });
+                  setSelectedGroupFilter(group.id);
+                } catch (err) {
+                  console.error("Failed to load group members:", err);
+                  toast.error("Failed to load group members");
                 }
-                setSelectedGroupFilter(group.id);
               }
             };
             
@@ -616,10 +622,14 @@ export default function MachinesPage() {
         <CardContent className="flex-1 overflow-auto p-6">
           <DataTable 
             columns={columns} 
-            data={selectedGroupFilter 
-              ? machines.filter(m => (groupMembers[selectedGroupFilter] || []).some(gm => gm.id === m.id))
-              : machines
-            }
+            data={(() => {
+              if (!selectedGroupFilter) return machines;
+              const members = groupMembers[selectedGroupFilter] || [];
+              const memberIds = new Set(members.map(m => m.id));
+              const filtered = machines.filter(m => memberIds.has(m.id));
+              console.log(`Filter: group=${selectedGroupFilter}, members=${members.length}, memberIds=`, [...memberIds], `filtered=${filtered.length}`);
+              return filtered;
+            })()}
             searchKey="title"
             searchPlaceholder="Search machines by name, hostname, or IP..."
           />

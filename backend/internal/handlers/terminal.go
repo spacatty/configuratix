@@ -401,7 +401,7 @@ func (h *TerminalHandler) GetTerminalStatus(w http.ResponseWriter, r *http.Reque
 		session.agentConnLock.Lock()
 		status["agent_connected"] = session.agentConn != nil
 		session.agentConnLock.Unlock()
-		
+
 		session.userConnsLock.Lock()
 		status["users_connected"] = len(session.userConns)
 		session.userConnsLock.Unlock()
