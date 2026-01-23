@@ -105,6 +105,10 @@ export interface MachineGroup {
   machine_count?: number;
 }
 
+export interface MachineGroupWithCount extends MachineGroup {
+  machine_count: number;
+}
+
 export interface MachineGroupMember {
   id: string;
   title: string | null;
@@ -858,8 +862,8 @@ class ApiClient {
   }
 
   // Machine Groups
-  async listMachineGroups(): Promise<MachineGroup[]> {
-    return this.request<MachineGroup[]>("/api/machine-groups");
+  async listMachineGroups(): Promise<MachineGroupWithCount[]> {
+    return this.request<MachineGroupWithCount[]>("/api/machine-groups");
   }
 
   async createMachineGroup(data: { name: string; emoji?: string; color?: string }): Promise<MachineGroup> {

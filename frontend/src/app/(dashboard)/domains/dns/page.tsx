@@ -1841,7 +1841,7 @@ function DNSSettingsDialog({
                               >
                                 {group.emoji && <span className="mr-1">{group.emoji}</span>}
                                 {group.name}
-                                <span className="ml-1 opacity-70">({group.item_count})</span>
+                                <span className="ml-1 opacity-70">({group.machine_count})</span>
                               </Badge>
                             );
                           })}
@@ -1851,10 +1851,32 @@ function DNSSettingsDialog({
 
                     {/* Machine Selection */}
                     <div className="space-y-2">
-                      <Label className="text-xs flex items-center gap-1">
-                        <Server className="h-3 w-3" />
-                        Select Individual Machines
-                      </Label>
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs flex items-center gap-1">
+                          <Server className="h-3 w-3" />
+                          Select Individual Machines
+                        </Label>
+                        <div className="flex gap-1">
+                          <Button 
+                            type="button"
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-6 text-xs px-2"
+                            onClick={() => setPassthroughForm(f => ({ ...f, machine_ids: machines.map(m => m.id) }))}
+                          >
+                            Select All
+                          </Button>
+                          <Button 
+                            type="button"
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-6 text-xs px-2"
+                            onClick={() => setPassthroughForm(f => ({ ...f, machine_ids: [] }))}
+                          >
+                            Unselect All
+                          </Button>
+                        </div>
+                      </div>
                       <div className="border rounded-md max-h-40 overflow-y-auto">
                         {machines.length === 0 ? (
                           <p className="p-3 text-sm text-muted-foreground text-center">No machines available</p>
@@ -1878,12 +1900,12 @@ function DNSSettingsDialog({
                                     }));
                                   }}
                                 />
-                                <Server className="h-4 w-4 text-muted-foreground" />
-                                <div className="flex-1">
-                                  <span className="font-medium text-sm">{machine.name}</span>
-                                  <span className="text-xs text-muted-foreground ml-2">{machine.ip_address}</span>
+                                <div className={`h-2 w-2 rounded-full flex-shrink-0 ${isOnline ? "bg-green-500" : "bg-red-500"}`} />
+                                <div className="flex-1 min-w-0">
+                                  <span className="font-medium text-sm">{machine.name || machine.hostname || "Unknown"}</span>
+                                  <span className="text-muted-foreground mx-1">-</span>
+                                  <span className="text-xs text-muted-foreground font-mono">{machine.ip_address}</span>
                                 </div>
-                                <div className={`h-2 w-2 rounded-full ${isOnline ? "bg-green-500" : "bg-red-500"}`} />
                               </label>
                             );
                           })
@@ -1999,7 +2021,29 @@ function DNSSettingsDialog({
               </div>
               
               <div className="space-y-2">
-                <Label className="text-xs">Select Proxy Machines</Label>
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs">Select Proxy Machines</Label>
+                  <div className="flex gap-1">
+                    <Button 
+                      type="button"
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-6 text-xs px-2"
+                      onClick={() => setPoolForm(f => ({ ...f, machine_ids: machines.map(m => m.id) }))}
+                    >
+                      Select All
+                    </Button>
+                    <Button 
+                      type="button"
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-6 text-xs px-2"
+                      onClick={() => setPoolForm(f => ({ ...f, machine_ids: [] }))}
+                    >
+                      Unselect All
+                    </Button>
+                  </div>
+                </div>
                 <div className="border rounded-md max-h-48 overflow-y-auto">
                   {machines.length === 0 ? (
                     <p className="p-4 text-sm text-muted-foreground text-center">No machines available</p>
@@ -2024,15 +2068,15 @@ function DNSSettingsDialog({
                               }));
                             }}
                           />
-                          <Server className="h-4 w-4 text-muted-foreground" />
-                          <div className="flex-1">
+                          <div className={`h-2 w-2 rounded-full flex-shrink-0 ${isOnline ? "bg-green-500" : "bg-red-500"}`} title={isOnline ? "Online" : "Offline"} />
+                          <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className="font-medium text-sm">{machine.name}</span>
-                              {isCurrent && <Badge variant="default" className="text-[10px] py-0">Current</Badge>}
+                              <span className="font-medium text-sm">{machine.name || machine.hostname || "Unknown"}</span>
+                              <span className="text-muted-foreground">-</span>
+                              <span className="text-xs text-muted-foreground font-mono">{machine.ip_address}</span>
+                              {isCurrent && <Badge variant="default" className="text-[10px] py-0 ml-auto">Current</Badge>}
                             </div>
-                            <span className="text-xs text-muted-foreground">{machine.ip_address}</span>
                           </div>
-                          <div className={`h-2 w-2 rounded-full ${isOnline ? "bg-green-500" : "bg-red-500"}`} title={isOnline ? "Online" : "Offline"} />
                         </label>
                       );
                     })
@@ -2482,7 +2526,29 @@ function DNSSettingsDialog({
 
               {/* Machine Selection */}
               <div className="space-y-2">
-                <Label className="text-xs">Proxy Machines</Label>
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs">Proxy Machines</Label>
+                  <div className="flex gap-1">
+                    <Button 
+                      type="button"
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-6 text-xs px-2"
+                      onClick={() => setPoolForm(f => ({ ...f, machine_ids: machines.map(m => m.id) }))}
+                    >
+                      Select All
+                    </Button>
+                    <Button 
+                      type="button"
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-6 text-xs px-2"
+                      onClick={() => setPoolForm(f => ({ ...f, machine_ids: [] }))}
+                    >
+                      Unselect All
+                    </Button>
+                  </div>
+                </div>
                 <div className="border rounded-md max-h-40 overflow-y-auto">
                   {machines.length === 0 ? (
                     <p className="p-4 text-sm text-muted-foreground text-center">No machines</p>
@@ -2507,13 +2573,13 @@ function DNSSettingsDialog({
                               }));
                             }}
                           />
-                          <Server className="h-4 w-4 text-muted-foreground" />
-                          <div className="flex-1 flex items-center gap-2">
-                            <span className="font-medium text-sm">{machine.name}</span>
-                            {isCurrent && <Badge variant="default" className="text-[10px] py-0">Current</Badge>}
-                            <span className="text-xs text-muted-foreground">({machine.ip_address})</span>
+                          <div className={`h-2 w-2 rounded-full flex-shrink-0 ${isOnline ? "bg-green-500" : "bg-red-500"}`} />
+                          <div className="flex-1 min-w-0">
+                            <span className="font-medium text-sm">{machine.name || machine.hostname || "Unknown"}</span>
+                            <span className="text-muted-foreground mx-1">-</span>
+                            <span className="text-xs text-muted-foreground font-mono">{machine.ip_address}</span>
+                            {isCurrent && <Badge variant="default" className="text-[10px] py-0 ml-2">Current</Badge>}
                           </div>
-                          <div className={`h-2 w-2 rounded-full ${isOnline ? "bg-green-500" : "bg-red-500"}`} />
                         </label>
                       );
                     })
