@@ -163,6 +163,9 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 
 	scheduledTimesJSON, _ := json.Marshal(req.ScheduledTimes)
 	groupIDsArray := pq.StringArray(req.GroupIDs)
+	
+	log.Printf("CreateOrUpdateRecordPool: machine_ids=%v, group_ids=%v, groupIDsArray=%v", 
+		req.MachineIDs, req.GroupIDs, groupIDsArray)
 
 	// Upsert pool
 	var pool models.PassthroughPool
@@ -190,6 +193,7 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 		http.Error(w, "Failed to save pool", http.StatusInternalServerError)
 		return
 	}
+	log.Printf("CreateOrUpdateRecordPool: pool saved, id=%s, group_ids in pool=%v", pool.ID, pool.GroupIDs)
 
 	// Update record mode to 'dynamic'
 	h.db.Exec("UPDATE dns_records SET mode = 'dynamic' WHERE id = $1", recordID)
@@ -197,15 +201,22 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 	// Update members - delete existing and insert new
 	h.db.Exec("DELETE FROM dns_passthrough_members WHERE pool_id = $1", pool.ID)
 
+	log.Printf("CreateOrUpdateRecordPool: inserting %d direct members", len(req.MachineIDs))
 	for i, machineIDStr := range req.MachineIDs {
 		machineID, err := uuid.Parse(machineIDStr)
 		if err != nil {
+			log.Printf("CreateOrUpdateRecordPool: invalid machine ID %s: %v", machineIDStr, err)
 			continue
 		}
-		h.db.Exec(`
+		_, err = h.db.Exec(`
 			INSERT INTO dns_passthrough_members (pool_id, machine_id, priority, is_enabled)
 			VALUES ($1, $2, $3, true)
 		`, pool.ID, machineID, i)
+		if err != nil {
+			log.Printf("CreateOrUpdateRecordPool: failed to insert member %s: %v", machineID, err)
+		} else {
+			log.Printf("CreateOrUpdateRecordPool: inserted member %s", machineID)
+		}
 	}
 
 	// Collect all machines (direct + from groups) to select first one
@@ -681,12 +692,14 @@ func (h *PassthroughHandler) selectNextMachine(poolID uuid.UUID, strategy string
 	// Get pool to check for group_ids
 	var pool models.PassthroughPool
 	if err := h.db.Get(&pool, "SELECT * FROM dns_passthrough_pools WHERE id = $1", poolID); err != nil {
+		log.Printf("selectNextMachine: failed to get pool %s: %v", poolID, err)
 		return nil, err
 	}
+	log.Printf("selectNextMachine: pool %s has %d group_ids: %v", poolID, len(pool.GroupIDs), pool.GroupIDs)
 
 	// Get direct members
 	var members []models.PassthroughMemberWithMachine
-	h.db.Select(&members, `
+	err := h.db.Select(&members, `
 		SELECT pm.*, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
 		FROM dns_passthrough_members pm
 		JOIN machines m ON pm.machine_id = m.id
@@ -694,6 +707,10 @@ func (h *PassthroughHandler) selectNextMachine(poolID uuid.UUID, strategy string
 		WHERE pm.pool_id = $1 AND pm.is_enabled = true
 		ORDER BY pm.priority, m.name
 	`, poolID)
+	if err != nil {
+		log.Printf("selectNextMachine: failed to get direct members: %v", err)
+	}
+	log.Printf("selectNextMachine: found %d direct members", len(members))
 
 	// Add machines from groups (deduplicated)
 	if len(pool.GroupIDs) > 0 {
@@ -703,13 +720,17 @@ func (h *PassthroughHandler) selectNextMachine(poolID uuid.UUID, strategy string
 			MachineIP   string     `db:"machine_ip"`
 			LastSeen    *time.Time `db:"last_seen"`
 		}
-		h.db.Select(&groupMachines, `
+		err := h.db.Select(&groupMachines, `
 			SELECT DISTINCT m.id as machine_id, m.name as machine_name, m.ip_address as machine_ip, a.last_seen
 			FROM machine_group_members gm
 			JOIN machines m ON gm.machine_id = m.id
 			LEFT JOIN agents a ON m.agent_id = a.id
 			WHERE gm.group_id = ANY($1::uuid[])
 		`, pool.GroupIDs)
+		if err != nil {
+			log.Printf("selectNextMachine: failed to get group machines: %v", err)
+		}
+		log.Printf("selectNextMachine: found %d machines from groups", len(groupMachines))
 
 		// Add group machines that aren't already direct members
 		existingIDs := make(map[uuid.UUID]bool)
@@ -732,6 +753,7 @@ func (h *PassthroughHandler) selectNextMachine(poolID uuid.UUID, strategy string
 		}
 	}
 
+	log.Printf("selectNextMachine: total %d machines available", len(members))
 	if len(members) == 0 {
 		return nil, sql.ErrNoRows
 	}
