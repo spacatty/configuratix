@@ -18,7 +18,7 @@ import (
 	"configuratix/agent/internal/updater"
 )
 
-const Version = "0.4.0"
+const Version = "0.4.1"
 
 func main() {
 	enrollCmd := flag.NewFlagSet("enroll", flag.ExitOnError)
@@ -108,6 +108,7 @@ func run() error {
 
 	c := client.New(cfg.ServerURL, cfg.APIKey)
 	exec := executor.New()
+	exec.SetConfig(cfg.ServerURL, cfg.APIKey)
 
 	// Start terminal connection in background
 	go terminal.RunTerminalLoop(cfg.ServerURL, cfg.APIKey)

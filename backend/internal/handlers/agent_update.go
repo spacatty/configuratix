@@ -19,7 +19,7 @@ import (
 
 // CurrentAgentVersion is the version that should be distributed
 // This should match the version in agent/cmd/agent/main.go
-const CurrentAgentVersion = "0.4.0"
+const CurrentAgentVersion = "0.4.1"
 
 // AgentUpdateHandler handles agent update distribution
 type AgentUpdateHandler struct {
