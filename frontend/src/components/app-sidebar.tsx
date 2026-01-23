@@ -72,7 +72,6 @@ export function AppSidebar({ user }: AppSidebarProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [machinesOpen, setMachinesOpen] = useState(true);
-  const [domainsOpen, setDomainsOpen] = useState(true);
 
   useEffect(() => {
     if (user) {
@@ -196,35 +195,15 @@ export function AppSidebar({ user }: AppSidebarProps) {
                 </SidebarMenuItem>
               </Collapsible>
 
-              {/* Domains - Collapsible with DNS */}
-              <Collapsible open={domainsOpen} onOpenChange={setDomainsOpen} defaultOpen>
-                <SidebarMenuItem>
-                  <CollapsibleTrigger asChild>
-                    <SidebarMenuButton isActive={isActive("/domains")}>
-                      <Globe className="h-4 w-4" />
-                      <span className="flex-1">Domains</span>
-                      <ChevronRight className={`h-4 w-4 transition-transform ${domainsOpen ? "rotate-90" : ""}`} />
-                    </SidebarMenuButton>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <SidebarMenuSub>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild isActive={pathname === "/domains"}>
-                          <a href="/domains">All Domains</a>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild isActive={pathname === "/domains/dns"}>
-                          <a href="/domains/dns" className="flex items-center gap-2">
-                            <Settings className="h-3 w-3" />
-                            DNS Management
-                          </a>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                    </SidebarMenuSub>
-                  </CollapsibleContent>
-                </SidebarMenuItem>
-              </Collapsible>
+              {/* Domains */}
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/domains") && !pathname.includes("/dns")}>
+                  <a href="/domains" className="flex items-center gap-3">
+                    <Globe className="h-4 w-4" />
+                    <span>Domains</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -236,6 +215,14 @@ export function AppSidebar({ user }: AppSidebarProps) {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/domains/dns")}>
+                  <a href="/domains/dns" className="flex items-center gap-3">
+                    <Settings className="h-4 w-4" />
+                    <span>DNS Management</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild isActive={isActive("/landings")}>
                   <a href="/landings" className="flex items-center gap-3">

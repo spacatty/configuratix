@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { DataTable } from "@/components/ui/data-table";
 import { api, Domain, Machine, NginxConfig } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
-import { ExternalLink, MoreHorizontal, Trash, Link2, FileText, Server, Globe, Circle, Settings2, CheckCircle, XCircle, Cloud } from "lucide-react";
+import { ExternalLink, MoreHorizontal, Trash, Link2, FileText, Server, Globe, Circle, CheckCircle, XCircle, Cloud } from "lucide-react";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -272,10 +272,6 @@ export default function DomainsPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => router.push("/domains/dns")}>
-                <Settings2 className="h-4 w-4 mr-2" />
-                DNS Settings
-              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => openAssignDialog(domain)}>
                 <Link2 className="h-4 w-4 mr-2" />
                 {domain.assigned_machine_id ? "Reassign" : "Assign"}
@@ -317,13 +313,7 @@ export default function DomainsPage() {
           <h1 className="text-3xl font-semibold tracking-tight">Domains</h1>
           <p className="text-muted-foreground mt-1">Manage domains and their machine assignments.</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => router.push("/domains/dns")}>
-            <Settings2 className="h-4 w-4 mr-2" />
-            DNS Management
-          </Button>
-          <Button onClick={() => setShowCreateDialog(true)}>+ Add Domain</Button>
-        </div>
+        <Button onClick={() => setShowCreateDialog(true)}>+ Add Domain</Button>
       </div>
 
       <Card className="border-border/50 bg-card/50">
