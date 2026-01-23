@@ -330,16 +330,36 @@ NGINX_CONF="/etc/nginx/nginx.conf"
 # 1. Create directory
 mkdir -p /etc/nginx/stream.d
 
-# 2. Install stream module if not available
-if nginx -t 2>&1 | grep -q "unknown directive.*stream"; then
+# 2. Check if stream module is available by testing with a temp stream block
+STREAM_AVAILABLE=false
+
+# Check if already loaded via modules-enabled
+if [ -f /etc/nginx/modules-enabled/50-mod-stream.conf ] || \
+   ls /etc/nginx/modules-enabled/*stream* 2>/dev/null | grep -q .; then
+    echo "Stream module is auto-loaded via modules-enabled"
+    STREAM_AVAILABLE=true
+fi
+
+# If not auto-loaded, check if dynamic module exists
+if [ "$STREAM_AVAILABLE" = false ] && [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
+    if ! grep -q "load_module.*ngx_stream_module" "$NGINX_CONF"; then
+        echo "Adding stream module load directive..."
+        sed -i '1i load_module /usr/lib/nginx/modules/ngx_stream_module.so;' "$NGINX_CONF"
+    fi
+    STREAM_AVAILABLE=true
+fi
+
+# If still not available, install it
+if [ "$STREAM_AVAILABLE" = false ]; then
     echo "Installing nginx stream module..."
     apt-get update -qq
     if apt-cache show libnginx-mod-stream >/dev/null 2>&1; then
         DEBIAN_FRONTEND=noninteractive apt-get install -y libnginx-mod-stream
-    elif [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
-        if ! grep -q "load_module.*ngx_stream_module" "$NGINX_CONF"; then
-            sed -i '1i load_module /usr/lib/nginx/modules/ngx_stream_module.so;' "$NGINX_CONF"
-        fi
+    elif apt-cache show nginx-extras >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y nginx-extras
+    else
+        echo "ERROR: Cannot install stream module"
+        exit 1
     fi
 fi
 
@@ -354,6 +374,12 @@ if ! grep -qE "^stream\s*\{" "$NGINX_CONF"; then
 elif ! grep -q "include /etc/nginx/stream.d" "$NGINX_CONF"; then
     sed -i '/^stream\s*{/a\    include /etc/nginx/stream.d/*.conf;' "$NGINX_CONF"
     echo "Added stream.d include to existing stream block"
+fi
+
+# 4. Final test
+if nginx -t 2>&1 | grep -q "unknown directive.*stream"; then
+    echo "ERROR: Stream module still not working after setup"
+    exit 1
 fi
 
 echo "Stream setup complete"
