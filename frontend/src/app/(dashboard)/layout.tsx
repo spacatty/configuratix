@@ -73,7 +73,7 @@ export default function DashboardLayout({
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-2 h-4" />
         </header>
-        <main className="flex-1 p-6">
+        <main className="flex-1 p-6 overflow-x-hidden">
           {children}
         </main>
       </SidebarInset>

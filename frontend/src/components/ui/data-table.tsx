@@ -131,7 +131,7 @@ export function DataTable<TData, TValue>({
           </DropdownMenu>
         )}
       </div>
-      <div className="rounded-md border border-border/50 bg-card/30">
+      <div className="rounded-md border border-border/50 bg-card/30 overflow-x-auto">
         <table className="w-full">
           <thead>
             {table.getHeaderGroups().map((headerGroup) => (

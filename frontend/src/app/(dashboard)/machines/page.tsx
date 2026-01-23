@@ -90,22 +90,32 @@ export default function MachinesPage() {
 
   const loadData = async () => {
     try {
-      const [machinesData, projectsData, groupsData] = await Promise.all([
-        api.listMachines(undefined, selectedProject === "all" ? undefined : selectedProject),
+      // Load projects and groups always
+      const [projectsData, groupsData] = await Promise.all([
         api.listProjects(),
         api.listMachineGroups(),
       ]);
-      setMachines(machinesData);
       setProjects(projectsData);
       setGroups(groupsData);
+
+      // Load machines - handle empty results gracefully
+      try {
+        const machinesData = await api.listMachines(undefined, selectedProject === "all" ? undefined : selectedProject);
+        setMachines(machinesData || []);
+      } catch (err) {
+        console.error("Failed to load machines for project:", err);
+        setMachines([]); // Show empty list instead of error
+      }
       
-      // Load members for each group
+      // Load members for each group in parallel
       const membersMap: Record<string, MachineGroupMember[]> = {};
       await Promise.all(
         groupsData.map(async (group) => {
           try {
-            membersMap[group.id] = await api.getGroupMembers(group.id);
-          } catch {
+            const members = await api.getGroupMembers(group.id);
+            membersMap[group.id] = members || [];
+          } catch (err) {
+            console.error(`Failed to load members for group ${group.id}:`, err);
             membersMap[group.id] = [];
           }
         })
@@ -113,7 +123,7 @@ export default function MachinesPage() {
       setGroupMembers(membersMap);
     } catch (err) {
       console.error("Failed to load data:", err);
-      toast.error("Failed to load machines");
+      toast.error("Failed to load data");
     } finally {
       setLoading(false);
     }
@@ -545,8 +555,8 @@ export default function MachinesPage() {
           
           {/* Group badges */}
           {groups.map((group) => {
-            const members = groupMembers[group.id] || [];
             const isSelected = selectedGroupFilter === group.id;
+            const memberCount = group.machine_count || 0;
             return (
               <div key={group.id} className="relative group/badge">
                 <button
@@ -560,7 +570,7 @@ export default function MachinesPage() {
                 >
                   <span>{group.emoji}</span>
                   <span>{group.name}</span>
-                  <span className="text-xs opacity-70">({members.length})</span>
+                  <span className="text-xs opacity-70">({memberCount})</span>
                 </button>
                 {/* Edit/Delete dropdown on hover */}
                 <div className="absolute -top-1 -right-1 opacity-0 group-hover/badge:opacity-100 transition-opacity flex gap-0.5">
