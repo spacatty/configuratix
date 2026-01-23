@@ -336,21 +336,26 @@ echo "=== Configuratix Passthrough Setup ==="
 
 # 1. Disable sites-enabled configs that listen on ports 80/443
 # (Stream passthrough needs exclusive access to these ports)
+# We MOVE files to sites-disabled because nginx's include glob still matches renamed files
 echo "Checking for conflicting site configs..."
+SITES_DISABLED="/etc/nginx/sites-disabled-by-passthrough"
+mkdir -p "$SITES_DISABLED"
+
 if [ -d "$SITES_ENABLED" ]; then
     for conf in "$SITES_ENABLED"/*; do
-        [ -f "$conf" ] || continue
-        # Skip if already disabled
-        [[ "$conf" == *.disabled* ]] && continue
+        [ -f "$conf" ] || [ -L "$conf" ] || continue
+        confname=$(basename "$conf")
         
         # Check if this config listens on 80 or 443
         if grep -qE 'listen\s+(80|443)' "$conf" 2>/dev/null; then
-            confname=$(basename "$conf")
             echo "Disabling $confname (listens on 80/443)..."
-            mv "$conf" "${conf}.disabled-by-passthrough"
+            mv "$conf" "$SITES_DISABLED/$confname"
         fi
     done
 fi
+
+# Also remove any leftover .disabled-by-passthrough files from previous runs
+rm -f "$SITES_ENABLED"/*.disabled-by-passthrough 2>/dev/null || true
 
 # Also check sites-available symlinks that might conflict
 # (the above handles symlinks too since we check sites-enabled)
@@ -507,6 +512,7 @@ func (g *PassthroughNginxGenerator) RemoveFromMachine(machineID uuid.UUID) error
 set -e
 
 SITES_ENABLED="/etc/nginx/sites-enabled"
+SITES_DISABLED="/etc/nginx/sites-disabled-by-passthrough"
 CONFIG_FILE="/etc/nginx/stream.d/configuratix-passthrough.conf"
 
 echo "=== Configuratix Passthrough Cleanup ==="
@@ -519,14 +525,22 @@ fi
 
 # 2. Re-enable sites that were disabled by passthrough
 echo "Re-enabling disabled sites..."
-if [ -d "$SITES_ENABLED" ]; then
-    for conf in "$SITES_ENABLED"/*.disabled-by-passthrough; do
+if [ -d "$SITES_DISABLED" ]; then
+    for conf in "$SITES_DISABLED"/*; do
         [ -f "$conf" ] || continue
-        newname="${conf%.disabled-by-passthrough}"
-        echo "Re-enabling $(basename "$newname")..."
-        mv "$conf" "$newname"
+        confname=$(basename "$conf")
+        echo "Re-enabling $confname..."
+        mv "$conf" "$SITES_ENABLED/$confname"
     done
+    rmdir "$SITES_DISABLED" 2>/dev/null || true
 fi
+
+# Also clean up old-style disabled files if any
+for conf in "$SITES_ENABLED"/*.disabled-by-passthrough; do
+    [ -f "$conf" ] || continue
+    newname="${conf%.disabled-by-passthrough}"
+    mv "$conf" "$newname"
+done
 
 # 3. Restart nginx
 nginx -t
