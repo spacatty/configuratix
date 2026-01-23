@@ -19,7 +19,8 @@ import (
 // PassthroughHandler handles DNS passthrough pool operations
 type PassthroughHandler struct {
 	db          *database.DB
-	dnsProvider *DNSHandler // For DNS record updates
+	dnsProvider *DNSHandler                 // For DNS record updates
+	nginx       *PassthroughNginxGenerator  // For nginx config generation
 }
 
 // NewPassthroughHandler creates a new PassthroughHandler
@@ -27,6 +28,7 @@ func NewPassthroughHandler(db *database.DB, dnsHandler *DNSHandler) *Passthrough
 	return &PassthroughHandler{
 		db:          db,
 		dnsProvider: dnsHandler,
+		nginx:       NewPassthroughNginxGenerator(db),
 	}
 }
 
@@ -833,5 +835,61 @@ func (h *PassthroughHandler) SetDomainProxyMode(w http.ResponseWriter, r *http.R
 	h.db.Exec("UPDATE dns_managed_domains SET proxy_mode = $1 WHERE id = $2", req.ProxyMode, domainID)
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// GetNginxConfig returns the generated nginx passthrough config for a machine
+func (h *PassthroughHandler) GetNginxConfig(w http.ResponseWriter, r *http.Request) {
+	machineID, err := uuid.Parse(mux.Vars(r)["machineId"])
+	if err != nil {
+		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	config, err := h.nginx.GenerateForMachine(machineID)
+	if err != nil {
+		http.Error(w, "Failed to generate config", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte(config))
+}
+
+// ApplyNginxConfig triggers nginx config deployment to a machine
+func (h *PassthroughHandler) ApplyNginxConfig(w http.ResponseWriter, r *http.Request) {
+	machineID, err := uuid.Parse(mux.Vars(r)["machineId"])
+	if err != nil {
+		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.nginx.ApplyToMachine(machineID); err != nil {
+		log.Printf("Failed to apply nginx config: %v", err)
+		http.Error(w, "Failed to apply config", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "applied"})
+}
+
+// ApplyPoolNginxConfigs triggers nginx config deployment to all pool members
+func (h *PassthroughHandler) ApplyPoolNginxConfigs(w http.ResponseWriter, r *http.Request) {
+	poolID, err := uuid.Parse(mux.Vars(r)["poolId"])
+	if err != nil {
+		http.Error(w, "Invalid pool ID", http.StatusBadRequest)
+		return
+	}
+
+	isWildcard := r.URL.Query().Get("wildcard") == "true"
+
+	if err := h.nginx.ApplyToAllPoolMembers(poolID, isWildcard); err != nil {
+		log.Printf("Failed to apply nginx configs: %v", err)
+		http.Error(w, "Failed to apply configs", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "applied"})
 }
 

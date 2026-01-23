@@ -226,6 +226,10 @@ func main() {
 	apiRouter.HandleFunc("/dns/wildcard/{poolId}/rotate", passthroughHandler.RotateWildcardPool).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/dns/wildcard/{poolId}/pause", passthroughHandler.PauseWildcardPool).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/dns/wildcard/{poolId}/resume", passthroughHandler.ResumeWildcardPool).Methods("POST", "OPTIONS")
+	// Nginx config generation
+	apiRouter.HandleFunc("/dns/passthrough/nginx/{machineId}", passthroughHandler.GetNginxConfig).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/dns/passthrough/nginx/{machineId}/apply", passthroughHandler.ApplyNginxConfig).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/dns/passthrough/{poolId}/apply-nginx", passthroughHandler.ApplyPoolNginxConfigs).Methods("POST", "OPTIONS")
 
 	// Nginx Configs
 	nginxConfigsHandler := handlers.NewNginxConfigsHandler(db)

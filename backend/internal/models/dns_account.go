@@ -27,7 +27,8 @@ type DNSManagedDomain struct {
 	OwnerID      uuid.UUID      `db:"owner_id" json:"owner_id"`
 	FQDN         string         `db:"fqdn" json:"fqdn"`
 	DNSAccountID *uuid.UUID     `db:"dns_account_id" json:"dns_account_id"`
-	NSStatus     string         `db:"ns_status" json:"ns_status"` // unknown, pending, valid, invalid
+	ProxyMode    string         `db:"proxy_mode" json:"proxy_mode"` // separate, wildcard
+	NSStatus     string         `db:"ns_status" json:"ns_status"`   // unknown, pending, valid, invalid
 	NSLastCheck  *time.Time     `db:"ns_last_check" json:"ns_last_check"`
 	NSExpected   pq.StringArray `db:"ns_expected" json:"ns_expected"`
 	NSActual     pq.StringArray `db:"ns_actual" json:"ns_actual"`
@@ -53,6 +54,7 @@ type DNSRecord struct {
 	TTL         int       `db:"ttl" json:"ttl"`
 	Priority    *int      `db:"priority" json:"priority"`
 	Proxied     bool      `db:"proxied" json:"proxied"` // CF orange cloud
+	Mode        string    `db:"mode" json:"mode"`       // static, dynamic
 
 	// Port overrides for nginx
 	HTTPIncomingPort  *int `db:"http_incoming_port" json:"http_incoming_port"`

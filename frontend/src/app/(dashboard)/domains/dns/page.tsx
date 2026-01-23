@@ -13,9 +13,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable } from "@/components/ui/data-table";
-import { api, DNSManagedDomain, DNSAccount, DNSRecord, NSStatus, DNSSyncResult } from "@/lib/api";
+import { api, DNSManagedDomain, DNSAccount, DNSRecord, NSStatus, DNSSyncResult, Machine, PassthroughPoolResponse, WildcardPoolResponse, RotationHistory } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
-import { Globe, CheckCircle, XCircle, Cloud, Plus, RefreshCw, AlertTriangle, X, Copy, Trash, Settings2 } from "lucide-react";
+import { Globe, CheckCircle, XCircle, Cloud, Plus, RefreshCw, AlertTriangle, X, Copy, Trash, Settings2, Play, Pause, RotateCcw, Server, History, Zap } from "lucide-react";
 import { toast } from "sonner";
 
 export default function DNSManagementPage() {
@@ -550,6 +550,26 @@ function DNSSettingsDialog({
 
   // Form state
   const [dnsAccountId, setDnsAccountId] = useState<string>("");
+  const [proxyMode, setProxyMode] = useState<string>("separate");
+
+  // Passthrough state
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [wildcardPool, setWildcardPool] = useState<WildcardPoolResponse | null>(null);
+  const [selectedRecordForPool, setSelectedRecordForPool] = useState<DNSRecord | null>(null);
+  const [recordPool, setRecordPool] = useState<PassthroughPoolResponse | null>(null);
+  const [rotationHistory, setRotationHistory] = useState<RotationHistory[]>([]);
+  const [showPoolConfig, setShowPoolConfig] = useState(false);
+  const [poolForm, setPoolForm] = useState({
+    target_ip: "",
+    target_port: 443,
+    rotation_strategy: "round_robin",
+    rotation_mode: "interval",
+    interval_minutes: 60,
+    scheduled_times: [] as string[],
+    health_check_enabled: true,
+    include_root: true,
+    machine_ids: [] as string[],
+  });
 
   // Get selected account provider
   const selectedAccount = dnsAccounts.find(a => a.id === dnsAccountId);
@@ -573,16 +593,89 @@ function DNSSettingsDialog({
   useEffect(() => {
     if (domain && open) {
       setDnsAccountId(domain.dns_account_id || "");
+      setProxyMode(domain.proxy_mode || "separate");
       setExpectedNS(null);
       setNsStatus(null);
       loadRecords();
+      loadMachines();
       
       // Load nameservers if account is already set
       if (domain.dns_account_id) {
         loadExpectedNameservers(domain.dns_account_id);
       }
+      
+      // Load wildcard pool if in wildcard mode
+      if (domain.proxy_mode === "wildcard") {
+        loadWildcardPool();
+      }
     }
   }, [domain, open]);
+
+  const loadMachines = async () => {
+    try {
+      const data = await api.listMachines();
+      setMachines(data);
+    } catch (err) {
+      console.error("Failed to load machines:", err);
+    }
+  };
+
+  const loadWildcardPool = async () => {
+    if (!domain) return;
+    try {
+      const data = await api.getWildcardPool(domain.id);
+      setWildcardPool(data);
+      setPoolForm({
+        target_ip: data.pool.target_ip,
+        target_port: data.pool.target_port,
+        rotation_strategy: data.pool.rotation_strategy,
+        rotation_mode: data.pool.rotation_mode,
+        interval_minutes: data.pool.interval_minutes,
+        scheduled_times: data.pool.scheduled_times || [],
+        health_check_enabled: data.pool.health_check_enabled,
+        include_root: data.pool.include_root,
+        machine_ids: data.members.map(m => m.machine_id),
+      });
+    } catch {
+      // No pool yet
+      setWildcardPool(null);
+    }
+  };
+
+  const loadRecordPool = async (record: DNSRecord) => {
+    try {
+      const data = await api.getRecordPool(record.id);
+      setRecordPool(data);
+      setPoolForm({
+        target_ip: data.pool.target_ip,
+        target_port: data.pool.target_port,
+        rotation_strategy: data.pool.rotation_strategy,
+        rotation_mode: data.pool.rotation_mode,
+        interval_minutes: data.pool.interval_minutes,
+        scheduled_times: data.pool.scheduled_times || [],
+        health_check_enabled: data.pool.health_check_enabled,
+        include_root: true,
+        machine_ids: data.members.map(m => m.machine_id),
+      });
+      // Load history
+      const history = await api.getRotationHistory(data.pool.id);
+      setRotationHistory(history);
+    } catch {
+      setRecordPool(null);
+      setPoolForm({
+        target_ip: "",
+        target_port: 443,
+        rotation_strategy: "round_robin",
+        rotation_mode: "interval",
+        interval_minutes: 60,
+        scheduled_times: [],
+        health_check_enabled: true,
+        include_root: true,
+        machine_ids: [],
+      });
+      setRotationHistory([]);
+    }
+  };
 
   const loadRecords = async () => {
     if (!domain) return;
@@ -628,6 +721,10 @@ function DNSSettingsDialog({
       await api.updateDNSManagedDomain(domain.id, {
         dns_account_id: dnsAccountId || null,
       });
+      // Update proxy mode if changed
+      if (proxyMode !== domain.proxy_mode) {
+        await api.setDomainProxyMode(domain.id, proxyMode);
+      }
       toast.success("DNS settings saved");
       onSave();
     } catch (err: unknown) {
@@ -635,6 +732,117 @@ function DNSSettingsDialog({
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSaveWildcardPool = async () => {
+    if (!domain) return;
+    if (!poolForm.target_ip || poolForm.machine_ids.length === 0) {
+      toast.error("Target IP and at least one machine are required");
+      return;
+    }
+    setLoading(true);
+    try {
+      await api.createOrUpdateWildcardPool(domain.id, {
+        include_root: poolForm.include_root,
+        target_ip: poolForm.target_ip,
+        target_port: poolForm.target_port,
+        rotation_strategy: poolForm.rotation_strategy,
+        rotation_mode: poolForm.rotation_mode,
+        interval_minutes: poolForm.interval_minutes,
+        scheduled_times: poolForm.scheduled_times,
+        health_check_enabled: poolForm.health_check_enabled,
+        machine_ids: poolForm.machine_ids,
+      });
+      toast.success("Wildcard pool saved");
+      loadWildcardPool();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save pool");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveRecordPool = async () => {
+    if (!selectedRecordForPool) return;
+    if (!poolForm.target_ip || poolForm.machine_ids.length === 0) {
+      toast.error("Target IP and at least one machine are required");
+      return;
+    }
+    setLoading(true);
+    try {
+      await api.createOrUpdateRecordPool(selectedRecordForPool.id, {
+        target_ip: poolForm.target_ip,
+        target_port: poolForm.target_port,
+        rotation_strategy: poolForm.rotation_strategy,
+        rotation_mode: poolForm.rotation_mode,
+        interval_minutes: poolForm.interval_minutes,
+        scheduled_times: poolForm.scheduled_times,
+        health_check_enabled: poolForm.health_check_enabled,
+        machine_ids: poolForm.machine_ids,
+      });
+      toast.success("Pool saved - record set to dynamic mode");
+      setShowPoolConfig(false);
+      loadRecords();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save pool");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRotateNow = async (poolId: string, isWildcard: boolean) => {
+    try {
+      if (isWildcard) {
+        await api.rotateWildcardPool(poolId);
+      } else {
+        await api.rotateRecordPool(poolId);
+      }
+      toast.success("Rotation triggered");
+      if (isWildcard) {
+        loadWildcardPool();
+      } else if (selectedRecordForPool) {
+        loadRecordPool(selectedRecordForPool);
+      }
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Rotation failed");
+    }
+  };
+
+  const handlePauseResume = async (poolId: string, isWildcard: boolean, isPaused: boolean) => {
+    try {
+      if (isWildcard) {
+        isPaused ? await api.resumeWildcardPool(poolId) : await api.pauseWildcardPool(poolId);
+      } else {
+        isPaused ? await api.resumeRecordPool(poolId) : await api.pauseRecordPool(poolId);
+      }
+      toast.success(isPaused ? "Rotation resumed" : "Rotation paused");
+      if (isWildcard) {
+        loadWildcardPool();
+      } else if (selectedRecordForPool) {
+        loadRecordPool(selectedRecordForPool);
+      }
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to update");
+    }
+  };
+
+  const handleDeleteRecordPool = async () => {
+    if (!selectedRecordForPool) return;
+    try {
+      await api.deleteRecordPool(selectedRecordForPool.id);
+      toast.success("Pool deleted - record set to static mode");
+      setShowPoolConfig(false);
+      setRecordPool(null);
+      loadRecords();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete pool");
+    }
+  };
+
+  const openPoolConfig = (record: DNSRecord) => {
+    setSelectedRecordForPool(record);
+    loadRecordPool(record);
+    setShowPoolConfig(true);
   };
 
   const handleCheckNS = async () => {
@@ -785,9 +993,10 @@ function DNSSettingsDialog({
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="settings">Settings</TabsTrigger>
-            <TabsTrigger value="records" disabled={!dnsAccountId}>Records</TabsTrigger>
+            <TabsTrigger value="records" disabled={!dnsAccountId || proxyMode === "wildcard"}>Records</TabsTrigger>
+            <TabsTrigger value="passthrough" disabled={!dnsAccountId || proxyMode === "separate"}>Passthrough</TabsTrigger>
             <TabsTrigger value="sync" disabled={!dnsAccountId}>Sync</TabsTrigger>
           </TabsList>
 
@@ -909,6 +1118,48 @@ function DNSSettingsDialog({
                     )}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Proxy Mode Selector */}
+            {dnsAccountId && (
+              <div className="p-4 border rounded-lg bg-muted/20 space-y-3">
+                <div>
+                  <Label className="text-sm font-medium">Proxy Mode</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">How to manage DNS records for this domain</p>
+                </div>
+                <div className="flex gap-4">
+                  <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "separate" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
+                    <input
+                      type="radio"
+                      name="proxy_mode"
+                      value="separate"
+                      checked={proxyMode === "separate"}
+                      onChange={() => setProxyMode("separate")}
+                      className="sr-only"
+                    />
+                    <div className="flex items-center gap-2 mb-1">
+                      <Settings2 className="h-4 w-4" />
+                      <span className="font-medium text-sm">Separate Records</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Manage each subdomain individually. Configure static or dynamic mode per record.</p>
+                  </label>
+                  <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "wildcard" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
+                    <input
+                      type="radio"
+                      name="proxy_mode"
+                      value="wildcard"
+                      checked={proxyMode === "wildcard"}
+                      onChange={() => setProxyMode("wildcard")}
+                      className="sr-only"
+                    />
+                    <div className="flex items-center gap-2 mb-1">
+                      <Zap className="h-4 w-4" />
+                      <span className="font-medium text-sm">Wildcard Passthrough</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Route all subdomains (*.{domain?.fqdn}) through a rotating proxy pool.</p>
+                  </label>
+                </div>
               </div>
             )}
 
@@ -1159,11 +1410,12 @@ function DNSSettingsDialog({
                       <tr>
                         <th className="text-left p-2 font-medium">Name</th>
                         <th className="text-left p-2 font-medium">Type</th>
-                        <th className="text-left p-2 font-medium">Value</th>
+                        <th className="text-left p-2 font-medium">Value / Pool</th>
+                        <th className="text-left p-2 font-medium">Mode</th>
                         <th className="text-left p-2 font-medium">TTL</th>
                         {isCloudflare && <th className="text-left p-2 font-medium">Proxy</th>}
                         <th className="text-left p-2 font-medium">Status</th>
-                        <th className="w-10"></th>
+                        <th className="w-16"></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1180,7 +1432,26 @@ function DNSSettingsDialog({
                             <td className="p-2">
                               <Badge variant="outline">{record.record_type}</Badge>
                             </td>
-                            <td className="p-2 font-mono text-xs max-w-[180px] truncate" title={record.value}>{record.value}</td>
+                            <td className="p-2 font-mono text-xs max-w-[150px] truncate" title={record.value}>
+                              {record.mode === "dynamic" ? (
+                                <span className="text-purple-400">🔄 Dynamic pool</span>
+                              ) : (
+                                record.value
+                              )}
+                            </td>
+                            <td className="p-2">
+                              {record.record_type === "A" ? (
+                                <Badge 
+                                  variant={record.mode === "dynamic" ? "default" : "secondary"}
+                                  className={`cursor-pointer text-xs ${record.mode === "dynamic" ? "bg-purple-500/20 text-purple-400 hover:bg-purple-500/30" : "hover:bg-muted"}`}
+                                  onClick={() => openPoolConfig(record)}
+                                >
+                                  {record.mode === "dynamic" ? "⚡ Dynamic" : "Static"}
+                                </Badge>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">Static</span>
+                              )}
+                            </td>
                             <td className="p-2">{record.ttl}</td>
                             {isCloudflare && (
                               <td className="p-2">
@@ -1208,12 +1479,24 @@ function DNSSettingsDialog({
                                 <Badge className="bg-red-500/20 text-red-400 text-xs">Error</Badge>
                               )}
                             </td>
-                            <td className="p-2">
+                            <td className="p-2 flex gap-1">
+                              {record.record_type === "A" && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 w-6 p-0 hover:text-purple-400"
+                                  onClick={() => openPoolConfig(record)}
+                                  title="Configure passthrough"
+                                >
+                                  <Zap className="h-4 w-4" />
+                                </Button>
+                              )}
                               <Button
                                 variant="ghost"
                                 size="sm"
                                 className="h-6 w-6 p-0 hover:text-destructive"
                                 onClick={() => handleDeleteRecord(record.id)}
+                                title="Delete record"
                               >
                                 <X className="h-4 w-4" />
                               </Button>
@@ -1226,6 +1509,185 @@ function DNSSettingsDialog({
                 </div>
               </>
             )}
+          </TabsContent>
+
+          {/* Passthrough Tab - Wildcard Mode */}
+          <TabsContent value="passthrough" className="space-y-6 mt-6">
+            <div className="p-4 border rounded-lg bg-gradient-to-r from-purple-500/10 to-blue-500/10">
+              <div className="flex items-center gap-2 mb-2">
+                <Zap className="h-5 w-5 text-purple-500" />
+                <h3 className="font-semibold">Wildcard Passthrough: *.{domain?.fqdn}</h3>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                All subdomains will route through your proxy pool. DNS records will automatically rotate between selected machines.
+              </p>
+            </div>
+
+            {/* Pool Configuration */}
+            <div className="space-y-4 p-4 border rounded-lg">
+              <h4 className="font-medium">Target Server</h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <Label className="text-xs">Target IP (final destination)</Label>
+                  <Input
+                    placeholder="192.168.1.100"
+                    value={poolForm.target_ip}
+                    onChange={(e) => setPoolForm(f => ({ ...f, target_ip: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Target Port</Label>
+                  <Input
+                    type="number"
+                    placeholder="443"
+                    value={poolForm.target_port}
+                    onChange={(e) => setPoolForm(f => ({ ...f, target_port: parseInt(e.target.value) || 443 }))}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="include_root"
+                  checked={poolForm.include_root}
+                  onCheckedChange={(c) => setPoolForm(f => ({ ...f, include_root: !!c }))}
+                />
+                <Label htmlFor="include_root" className="text-sm">Include root domain ({domain?.fqdn})</Label>
+              </div>
+            </div>
+
+            {/* Proxy Pool */}
+            <div className="space-y-4 p-4 border rounded-lg">
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium">Proxy Pool</h4>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Checkbox
+                    id="health_check"
+                    checked={poolForm.health_check_enabled}
+                    onCheckedChange={(c) => setPoolForm(f => ({ ...f, health_check_enabled: !!c }))}
+                  />
+                  <Label htmlFor="health_check">Skip offline servers</Label>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <Label className="text-xs">Rotation Strategy</Label>
+                  <Select value={poolForm.rotation_strategy} onValueChange={(v) => setPoolForm(f => ({ ...f, rotation_strategy: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="round_robin">Round Robin</SelectItem>
+                      <SelectItem value="random">Random</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Rotate Every (minutes)</Label>
+                  <Input
+                    type="number"
+                    value={poolForm.interval_minutes}
+                    onChange={(e) => setPoolForm(f => ({ ...f, interval_minutes: parseInt(e.target.value) || 60 }))}
+                  />
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <Label className="text-xs">Select Proxy Machines</Label>
+                <div className="border rounded-md max-h-48 overflow-y-auto">
+                  {machines.length === 0 ? (
+                    <p className="p-4 text-sm text-muted-foreground text-center">No machines available</p>
+                  ) : (
+                    machines.map((machine) => {
+                      const isSelected = poolForm.machine_ids.includes(machine.id);
+                      const isOnline = machine.status === "online";
+                      const isCurrent = wildcardPool?.pool.current_machine_id === machine.id;
+                      return (
+                        <label
+                          key={machine.id}
+                          className={`flex items-center gap-3 p-2 hover:bg-muted/30 cursor-pointer border-b last:border-b-0 ${isSelected ? "bg-primary/5" : ""}`}
+                        >
+                          <Checkbox
+                            checked={isSelected}
+                            onCheckedChange={(checked) => {
+                              setPoolForm(f => ({
+                                ...f,
+                                machine_ids: checked
+                                  ? [...f.machine_ids, machine.id]
+                                  : f.machine_ids.filter(id => id !== machine.id)
+                              }));
+                            }}
+                          />
+                          <Server className="h-4 w-4 text-muted-foreground" />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-sm">{machine.name}</span>
+                              {isCurrent && <Badge variant="default" className="text-[10px] py-0">Current</Badge>}
+                            </div>
+                            <span className="text-xs text-muted-foreground">{machine.ip_address}</span>
+                          </div>
+                          <div className={`h-2 w-2 rounded-full ${isOnline ? "bg-green-500" : "bg-red-500"}`} title={isOnline ? "Online" : "Offline"} />
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">{poolForm.machine_ids.length} machine(s) selected</p>
+              </div>
+            </div>
+
+            {/* Pool Status & Controls */}
+            {wildcardPool && (
+              <div className="p-4 border rounded-lg bg-muted/20 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Badge variant={wildcardPool.pool.is_paused ? "secondary" : "default"}>
+                      {wildcardPool.pool.is_paused ? "⏸ Paused" : "▶ Active"}
+                    </Badge>
+                    {wildcardPool.pool.last_rotated_at && (
+                      <span className="text-xs text-muted-foreground">
+                        Last rotated: {new Date(wildcardPool.pool.last_rotated_at).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePauseResume(wildcardPool.pool.id, true, wildcardPool.pool.is_paused)}
+                    >
+                      {wildcardPool.pool.is_paused ? <Play className="h-4 w-4 mr-1" /> : <Pause className="h-4 w-4 mr-1" />}
+                      {wildcardPool.pool.is_paused ? "Resume" : "Pause"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleRotateNow(wildcardPool.pool.id, true)}
+                    >
+                      <RotateCcw className="h-4 w-4 mr-1" />
+                      Rotate Now
+                    </Button>
+                  </div>
+                </div>
+                
+                {/* Current Machine */}
+                {wildcardPool.pool.current_machine_id && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="text-muted-foreground">Currently pointing to:</span>
+                    <code className="bg-muted px-2 py-0.5 rounded">
+                      {wildcardPool.members.find(m => m.machine_id === wildcardPool.pool.current_machine_id)?.machine_name || "Unknown"}
+                    </code>
+                    <span className="text-muted-foreground">
+                      ({wildcardPool.members.find(m => m.machine_id === wildcardPool.pool.current_machine_id)?.machine_ip})
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Save Button */}
+            <div className="flex justify-end gap-2">
+              <Button onClick={handleSaveWildcardPool} disabled={loading || !poolForm.target_ip || poolForm.machine_ids.length === 0}>
+                {loading ? "Saving..." : "Save Passthrough Configuration"}
+              </Button>
+            </div>
           </TabsContent>
 
           <TabsContent value="sync" className="space-y-4 mt-4">
@@ -1328,6 +1790,201 @@ function DNSSettingsDialog({
             )}
           </TabsContent>
         </Tabs>
+
+        {/* Record Pool Configuration Dialog */}
+        <Dialog open={showPoolConfig} onOpenChange={(open) => { setShowPoolConfig(open); if (!open) setSelectedRecordForPool(null); }}>
+          <DialogContent className="sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Zap className="h-5 w-5 text-purple-500" />
+                Passthrough Pool: {selectedRecordForPool?.name}.{domain?.fqdn}
+              </DialogTitle>
+              <DialogDescription>
+                Configure dynamic DNS rotation through a pool of proxy servers.
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="space-y-4">
+              {/* Mode Toggle */}
+              <div className="flex items-center gap-4 p-3 bg-muted/30 rounded-lg">
+                <Label>Mode:</Label>
+                <div className="flex gap-2">
+                  <Badge
+                    variant={selectedRecordForPool?.mode !== "dynamic" ? "default" : "secondary"}
+                    className="cursor-pointer"
+                    onClick={() => {
+                      if (selectedRecordForPool?.mode === "dynamic") {
+                        handleDeleteRecordPool();
+                      }
+                    }}
+                  >
+                    Static
+                  </Badge>
+                  <Badge
+                    variant={selectedRecordForPool?.mode === "dynamic" ? "default" : "secondary"}
+                    className="cursor-pointer bg-purple-500/20 text-purple-400"
+                  >
+                    Dynamic
+                  </Badge>
+                </div>
+                {selectedRecordForPool?.mode === "dynamic" && recordPool && (
+                  <div className="ml-auto flex items-center gap-2">
+                    <Badge variant={recordPool.pool.is_paused ? "secondary" : "default"}>
+                      {recordPool.pool.is_paused ? "⏸ Paused" : "▶ Active"}
+                    </Badge>
+                  </div>
+                )}
+              </div>
+
+              {/* Target Server */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <Label className="text-xs">Target IP (final destination)</Label>
+                  <Input
+                    placeholder="192.168.1.100"
+                    value={poolForm.target_ip}
+                    onChange={(e) => setPoolForm(f => ({ ...f, target_ip: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Target Port</Label>
+                  <Input
+                    type="number"
+                    value={poolForm.target_port}
+                    onChange={(e) => setPoolForm(f => ({ ...f, target_port: parseInt(e.target.value) || 443 }))}
+                  />
+                </div>
+              </div>
+
+              {/* Pool Settings */}
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-1">
+                  <Label className="text-xs">Strategy</Label>
+                  <Select value={poolForm.rotation_strategy} onValueChange={(v) => setPoolForm(f => ({ ...f, rotation_strategy: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="round_robin">Round Robin</SelectItem>
+                      <SelectItem value="random">Random</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Interval (min)</Label>
+                  <Input
+                    type="number"
+                    value={poolForm.interval_minutes}
+                    onChange={(e) => setPoolForm(f => ({ ...f, interval_minutes: parseInt(e.target.value) || 60 }))}
+                  />
+                </div>
+                <div className="flex items-end pb-1">
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="health_rec"
+                      checked={poolForm.health_check_enabled}
+                      onCheckedChange={(c) => setPoolForm(f => ({ ...f, health_check_enabled: !!c }))}
+                    />
+                    <Label htmlFor="health_rec" className="text-xs">Skip offline</Label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Machine Selection */}
+              <div className="space-y-2">
+                <Label className="text-xs">Proxy Machines</Label>
+                <div className="border rounded-md max-h-40 overflow-y-auto">
+                  {machines.length === 0 ? (
+                    <p className="p-4 text-sm text-muted-foreground text-center">No machines</p>
+                  ) : (
+                    machines.map((machine) => {
+                      const isSelected = poolForm.machine_ids.includes(machine.id);
+                      const isOnline = machine.status === "online";
+                      const isCurrent = recordPool?.pool.current_machine_id === machine.id;
+                      return (
+                        <label
+                          key={machine.id}
+                          className={`flex items-center gap-3 p-2 hover:bg-muted/30 cursor-pointer border-b last:border-b-0 ${isSelected ? "bg-primary/5" : ""}`}
+                        >
+                          <Checkbox
+                            checked={isSelected}
+                            onCheckedChange={(checked) => {
+                              setPoolForm(f => ({
+                                ...f,
+                                machine_ids: checked
+                                  ? [...f.machine_ids, machine.id]
+                                  : f.machine_ids.filter(id => id !== machine.id)
+                              }));
+                            }}
+                          />
+                          <Server className="h-4 w-4 text-muted-foreground" />
+                          <div className="flex-1 flex items-center gap-2">
+                            <span className="font-medium text-sm">{machine.name}</span>
+                            {isCurrent && <Badge variant="default" className="text-[10px] py-0">Current</Badge>}
+                            <span className="text-xs text-muted-foreground">({machine.ip_address})</span>
+                          </div>
+                          <div className={`h-2 w-2 rounded-full ${isOnline ? "bg-green-500" : "bg-red-500"}`} />
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Controls */}
+              {recordPool && (
+                <div className="flex items-center gap-2 p-3 bg-muted/30 rounded-lg">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handlePauseResume(recordPool.pool.id, false, recordPool.pool.is_paused)}
+                  >
+                    {recordPool.pool.is_paused ? <Play className="h-4 w-4 mr-1" /> : <Pause className="h-4 w-4 mr-1" />}
+                    {recordPool.pool.is_paused ? "Resume" : "Pause"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleRotateNow(recordPool.pool.id, false)}
+                  >
+                    <RotateCcw className="h-4 w-4 mr-1" />
+                    Rotate Now
+                  </Button>
+                  {recordPool.pool.last_rotated_at && (
+                    <span className="text-xs text-muted-foreground ml-auto">
+                      Last: {new Date(recordPool.pool.last_rotated_at).toLocaleString()}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* History */}
+              {rotationHistory.length > 0 && (
+                <div className="space-y-2">
+                  <Label className="text-xs flex items-center gap-1">
+                    <History className="h-3 w-3" /> Recent Rotations
+                  </Label>
+                  <div className="max-h-24 overflow-y-auto border rounded-md">
+                    {rotationHistory.slice(0, 5).map((h) => (
+                      <div key={h.id} className="p-2 text-xs border-b last:border-b-0 flex items-center gap-2">
+                        <span className="text-muted-foreground">{new Date(h.rotated_at).toLocaleString()}</span>
+                        <span>{h.from_machine_name || h.from_ip}</span>
+                        <span>→</span>
+                        <span className="font-medium">{h.to_machine_name || h.to_ip}</span>
+                        <Badge variant="outline" className="text-[10px] ml-auto">{h.trigger}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowPoolConfig(false)}>Cancel</Button>
+              <Button onClick={handleSaveRecordPool} disabled={loading || !poolForm.target_ip || poolForm.machine_ids.length === 0}>
+                {loading ? "Saving..." : "Save Pool"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </DialogContent>
     </Dialog>
   );
