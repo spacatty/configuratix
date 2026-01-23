@@ -1501,6 +1501,146 @@ class ApiClient {
   async listPHPExtensionTemplates(): Promise<PHPExtensionTemplate[]> {
     return this.request<PHPExtensionTemplate[]>("/api/php/templates");
   }
+
+  // ============================================================
+  // Security Module
+  // ============================================================
+
+  // IP Bans
+  async listSecurityBans(params?: {
+    page?: number;
+    page_size?: number;
+    search?: string;
+    reason?: string;
+    machine_id?: string;
+    active_only?: boolean;
+  }): Promise<BanListPage> {
+    const searchParams = new URLSearchParams();
+    if (params?.page) searchParams.set("page", params.page.toString());
+    if (params?.page_size) searchParams.set("page_size", params.page_size.toString());
+    if (params?.search) searchParams.set("search", params.search);
+    if (params?.reason) searchParams.set("reason", params.reason);
+    if (params?.machine_id) searchParams.set("machine_id", params.machine_id);
+    if (params?.active_only) searchParams.set("active_only", "true");
+    const query = searchParams.toString();
+    return this.request(`/api/security/bans${query ? "?" + query : ""}`);
+  }
+
+  async createSecurityBan(data: CreateBanRequest): Promise<SecurityIPBan> {
+    return this.request("/api/security/bans", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async importSecurityBans(data: { ips: string[]; reason?: string }): Promise<ImportBansResponse> {
+    return this.request("/api/security/bans/import", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteSecurityBan(id: string): Promise<void> {
+    await this.request(`/api/security/bans/${id}`, { method: "DELETE" });
+  }
+
+  async deleteAllSecurityBans(): Promise<{ unbanned: number }> {
+    return this.request("/api/security/bans", { method: "DELETE" });
+  }
+
+  // Whitelist
+  async listSecurityWhitelist(): Promise<SecurityIPWhitelist[]> {
+    return this.request("/api/security/whitelist");
+  }
+
+  async createSecurityWhitelistEntry(data: { ip_cidr: string; description?: string }): Promise<SecurityIPWhitelist> {
+    return this.request("/api/security/whitelist", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteSecurityWhitelistEntry(id: string): Promise<void> {
+    await this.request(`/api/security/whitelist/${id}`, { method: "DELETE" });
+  }
+
+  // UA Patterns
+  async listSecurityUAPatterns(): Promise<UAPatternsByCategory[]> {
+    return this.request("/api/security/ua-patterns");
+  }
+
+  async createSecurityUAPattern(data: {
+    category: string;
+    pattern: string;
+    match_type?: string;
+    description?: string;
+  }): Promise<SecurityUAPattern> {
+    return this.request("/api/security/ua-patterns", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteSecurityUAPattern(id: string): Promise<void> {
+    await this.request(`/api/security/ua-patterns/${id}`, { method: "DELETE" });
+  }
+
+  async toggleSecurityUACategory(category: string, enabled: boolean): Promise<void> {
+    await this.request(`/api/security/ua-categories/${category}`, {
+      method: "PUT",
+      body: JSON.stringify({ is_enabled: enabled }),
+    });
+  }
+
+  // Per-config security settings
+  async getSecuritySettings(configId: string): Promise<SecurityConfigSettings> {
+    return this.request(`/api/nginx-configs/${configId}/security`);
+  }
+
+  async updateSecuritySettings(configId: string, data: Partial<SecurityConfigSettings>): Promise<SecurityConfigSettings> {
+    return this.request(`/api/nginx-configs/${configId}/security`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async listSecurityEndpointRules(configId: string): Promise<SecurityEndpointRule[]> {
+    return this.request(`/api/nginx-configs/${configId}/security/endpoints`);
+  }
+
+  async createSecurityEndpointRule(configId: string, data: {
+    pattern: string;
+    description?: string;
+    priority?: number;
+  }): Promise<SecurityEndpointRule> {
+    return this.request(`/api/nginx-configs/${configId}/security/endpoints`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteSecurityEndpointRule(configId: string, ruleId: string): Promise<void> {
+    await this.request(`/api/nginx-configs/${configId}/security/endpoints/${ruleId}`, {
+      method: "DELETE",
+    });
+  }
+
+  // Per-machine security settings
+  async getMachineSecuritySettings(machineId: string): Promise<SecurityMachineSettings> {
+    return this.request(`/api/machines/${machineId}/security`);
+  }
+
+  async updateMachineSecuritySettings(machineId: string, data: Partial<SecurityMachineSettings>): Promise<SecurityMachineSettings> {
+    return this.request(`/api/machines/${machineId}/security`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  // Stats
+  async getSecurityStats(): Promise<SecurityStats> {
+    return this.request("/api/security/stats");
+  }
 }
 
 export interface PHPRuntime {
@@ -1587,6 +1727,127 @@ export interface ConfigCategory {
 
 export interface ConfigListResponse {
   categories: ConfigCategory[];
+}
+
+// ============================================================
+// Security Module Types
+// ============================================================
+
+export interface SecurityIPBan {
+  id: string;
+  ip_address: string;
+  source_machine_id?: string;
+  reason: string;
+  details: Record<string, unknown>;
+  banned_at: string;
+  expires_at: string;
+  created_by?: string;
+  is_active: boolean;
+  unbanned_at?: string;
+  source_machine_name?: string;
+  created_by_email?: string;
+}
+
+export interface BanListPage {
+  bans: SecurityIPBan[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface CreateBanRequest {
+  ip_address: string;
+  reason?: string;
+  details?: Record<string, unknown>;
+  expires_in_days?: number;
+}
+
+export interface ImportBansResponse {
+  imported: number;
+  skipped_whitelist: number;
+  already_banned: number;
+  invalid: number;
+  skipped_ips?: string[];
+}
+
+export interface SecurityIPWhitelist {
+  id: string;
+  owner_id: string;
+  ip_cidr: string;
+  description: string;
+  created_at: string;
+}
+
+export interface SecurityUAPattern {
+  id: string;
+  owner_id?: string;
+  category: string;
+  pattern: string;
+  match_type: string;
+  description: string;
+  is_system: boolean;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface UAPatternsByCategory {
+  category: string;
+  is_enabled: boolean;
+  pattern_count: number;
+  patterns: SecurityUAPattern[];
+}
+
+export interface SecurityEndpointRule {
+  id: string;
+  nginx_config_id: string;
+  pattern: string;
+  description: string;
+  priority: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface SecurityConfigSettings {
+  id: string;
+  nginx_config_id: string;
+  ua_blocking_enabled: boolean;
+  endpoint_blocking_enabled: boolean;
+  sync_enabled: boolean;
+  sync_interval_minutes: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SecurityMachineSettings {
+  id: string;
+  machine_id: string;
+  nftables_enabled: boolean;
+  last_sync_at?: string;
+  ban_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SecurityStats {
+  total_bans: number;
+  active_bans: number;
+  bans_today: number;
+  bans_this_week: number;
+  top_reasons: { reason: string; count: number }[];
+  top_machines: { machine_id: string; machine_name: string; count: number }[];
+  whitelist_count: number;
+  ua_pattern_count: number;
+}
+
+export interface NftablesState {
+  enabled: boolean;
+  ban_count: number;
+  table_exists: boolean;
+  set_exists: boolean;
+  rule_exists: boolean;
+  last_error?: string;
+  checked_at: string;
 }
 
 export const api = new ApiClient(API_URL);

@@ -44,6 +44,9 @@ import {
   FolderKanban,
   Users,
   Shield,
+  ShieldCheck,
+  Ban,
+  Bot,
   UserCircle,
   LogOut,
   ChevronUp,
@@ -211,6 +214,49 @@ export function AppSidebar({ user }: AppSidebarProps) {
                   <a href="/domains/dns" className="flex items-center gap-3">
                     <Settings className="h-4 w-4" />
                     <span>DNS Management</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        {/* Security */}
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Security
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={pathname === "/security"}>
+                  <a href="/security" className="flex items-center gap-3">
+                    <Shield className="h-4 w-4" />
+                    <span>Overview</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/security/bans")}>
+                  <a href="/security/bans" className="flex items-center gap-3">
+                    <Ban className="h-4 w-4" />
+                    <span>IP Blacklist</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/security/whitelist")}>
+                  <a href="/security/whitelist" className="flex items-center gap-3">
+                    <ShieldCheck className="h-4 w-4" />
+                    <span>Whitelist</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/security/ua-patterns")}>
+                  <a href="/security/ua-patterns" className="flex items-center gap-3">
+                    <Bot className="h-4 w-4" />
+                    <span>UA Patterns</span>
                   </a>
                 </SidebarMenuButton>
               </SidebarMenuItem>
