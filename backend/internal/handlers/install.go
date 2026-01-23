@@ -162,31 +162,25 @@ if curl -sSL -f -o "${AGENT_PATH}.tmp" "$AGENT_DOWNLOAD_URL"; then
     chmod +x "$AGENT_PATH"
     echo "Agent binary downloaded successfully"
 else
-    echo "Failed to download pre-built binary, falling back to source build..."
-    # Install Go for source build
-    apt-get install -y golang-go
-    
-    cd /tmp
-    rm -rf configuratix-agent-build
-    mkdir configuratix-agent-build
-    cd configuratix-agent-build
+    echo ""
+    echo "ERROR: Failed to download agent binary from server!"
+    echo ""
+    echo "Please ensure:"
+    echo "  1. The server is running and accessible at: $SERVER_URL"
+    echo "  2. The server has built the agent binary (check server logs)"
+    echo "  3. Network connectivity is working"
+    echo ""
+    echo "You can try again with: curl -sSL $SERVER_URL/install.sh | sudo bash -s -- YOUR_TOKEN"
+    exit 1
+fi
 
-cat > go.mod << 'EOF'
-module configuratix/agent
-go 1.21
+# === EMBEDDED SOURCE CODE REMOVED ===
+# Agent is now distributed as pre-built binary only.
+# The server automatically builds the agent on startup.
 
-require (
-	github.com/creack/pty v1.1.21
-	github.com/gorilla/websocket v1.5.1
-)
-
-require golang.org/x/net v0.17.0 // indirect
-EOF
-
-
-mkdir -p cmd/agent
-
-cat > cmd/agent/main.go << 'MAINEOF'
+if false; then
+# Legacy embedded code placeholder (never executed)
+cat > /dev/null << 'MAINEOF'
 package main
 
 import (
@@ -214,7 +208,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const Version = "0.4.2"
+const Version = "0.4.3"
 const ConfigDir = "/etc/configuratix"
 const ConfigFile = "agent.json"
 
@@ -1362,8 +1356,9 @@ go mod tidy
 
 go build -o /opt/configuratix/bin/configuratix-agent ./cmd/agent
 cd / && rm -rf /tmp/configuratix-agent-build
-echo "Agent built from source successfully"
+MAINEOF
 fi
+# End of legacy placeholder
 
 # Handle enrollment
 if [ "$REINSTALL" = false ] || [ "$FORCE_NEW" = true ]; then
@@ -1418,7 +1413,7 @@ if systemctl is-active --quiet configuratix-agent; then
     echo "==========================================="
     echo ""
     echo "Agent status: RUNNING"
-    echo "Agent version: $(cat /opt/configuratix/bin/configuratix-agent 2>/dev/null | head -c 100 || echo 'latest')"
+    echo "Agent version: $(/opt/configuratix/bin/configuratix-agent version 2>/dev/null || echo 'unknown')"
     echo ""
     echo "Services configured:"
     echo "  - Nginx: $(systemctl is-active nginx)"

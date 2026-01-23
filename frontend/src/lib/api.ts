@@ -1176,6 +1176,23 @@ class ApiClient {
     });
   }
 
+  // Agent Update APIs
+  async getAgentVersion(): Promise<{ version: string; checksum: string; size: number; updated_at: string }> {
+    return this.request("/api/agent/version");
+  }
+
+  async triggerMachineUpdate(machineId: string): Promise<{ job_id: string; machine_id: string; status: string }> {
+    return this.request(`/api/machines/${machineId}/update-agent`, { method: "POST" });
+  }
+
+  async triggerAllAgentUpdates(): Promise<{ latest_version: string; agents_found: number; jobs_created: number }> {
+    return this.request("/api/admin/agent/update-all", { method: "POST" });
+  }
+
+  async rebuildAgent(): Promise<{ version: string; checksum: string; size: number }> {
+    return this.request("/api/admin/agent/rebuild", { method: "POST" });
+  }
+
   async addConfigPath(machineId: string, categoryId: string, data: { 
     name: string; 
     path: string; 

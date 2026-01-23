@@ -15,11 +15,14 @@ import (
 	"time"
 
 	"configuratix/backend/internal/database"
+
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 )
 
 // CurrentAgentVersion is the version that should be distributed
 // This should match the version in agent/cmd/agent/main.go
-const CurrentAgentVersion = "0.4.2"
+const CurrentAgentVersion = "0.4.3"
 
 // AgentUpdateHandler handles agent update distribution
 type AgentUpdateHandler struct {
@@ -384,4 +387,102 @@ func (h *AgentUpdateHandler) RebuildAgent(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
+}
+
+// TriggerMachineUpdate creates an update job for a specific machine
+func (h *AgentUpdateHandler) TriggerMachineUpdate(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	machineID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get agent ID for this machine
+	var agentID uuid.UUID
+	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1", machineID)
+	if err != nil {
+		http.Error(w, "Machine not found", http.StatusNotFound)
+		return
+	}
+
+	// Create an update_agent job
+	jobID := uuid.New()
+	payload := `{"action": "update"}`
+	_, err = h.db.Exec(`
+		INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
+		VALUES ($1, $2, 'update_agent', $3, 'pending', NOW(), NOW())
+	`, jobID, agentID, payload)
+	if err != nil {
+		log.Printf("Failed to create update job: %v", err)
+		http.Error(w, "Failed to create update job", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Created update job %s for machine %s", jobID, machineID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"job_id":     jobID.String(),
+		"machine_id": machineID.String(),
+		"status":     "pending",
+	})
+}
+
+// TriggerAllUpdates creates update jobs for all online machines with outdated agents
+func (h *AgentUpdateHandler) TriggerAllUpdates(w http.ResponseWriter, r *http.Request) {
+	h.versionLock.RLock()
+	latestVersion := ""
+	if h.versionInfo != nil {
+		latestVersion = h.versionInfo.Version
+	}
+	h.versionLock.RUnlock()
+
+	if latestVersion == "" {
+		http.Error(w, "No agent version available", http.StatusNotFound)
+		return
+	}
+
+	// Find all agents that need updating (version != latest AND seen recently)
+	var agents []struct {
+		ID        uuid.UUID `db:"id"`
+		MachineID uuid.UUID `db:"machine_id"`
+		Version   string    `db:"version"`
+	}
+	err := h.db.Select(&agents, `
+		SELECT a.id, m.id as machine_id, COALESCE(a.version, '') as version
+		FROM agents a
+		JOIN machines m ON m.agent_id = a.id
+		WHERE a.last_seen > NOW() - INTERVAL '5 minutes'
+		AND (a.version IS NULL OR a.version != $1)
+	`, latestVersion)
+	if err != nil {
+		log.Printf("Failed to query agents: %v", err)
+		http.Error(w, "Failed to query agents", http.StatusInternalServerError)
+		return
+	}
+
+	// Create update jobs for each outdated agent
+	jobsCreated := 0
+	for _, agent := range agents {
+		jobID := uuid.New()
+		payload := `{"action": "update"}`
+		_, err = h.db.Exec(`
+			INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
+			VALUES ($1, $2, 'update_agent', $3, 'pending', NOW(), NOW())
+		`, jobID, agent.ID, payload)
+		if err != nil {
+			log.Printf("Failed to create update job for agent %s: %v", agent.ID, err)
+			continue
+		}
+		jobsCreated++
+		log.Printf("Created update job for machine %s (current: %s, latest: %s)", agent.MachineID, agent.Version, latestVersion)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"latest_version":   latestVersion,
+		"agents_found":     len(agents),
+		"jobs_created":     jobsCreated,
+	})
 }

@@ -3,6 +3,8 @@ package executor
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -534,9 +536,90 @@ func (e *Executor) deployLanding(landingID, targetPath, indexFile string, replac
 
 // updateAgent triggers a manual agent update
 func (e *Executor) updateAgent() (string, error) {
-	// Import updater package dynamically to avoid circular imports
-	// The actual update is triggered via the updater singleton
-	return "Agent update triggered. Check agent logs for status.", nil
+	var logs strings.Builder
+	logs.WriteString("Agent update triggered...\n")
+
+	// Get current executable path
+	execPath, err := os.Executable()
+	if err != nil {
+		return logs.String(), fmt.Errorf("failed to get executable path: %v", err)
+	}
+
+	// Download new binary
+	downloadURL := e.serverURL + "/api/agent/download"
+	logs.WriteString(fmt.Sprintf("Downloading from %s...\n", downloadURL))
+
+	resp, err := e.client.Get(downloadURL)
+	if err != nil {
+		return logs.String(), fmt.Errorf("failed to download: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return logs.String(), fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
+	}
+
+	// Get expected checksum from header
+	expectedChecksum := resp.Header.Get("X-Agent-Checksum")
+	expectedVersion := resp.Header.Get("X-Agent-Version")
+	logs.WriteString(fmt.Sprintf("Downloading version %s...\n", expectedVersion))
+
+	// Save to temp file
+	tempPath := execPath + ".new"
+	file, err := os.Create(tempPath)
+	if err != nil {
+		return logs.String(), fmt.Errorf("failed to create temp file: %v", err)
+	}
+
+	// Calculate checksum while downloading
+	hasher := sha256.New()
+	writer := io.MultiWriter(file, hasher)
+	size, err := io.Copy(writer, resp.Body)
+	file.Close()
+	if err != nil {
+		os.Remove(tempPath)
+		return logs.String(), fmt.Errorf("failed to download binary: %v", err)
+	}
+
+	actualChecksum := hex.EncodeToString(hasher.Sum(nil))
+	logs.WriteString(fmt.Sprintf("Downloaded %d bytes\n", size))
+
+	// Verify checksum
+	if expectedChecksum != "" && actualChecksum != expectedChecksum {
+		os.Remove(tempPath)
+		return logs.String(), fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, actualChecksum)
+	}
+	logs.WriteString("Checksum verified\n")
+
+	// Make executable
+	if err := os.Chmod(tempPath, 0755); err != nil {
+		os.Remove(tempPath)
+		return logs.String(), fmt.Errorf("failed to chmod: %v", err)
+	}
+
+	// Backup current binary
+	backupPath := execPath + ".old"
+	os.Remove(backupPath)
+	if err := os.Rename(execPath, backupPath); err != nil {
+		os.Remove(tempPath)
+		return logs.String(), fmt.Errorf("failed to backup current binary: %v", err)
+	}
+
+	// Move new binary to current location
+	if err := os.Rename(tempPath, execPath); err != nil {
+		os.Rename(backupPath, execPath) // Try to restore
+		return logs.String(), fmt.Errorf("failed to install new binary: %v", err)
+	}
+
+	logs.WriteString(fmt.Sprintf("Agent updated to %s. Restarting via systemd...\n", expectedVersion))
+
+	// Restart via systemd (this will kill the current process)
+	go func() {
+		time.Sleep(1 * time.Second) // Give time to send response
+		exec.Command("systemctl", "restart", "configuratix-agent").Run()
+	}()
+
+	return logs.String(), nil
 }
 
 func runCommand(name string, args ...string) (string, error) {
