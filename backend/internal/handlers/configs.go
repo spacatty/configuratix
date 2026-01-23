@@ -290,41 +290,17 @@ func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// 2. PHP Category - common PHP versions
+	// 2. PHP Category - will be populated dynamically via file module
+	// For now, create empty category - frontend will scan for PHP versions
 	phpCategory := ConfigCategoryResponse{
 		ID:          "php",
 		Name:        "PHP",
 		Emoji:       "🐘",
 		Color:       "#8b5cf6",
-		Description: "PHP-FPM configuration",
+		Description: "PHP-FPM configuration (scan /etc/php for versions)",
 		IsBuiltIn:   true,
-		Subcategories: []SubcategoryResponse{
-			// Common PHP versions - files will 404 if not installed, which is fine
-			{
-				ID:   "php_8.3",
-				Name: "PHP 8.3",
-				Files: []ConfigFile{
-					{Name: "php.ini", Path: "/etc/php/8.3/fpm/php.ini", Type: "php", Readonly: false},
-					{Name: "www.conf", Path: "/etc/php/8.3/fpm/pool.d/www.conf", Type: "php", Readonly: false},
-				},
-			},
-			{
-				ID:   "php_8.2",
-				Name: "PHP 8.2",
-				Files: []ConfigFile{
-					{Name: "php.ini", Path: "/etc/php/8.2/fpm/php.ini", Type: "php", Readonly: false},
-					{Name: "www.conf", Path: "/etc/php/8.2/fpm/pool.d/www.conf", Type: "php", Readonly: false},
-				},
-			},
-			{
-				ID:   "php_8.1",
-				Name: "PHP 8.1",
-				Files: []ConfigFile{
-					{Name: "php.ini", Path: "/etc/php/8.1/fpm/php.ini", Type: "php", Readonly: false},
-					{Name: "www.conf", Path: "/etc/php/8.1/fpm/pool.d/www.conf", Type: "php", Readonly: false},
-				},
-			},
-		},
+		Subcategories: []SubcategoryResponse{},
+		// Hint to frontend to scan /etc/php directory
 	}
 
 	// Add built-in categories (no job waiting - instant response!)

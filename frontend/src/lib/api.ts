@@ -1194,6 +1194,30 @@ class ApiClient {
     });
   }
 
+  // Fast File Operations (via WebSocket-based agent file module)
+  async listDirectory(machineId: string, path: string, recursive = false): Promise<FileOperationResult> {
+    return this.request<FileOperationResult>(`/api/machines/${machineId}/files/list?path=${encodeURIComponent(path)}&recursive=${recursive}`);
+  }
+
+  async readFileFast(machineId: string, path: string): Promise<FileOperationResult> {
+    return this.request<FileOperationResult>(`/api/machines/${machineId}/files/read?path=${encodeURIComponent(path)}`);
+  }
+
+  async writeFileFast(machineId: string, path: string, content: string): Promise<FileOperationResult> {
+    return this.request<FileOperationResult>(`/api/machines/${machineId}/files/write`, {
+      method: "POST",
+      body: JSON.stringify({ path, content }),
+    });
+  }
+
+  async fileExists(machineId: string, path: string): Promise<FileOperationResult> {
+    return this.request<FileOperationResult>(`/api/machines/${machineId}/files/exists?path=${encodeURIComponent(path)}`);
+  }
+
+  async getFileSessionStatus(machineId: string): Promise<{ connected: boolean }> {
+    return this.request<{ connected: boolean }>(`/api/machines/${machineId}/files/status`);
+  }
+
   // PHP Runtimes
   async getPHPRuntime(machineId: string): Promise<PHPRuntimeResponse> {
     return this.request<PHPRuntimeResponse>(`/api/machines/${machineId}/php`);
@@ -1265,6 +1289,26 @@ export interface ConfigFile {
   type: string; // nginx, nginx_site, php, ssh, text
   readonly: boolean;
   reload_command?: string;
+}
+
+// Fast file operations (via agent file module)
+export interface FileInfo {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  mode: string;
+  mod_time: string;
+}
+
+export interface FileOperationResult {
+  id: string;
+  type: string;
+  path?: string;
+  content?: string;
+  result?: FileInfo[] | boolean | FileInfo;
+  error?: string;
+  success: boolean;
 }
 
 export interface ConfigSubcategory {

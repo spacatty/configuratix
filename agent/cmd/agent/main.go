@@ -13,6 +13,7 @@ import (
 	"configuratix/agent/internal/client"
 	"configuratix/agent/internal/config"
 	"configuratix/agent/internal/executor"
+	"configuratix/agent/internal/files"
 	"configuratix/agent/internal/terminal"
 )
 
@@ -109,6 +110,9 @@ func run() error {
 
 	// Start terminal connection in background
 	go terminal.RunTerminalLoop(cfg.ServerURL, cfg.APIKey)
+
+	// Start file handler connection in background
+	go files.RunFileLoop(cfg.ServerURL, cfg.APIKey)
 
 	// Heartbeat ticker
 	heartbeatTicker := time.NewTicker(30 * time.Second)

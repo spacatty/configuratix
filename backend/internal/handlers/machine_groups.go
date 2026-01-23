@@ -270,7 +270,7 @@ func (h *MachineGroupsHandler) GetGroupMembers(w http.ResponseWriter, r *http.Re
 	var machines []MachineWithPosition
 	err = h.db.Select(&machines, `
 		SELECT m.id, m.title, m.hostname, m.ip_address, 
-			   a.last_seen_at as last_seen,
+			   a.last_seen,
 			   mgm.position
 		FROM machines m
 		JOIN machine_group_members mgm ON m.id = mgm.machine_id

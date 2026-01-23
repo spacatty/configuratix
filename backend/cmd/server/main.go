@@ -230,6 +230,17 @@ func main() {
 	apiRouter.HandleFunc("/machines/{id}/terminal/status", terminalHandler.GetTerminalStatus).Methods("GET", "OPTIONS")
 	// Agent terminal WebSocket (uses agent auth)
 	agentRouter.HandleFunc("/terminal", terminalHandler.AgentTerminalConnect).Methods("GET")
+
+	// Files WebSocket (fast file operations)
+	filesHandler := handlers.NewFilesHandler(db)
+	apiRouter.HandleFunc("/machines/{id}/files/list", filesHandler.ListDirectory).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/files/read", filesHandler.ReadFile).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/files/write", filesHandler.WriteFile).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/files/exists", filesHandler.FileExists).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/files/status", filesHandler.GetFileSessionStatus).Methods("GET", "OPTIONS")
+	// Agent files WebSocket (uses agent auth)
+	agentRouter.HandleFunc("/files", filesHandler.AgentFileConnect).Methods("GET")
+
 	// Agent static content download (uses agent auth)
 	agentRouter.HandleFunc("/static/{id}/download", staticHandler.AgentDownloadLanding).Methods("GET", "OPTIONS")
 
