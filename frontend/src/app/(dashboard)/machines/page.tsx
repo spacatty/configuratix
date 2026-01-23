@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
 import { ColumnDef } from "@tanstack/react-table";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -566,14 +567,15 @@ export default function MachinesPage() {
                 try {
                   const members = await api.getGroupMembers(group.id);
                   const membersList = members || [];
-                  // Update both at once - React batches these
-                  setGroupMembers(prev => {
-                    const updated = { ...prev, [group.id]: membersList };
-                    // Debug log
-                    console.log(`Loaded ${membersList.length} members for group ${group.id}`, membersList.map(m => m.id));
-                    return updated;
+                  console.log(`Loaded ${membersList.length} members for group ${group.id}`, membersList.map(m => m.id));
+                  
+                  // Use flushSync to ensure both updates happen synchronously
+                  flushSync(() => {
+                    setGroupMembers(prev => ({ ...prev, [group.id]: membersList }));
                   });
-                  setSelectedGroupFilter(group.id);
+                  flushSync(() => {
+                    setSelectedGroupFilter(group.id);
+                  });
                 } catch (err) {
                   console.error("Failed to load group members:", err);
                   toast.error("Failed to load group members");
