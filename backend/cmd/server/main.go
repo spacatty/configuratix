@@ -81,6 +81,7 @@ func main() {
 	apiRouter.HandleFunc("/admin/stats", adminHandler.AdminStats).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/admin/agent/upload", agentUpdateHandler.UploadAgent).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/admin/agent/reload", agentUpdateHandler.ReloadVersion).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/admin/agent/rebuild", agentUpdateHandler.RebuildAgent).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/admin/users", adminHandler.ListUsers).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/admin/users", adminHandler.CreateAdmin).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/admin/users/{id}", adminHandler.GetUser).Methods("GET", "OPTIONS")

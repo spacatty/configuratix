@@ -11,4 +11,3 @@ import (
 func execSyscall(argv0 string, argv []string, envv []string) error {
 	return errors.New("exec not supported on Windows, use restart instead")
 }
-
