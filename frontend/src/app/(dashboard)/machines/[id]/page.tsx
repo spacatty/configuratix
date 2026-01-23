@@ -1481,6 +1481,7 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
                   machineId={machine.id}
                   apiUrl={api.getApiUrl()}
                   token={localStorage.getItem("auth_token") || ""}
+                  isActive={activeTab === "terminal"}
                 />
               </div>
               <p className="text-xs text-muted-foreground mt-2">

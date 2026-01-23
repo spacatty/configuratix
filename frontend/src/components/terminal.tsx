@@ -10,9 +10,10 @@ interface WebSocketTerminalProps {
   machineId: string;
   apiUrl: string;
   token: string;
+  isActive?: boolean; // Only connect when this is true
 }
 
-export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTerminalProps) {
+export function WebSocketTerminal({ machineId, apiUrl, token, isActive = true }: WebSocketTerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -20,6 +21,7 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
   const mountedRef = useRef(true);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
 
   const connect = useCallback(() => {
     if (!terminalRef.current || !mountedRef.current) return;
@@ -194,9 +196,15 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
   useEffect(() => {
     mountedRef.current = true;
     
+    // Only connect when isActive is true (tab is visible)
+    if (!isActive) {
+      return;
+    }
+
     // Small delay to avoid React Strict Mode double-mount issues
     const timeoutId = setTimeout(() => {
-      if (mountedRef.current) {
+      if (mountedRef.current && isActive) {
+        setHasConnectedOnce(true);
         connect();
       }
     }, 100);
@@ -213,7 +221,21 @@ export function WebSocketTerminal({ machineId, apiUrl, token }: WebSocketTermina
         termRef.current = null;
       }
     };
-  }, [connect]);
+  }, [connect, isActive]);
+
+  // Show placeholder when not active and never connected
+  if (!isActive && !hasConnectedOnce) {
+    return (
+      <div 
+        className="relative h-full flex items-center justify-center"
+        style={{ minHeight: "400px", backgroundColor: "#0a0a0a" }}
+      >
+        <div className="text-center text-muted-foreground">
+          <p className="text-sm">Terminal will connect when you switch to this tab</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative h-full">
