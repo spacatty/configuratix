@@ -557,10 +557,28 @@ export default function MachinesPage() {
           {groups.map((group) => {
             const isSelected = selectedGroupFilter === group.id;
             const memberCount = group.machine_count || 0;
+            
+            const handleFilterClick = async () => {
+              if (isSelected) {
+                setSelectedGroupFilter(null);
+              } else {
+                // Load members if not already loaded
+                if (!groupMembers[group.id] || groupMembers[group.id].length === 0) {
+                  try {
+                    const members = await api.getGroupMembers(group.id);
+                    setGroupMembers(prev => ({ ...prev, [group.id]: members || [] }));
+                  } catch (err) {
+                    console.error("Failed to load group members:", err);
+                  }
+                }
+                setSelectedGroupFilter(group.id);
+              }
+            };
+            
             return (
               <div key={group.id} className="relative group/badge">
                 <button
-                  onClick={() => setSelectedGroupFilter(isSelected ? null : group.id)}
+                  onClick={handleFilterClick}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
                     isSelected
                       ? "text-white"
