@@ -114,7 +114,18 @@ func (h *AgentUpdateHandler) buildAgent() error {
 
 	log.Printf("Found agent source at: %s", agentDir)
 
-	binaryPath := filepath.Join(h.binaryDir, "configuratix-agent")
+	// Use absolute paths for output
+	absBinaryDir, err := filepath.Abs(h.binaryDir)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path: %v", err)
+	}
+	
+	// Ensure directory exists
+	if err := os.MkdirAll(absBinaryDir, 0755); err != nil {
+		return fmt.Errorf("failed to create binary directory: %v", err)
+	}
+	
+	binaryPath := filepath.Join(absBinaryDir, "configuratix-agent")
 	tempPath := binaryPath + ".tmp"
 
 	// Check if Go is available
