@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"configuratix/agent/internal/config"
 	"configuratix/agent/internal/executor"
 	"configuratix/agent/internal/files"
+	"configuratix/agent/internal/security"
 	"configuratix/agent/internal/stats"
 	"configuratix/agent/internal/terminal"
 	"configuratix/agent/internal/updater"
@@ -119,6 +121,24 @@ func run() error {
 
 	// Start auto-updater in background
 	go updater.New(cfg.ServerURL, Version).Run()
+
+	// Start security module (Linux only)
+	var securityModule *security.Module
+	if runtime.GOOS == "linux" {
+		securityModule = security.New(security.Config{
+			Enabled:          true,
+			ServerURL:        cfg.ServerURL,
+			APIKey:           cfg.APIKey,
+			MachineID:        cfg.AgentID, // Using AgentID as machine identifier
+			SyncInterval:     2 * time.Minute,
+			SecurityLogPath:  "/var/log/nginx/security-blocked.log",
+			NginxIncludePath: "/etc/nginx/snippets/configuratix-security.conf",
+		})
+		if err := securityModule.Start(); err != nil {
+			log.Printf("Security module failed to start: %v", err)
+			// Continue anyway - non-fatal
+		}
+	}
 
 	// Heartbeat ticker
 	heartbeatTicker := time.NewTicker(30 * time.Second)
