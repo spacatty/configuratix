@@ -93,6 +93,27 @@ export interface Machine {
   disk_total: number;
 }
 
+export interface MachineGroup {
+  id: string;
+  owner_id: string;
+  name: string;
+  emoji: string;
+  color: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+  machine_count?: number;
+}
+
+export interface MachineGroupMember {
+  id: string;
+  hostname: string;
+  ip_address: string;
+  status: string;
+  last_seen_at: string | null;
+  position: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -706,6 +727,69 @@ class ApiClient {
 
   async deleteEnrollmentToken(id: string): Promise<void> {
     await this.request(`/api/enrollment-tokens/${id}`, { method: "DELETE" });
+  }
+
+  // Machine Groups
+  async listMachineGroups(): Promise<MachineGroup[]> {
+    return this.request<MachineGroup[]>("/api/machine-groups");
+  }
+
+  async createMachineGroup(data: { name: string; emoji?: string; color?: string }): Promise<MachineGroup> {
+    return this.request<MachineGroup>("/api/machine-groups", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateMachineGroup(id: string, data: { name?: string; emoji?: string; color?: string; position?: number }): Promise<void> {
+    await this.request(`/api/machine-groups/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteMachineGroup(id: string): Promise<void> {
+    await this.request(`/api/machine-groups/${id}`, { method: "DELETE" });
+  }
+
+  async reorderMachineGroups(groupIds: string[]): Promise<void> {
+    await this.request("/api/machine-groups/reorder", {
+      method: "PUT",
+      body: JSON.stringify({ group_ids: groupIds }),
+    });
+  }
+
+  async getGroupMembers(groupId: string): Promise<MachineGroupMember[]> {
+    return this.request<MachineGroupMember[]>(`/api/machine-groups/${groupId}/members`);
+  }
+
+  async addGroupMembers(groupId: string, machineIds: string[]): Promise<{ added: number }> {
+    return this.request<{ added: number }>(`/api/machine-groups/${groupId}/members`, {
+      method: "POST",
+      body: JSON.stringify({ machine_ids: machineIds }),
+    });
+  }
+
+  async removeGroupMember(groupId: string, machineId: string): Promise<void> {
+    await this.request(`/api/machine-groups/${groupId}/members/${machineId}`, { method: "DELETE" });
+  }
+
+  async reorderGroupMembers(groupId: string, machineIds: string[]): Promise<void> {
+    await this.request(`/api/machine-groups/${groupId}/members/reorder`, {
+      method: "PUT",
+      body: JSON.stringify({ machine_ids: machineIds }),
+    });
+  }
+
+  async getMachineGroups(machineId: string): Promise<MachineGroup[]> {
+    return this.request<MachineGroup[]>(`/api/machines/${machineId}/groups`);
+  }
+
+  async setMachineGroups(machineId: string, groupIds: string[]): Promise<void> {
+    await this.request(`/api/machines/${machineId}/groups`, {
+      method: "PUT",
+      body: JSON.stringify({ group_ids: groupIds }),
+    });
   }
 
   // Jobs

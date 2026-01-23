@@ -65,6 +65,7 @@ func (db *DB) RunMigrations() error {
 		"013_seed_php_templates.sql",
 		"014_dns_providers.sql",
 		"015_separate_dns_domains.sql",
+		"016_machine_groups.sql",
 	}
 
 	// Get current working directory for debugging

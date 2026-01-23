@@ -10,8 +10,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { DataTable } from "@/components/ui/data-table";
-import { api, Machine, EnrollmentToken, ProjectWithStats, BACKEND_URL } from "@/lib/api";
+import { api, Machine, EnrollmentToken, ProjectWithStats, MachineGroup, MachineGroupMember, BACKEND_URL } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
 import { toast } from "sonner";
 import { 
@@ -25,7 +26,12 @@ import {
   HardDrive,
   Cpu,
   MoreHorizontal,
-  FolderOpen
+  FolderOpen,
+  Pencil,
+  GripVertical,
+  ChevronUp,
+  ChevronDown,
+  Users
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -36,15 +42,45 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
+// Common emojis for groups
+const GROUP_EMOJIS = ["📁", "🖥️", "🌐", "🔧", "🚀", "⭐", "🔒", "📦", "🏢", "💻", "🛠️", "📡", "🔥", "💎", "🎯"];
+
+// Preset colors for groups
+const GROUP_COLORS = [
+  "#6366f1", // Indigo
+  "#8b5cf6", // Purple
+  "#ec4899", // Pink
+  "#f43f5e", // Rose
+  "#ef4444", // Red
+  "#f97316", // Orange
+  "#eab308", // Yellow
+  "#22c55e", // Green
+  "#14b8a6", // Teal
+  "#06b6d4", // Cyan
+  "#3b82f6", // Blue
+  "#64748b", // Slate
+];
+
 export default function MachinesPage() {
   const router = useRouter();
   const [machines, setMachines] = useState<Machine[]>([]);
   const [projects, setProjects] = useState<ProjectWithStats[]>([]);
+  const [groups, setGroups] = useState<MachineGroup[]>([]);
+  const [groupMembers, setGroupMembers] = useState<Record<string, MachineGroupMember[]>>({});
   const [loading, setLoading] = useState(true);
   const [showCreateTokenDialog, setShowCreateTokenDialog] = useState(false);
   const [tokenName, setTokenName] = useState("");
   const [createdToken, setCreatedToken] = useState<EnrollmentToken | null>(null);
   const [selectedProject, setSelectedProject] = useState<string>("all");
+  
+  // Group management state
+  const [showGroupDialog, setShowGroupDialog] = useState(false);
+  const [editingGroup, setEditingGroup] = useState<MachineGroup | null>(null);
+  const [groupForm, setGroupForm] = useState({ name: "", emoji: "📁", color: "#6366f1" });
+  const [showAssignGroupsDialog, setShowAssignGroupsDialog] = useState(false);
+  const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -52,12 +88,27 @@ export default function MachinesPage() {
 
   const loadData = async () => {
     try {
-      const [machinesData, projectsData] = await Promise.all([
+      const [machinesData, projectsData, groupsData] = await Promise.all([
         api.listMachines(undefined, selectedProject === "all" ? undefined : selectedProject),
         api.listProjects(),
+        api.listMachineGroups(),
       ]);
       setMachines(machinesData);
       setProjects(projectsData);
+      setGroups(groupsData);
+      
+      // Load members for each group
+      const membersMap: Record<string, MachineGroupMember[]> = {};
+      await Promise.all(
+        groupsData.map(async (group) => {
+          try {
+            membersMap[group.id] = await api.getGroupMembers(group.id);
+          } catch {
+            membersMap[group.id] = [];
+          }
+        })
+      );
+      setGroupMembers(membersMap);
     } catch (err) {
       console.error("Failed to load data:", err);
       toast.error("Failed to load machines");
@@ -76,6 +127,111 @@ export default function MachinesPage() {
     } catch (err) {
       console.error("Failed to create token:", err);
       toast.error("Failed to create token");
+    }
+  };
+
+  // Group management
+  const openGroupDialog = (group?: MachineGroup) => {
+    if (group) {
+      setEditingGroup(group);
+      setGroupForm({ name: group.name, emoji: group.emoji, color: group.color });
+    } else {
+      setEditingGroup(null);
+      setGroupForm({ name: "", emoji: "📁", color: "#6366f1" });
+    }
+    setShowGroupDialog(true);
+  };
+
+  const handleSaveGroup = async () => {
+    if (!groupForm.name.trim()) {
+      toast.error("Group name is required");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      if (editingGroup) {
+        await api.updateMachineGroup(editingGroup.id, groupForm);
+        toast.success("Group updated");
+      } else {
+        await api.createMachineGroup(groupForm);
+        toast.success("Group created");
+      }
+      setShowGroupDialog(false);
+      loadData();
+    } catch (err) {
+      console.error("Failed to save group:", err);
+      toast.error("Failed to save group");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeleteGroup = async (groupId: string) => {
+    if (!confirm("Delete this group? Machines will not be deleted.")) return;
+    try {
+      await api.deleteMachineGroup(groupId);
+      toast.success("Group deleted");
+      loadData();
+    } catch (err) {
+      console.error("Failed to delete group:", err);
+      toast.error("Failed to delete group");
+    }
+  };
+
+  const openAssignGroupsDialog = async (machine: Machine) => {
+    setSelectedMachine(machine);
+    try {
+      const machineGroups = await api.getMachineGroups(machine.id);
+      setSelectedGroupIds(machineGroups.map(g => g.id));
+    } catch {
+      setSelectedGroupIds([]);
+    }
+    setShowAssignGroupsDialog(true);
+  };
+
+  const handleAssignGroups = async () => {
+    if (!selectedMachine) return;
+    setSubmitting(true);
+    try {
+      await api.setMachineGroups(selectedMachine.id, selectedGroupIds);
+      toast.success("Groups updated");
+      setShowAssignGroupsDialog(false);
+      loadData();
+    } catch (err) {
+      console.error("Failed to assign groups:", err);
+      toast.error("Failed to assign groups");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleRemoveFromGroup = async (groupId: string, machineId: string) => {
+    try {
+      await api.removeGroupMember(groupId, machineId);
+      toast.success("Removed from group");
+      loadData();
+    } catch (err) {
+      console.error("Failed to remove from group:", err);
+      toast.error("Failed to remove from group");
+    }
+  };
+
+  const handleMoveInGroup = async (groupId: string, machineId: string, direction: "up" | "down") => {
+    const members = groupMembers[groupId] || [];
+    const currentIndex = members.findIndex(m => m.id === machineId);
+    if (currentIndex === -1) return;
+    
+    const newIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    if (newIndex < 0 || newIndex >= members.length) return;
+    
+    const newOrder = [...members];
+    [newOrder[currentIndex], newOrder[newIndex]] = [newOrder[newIndex], newOrder[currentIndex]];
+    
+    try {
+      await api.reorderGroupMembers(groupId, newOrder.map(m => m.id));
+      loadData();
+    } catch (err) {
+      console.error("Failed to reorder:", err);
     }
   };
 
@@ -285,6 +441,10 @@ export default function MachinesPage() {
                 <Copy className="mr-2 h-4 w-4" />
                 Copy IP
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openAssignGroupsDialog(machine)}>
+                <Users className="mr-2 h-4 w-4" />
+                Assign to Groups
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem 
                 className="text-destructive"
@@ -342,12 +502,118 @@ export default function MachinesPage() {
               ))}
             </SelectContent>
           </Select>
+          <Button variant="outline" onClick={() => openGroupDialog()}>
+            <FolderOpen className="mr-2 h-4 w-4" />
+            New Group
+          </Button>
           <Button onClick={() => setShowCreateTokenDialog(true)}>
             <Plus className="mr-2 h-4 w-4" />
             Add Machine
           </Button>
         </div>
       </div>
+
+      {/* Machine Groups */}
+      {groups.length > 0 && (
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {groups.map((group) => {
+            const members = groupMembers[group.id] || [];
+            return (
+              <Card key={group.id} className="border-border/50 bg-card/50">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span 
+                        className="text-xl p-1.5 rounded-md" 
+                        style={{ backgroundColor: `${group.color}20` }}
+                      >
+                        {group.emoji}
+                      </span>
+                      <div>
+                        <CardTitle className="text-base">{group.name}</CardTitle>
+                        <CardDescription className="text-xs">
+                          {members.length} machine{members.length !== 1 ? "s" : ""}
+                        </CardDescription>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="sm" onClick={() => openGroupDialog(group)}>
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => handleDeleteGroup(group.id)}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  {members.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-4">
+                      No machines in this group
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {members.map((member, idx) => (
+                        <div 
+                          key={member.id}
+                          className="flex items-center justify-between p-2 rounded-md bg-muted/50 hover:bg-muted transition-colors group"
+                        >
+                          <div 
+                            className="flex items-center gap-2 flex-1 cursor-pointer"
+                            onClick={() => router.push(`/machines/${member.id}`)}
+                          >
+                            <div 
+                              className={`h-2 w-2 rounded-full ${
+                                member.status === "online" ? "bg-green-500" : "bg-red-500"
+                              }`}
+                            />
+                            <span className="text-sm font-medium truncate">
+                              {member.hostname || member.ip_address}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="h-6 w-6 p-0"
+                              disabled={idx === 0}
+                              onClick={() => handleMoveInGroup(group.id, member.id, "up")}
+                            >
+                              <ChevronUp className="h-3 w-3" />
+                            </Button>
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="h-6 w-6 p-0"
+                              disabled={idx === members.length - 1}
+                              onClick={() => handleMoveInGroup(group.id, member.id, "down")}
+                            >
+                              <ChevronDown className="h-3 w-3" />
+                            </Button>
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="h-6 w-6 p-0 text-destructive hover:text-destructive"
+                              onClick={() => handleRemoveFromGroup(group.id, member.id)}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
 
       {/* Machines Table */}
       <Card className="border-border/50 bg-card/50 flex-1 flex flex-col overflow-hidden">
@@ -430,6 +696,151 @@ export default function MachinesPage() {
                 </Button>
               </>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create/Edit Group Dialog */}
+      <Dialog open={showGroupDialog} onOpenChange={setShowGroupDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingGroup ? "Edit Group" : "Create Group"}</DialogTitle>
+            <DialogDescription>
+              Organize your machines into groups for easier management.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="group-name">Name</Label>
+              <Input
+                id="group-name"
+                placeholder="e.g., Production Servers"
+                value={groupForm.name}
+                onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })}
+              />
+            </div>
+            
+            <div className="space-y-2">
+              <Label>Emoji</Label>
+              <div className="flex flex-wrap gap-2">
+                {GROUP_EMOJIS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => setGroupForm({ ...groupForm, emoji })}
+                    className={`text-xl p-2 rounded-md border transition-colors ${
+                      groupForm.emoji === emoji 
+                        ? "border-primary bg-primary/10" 
+                        : "border-border hover:bg-muted"
+                    }`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            <div className="space-y-2">
+              <Label>Color</Label>
+              <div className="flex flex-wrap gap-2">
+                {GROUP_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    onClick={() => setGroupForm({ ...groupForm, color })}
+                    className={`h-8 w-8 rounded-md border-2 transition-transform ${
+                      groupForm.color === color 
+                        ? "border-foreground scale-110" 
+                        : "border-transparent hover:scale-105"
+                    }`}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
+              <span 
+                className="text-2xl p-2 rounded-md" 
+                style={{ backgroundColor: `${groupForm.color}20` }}
+              >
+                {groupForm.emoji}
+              </span>
+              <span className="font-medium">{groupForm.name || "Group Preview"}</span>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowGroupDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveGroup} disabled={submitting}>
+              {submitting ? "Saving..." : editingGroup ? "Save Changes" : "Create Group"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Assign Groups Dialog */}
+      <Dialog open={showAssignGroupsDialog} onOpenChange={setShowAssignGroupsDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Assign to Groups</DialogTitle>
+            <DialogDescription>
+              Select which groups {selectedMachine?.hostname || selectedMachine?.title || "this machine"} should belong to.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 max-h-64 overflow-y-auto py-2">
+            {groups.length === 0 ? (
+              <div className="text-center py-4 text-muted-foreground">
+                <p>No groups created yet.</p>
+                <Button 
+                  variant="link" 
+                  className="mt-2" 
+                  onClick={() => {
+                    setShowAssignGroupsDialog(false);
+                    openGroupDialog();
+                  }}
+                >
+                  Create your first group
+                </Button>
+              </div>
+            ) : (
+              groups.map((group) => (
+                <label
+                  key={group.id}
+                  className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-muted/50 cursor-pointer transition-colors"
+                >
+                  <Checkbox
+                    checked={selectedGroupIds.includes(group.id)}
+                    onCheckedChange={(checked) => {
+                      if (checked) {
+                        setSelectedGroupIds([...selectedGroupIds, group.id]);
+                      } else {
+                        setSelectedGroupIds(selectedGroupIds.filter(id => id !== group.id));
+                      }
+                    }}
+                  />
+                  <span 
+                    className="text-lg p-1 rounded" 
+                    style={{ backgroundColor: `${group.color}20` }}
+                  >
+                    {group.emoji}
+                  </span>
+                  <span className="font-medium">{group.name}</span>
+                  <Badge variant="secondary" className="ml-auto text-xs">
+                    {group.machine_count || 0}
+                  </Badge>
+                </label>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAssignGroupsDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleAssignGroups} disabled={submitting || groups.length === 0}>
+              {submitting ? "Saving..." : "Save"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

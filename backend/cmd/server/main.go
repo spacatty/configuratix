@@ -137,6 +137,20 @@ func main() {
 	apiRouter.HandleFunc("/enrollment-tokens", machinesHandler.CreateEnrollmentToken).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/enrollment-tokens/{id}", machinesHandler.DeleteEnrollmentToken).Methods("DELETE", "OPTIONS")
 
+	// Machine Groups
+	machineGroupsHandler := handlers.NewMachineGroupsHandler(db)
+	apiRouter.HandleFunc("/machine-groups", machineGroupsHandler.ListMachineGroups).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machine-groups", machineGroupsHandler.CreateMachineGroup).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/machine-groups/reorder", machineGroupsHandler.ReorderMachineGroups).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/machine-groups/{id}", machineGroupsHandler.UpdateMachineGroup).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/machine-groups/{id}", machineGroupsHandler.DeleteMachineGroup).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/machine-groups/{id}/members", machineGroupsHandler.GetGroupMembers).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machine-groups/{id}/members", machineGroupsHandler.AddGroupMembers).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/machine-groups/{id}/members/reorder", machineGroupsHandler.ReorderGroupMembers).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/machine-groups/{id}/members/{machineId}", machineGroupsHandler.RemoveGroupMember).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{machineId}/groups", machineGroupsHandler.GetMachineGroups).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{machineId}/groups", machineGroupsHandler.SetMachineGroups).Methods("PUT", "OPTIONS")
+
 	// Domains
 	domainsHandler := handlers.NewDomainsHandler(db)
 	apiRouter.HandleFunc("/domains", domainsHandler.ListDomains).Methods("GET", "OPTIONS")
