@@ -913,7 +913,10 @@ func (h *PassthroughHandler) rotateToMachine(poolID, recordID uuid.UUID, member 
 	`, member.MachineID, newIndex, poolID)
 
 	// Log history
-	_, histErr := h.db.Exec(`
+	log.Printf("Inserting rotation history: pool_type=%s, pool_id=%s, from_machine=%v, from_ip=%s, to_machine=%s, to_ip=%s, trigger=%s",
+		poolType, poolID, pool.CurrentMachineID, fromIP, member.MachineID, member.MachineIP, trigger)
+	
+	result, histErr := h.db.Exec(`
 		INSERT INTO dns_rotation_history 
 			(pool_type, pool_id, from_machine_id, from_ip, to_machine_id, to_ip, trigger)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -921,8 +924,8 @@ func (h *PassthroughHandler) rotateToMachine(poolID, recordID uuid.UUID, member 
 	if histErr != nil {
 		log.Printf("Failed to insert rotation history: %v", histErr)
 	} else {
-		log.Printf("Rotation history logged: %s -> %s (%s -> %s)", 
-			pool.CurrentMachineID, member.MachineID, fromIP, member.MachineIP)
+		rows, _ := result.RowsAffected()
+		log.Printf("Rotation history inserted: %d rows affected", rows)
 	}
 
 	return nil
