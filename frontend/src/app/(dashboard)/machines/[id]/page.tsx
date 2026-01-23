@@ -12,9 +12,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { api, Machine, UFWRule, Job, ConfigFile, ConfigCategory } from "@/lib/api";
+import { api, Machine, UFWRule, Job, ConfigFile, ConfigCategory, ConfigPath } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
-import { ChevronDown, ChevronRight, RefreshCw, FileCode, Save, RotateCcw, Loader2, FileText, Settings, Lock, Copy, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw, FileCode, Save, RotateCcw, Loader2, FileText, Settings, Lock, Copy, Plus, Trash2, Pencil } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
@@ -444,6 +444,10 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
   const [pathForm, setPathForm] = useState({ name: "", path: "", file_type: "text", reload_command: "" });
   const [selectedCategoryForPath, setSelectedCategoryForPath] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  
+  // Edit mode state
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [editingPathId, setEditingPathId] = useState<string | null>(null);
 
   const loadConfigs = useCallback(async () => {
     try {
@@ -657,8 +661,88 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
   };
 
   const openAddPathDialog = (categoryId: string) => {
+    setEditingPathId(null);
+    setPathForm({ name: "", path: "", file_type: "text", reload_command: "" });
     setSelectedCategoryForPath(categoryId);
     setShowAddPathDialog(true);
+  };
+
+  // Edit category
+  const openEditCategoryDialog = (category: ConfigCategory) => {
+    setEditingCategoryId(category.id);
+    setCategoryForm({ name: category.name, emoji: category.emoji || "📁", color: category.color || "#6366f1" });
+    setShowAddCategoryDialog(true);
+  };
+
+  const handleUpdateCategory = async () => {
+    if (!editingCategoryId || !categoryForm.name.trim()) {
+      toast.error("Category name is required");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api.updateConfigCategory(machineId, editingCategoryId, {
+        ...categoryForm,
+        position: 0 // Keep current position
+      });
+      toast.success("Category updated");
+      setShowAddCategoryDialog(false);
+      setCategoryForm({ name: "", emoji: "📁", color: "#6366f1" });
+      setEditingCategoryId(null);
+      loadConfigs();
+    } catch (err) {
+      console.error("Failed to update category:", err);
+      toast.error("Failed to update category");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Edit path
+  const openEditPathDialog = (categoryId: string, file: ConfigFile) => {
+    if (!file.id) return;
+    setEditingPathId(file.id);
+    setSelectedCategoryForPath(categoryId);
+    setPathForm({
+      name: file.name,
+      path: file.path,
+      file_type: file.file_type || file.type || "text",
+      reload_command: file.reload_command || "",
+    });
+    setShowAddPathDialog(true);
+  };
+
+  const handleUpdatePath = async () => {
+    if (!editingPathId || !selectedCategoryForPath || !pathForm.name.trim() || !pathForm.path.trim()) {
+      toast.error("Name and path are required");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api.updateConfigPath(machineId, selectedCategoryForPath, editingPathId, {
+        name: pathForm.name,
+        path: pathForm.path,
+        file_type: pathForm.file_type,
+        reload_command: pathForm.reload_command || undefined,
+      });
+      toast.success("File path updated");
+      setShowAddPathDialog(false);
+      setPathForm({ name: "", path: "", file_type: "text", reload_command: "" });
+      setEditingPathId(null);
+      setSelectedCategoryForPath(null);
+      loadConfigs();
+    } catch (err) {
+      console.error("Failed to update path:", err);
+      toast.error("Failed to update file path");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const openAddCategoryDialog = () => {
+    setEditingCategoryId(null);
+    setCategoryForm({ name: "", emoji: "📁", color: "#6366f1" });
+    setShowAddCategoryDialog(true);
   };
 
   // Handle sidebar resize
@@ -728,18 +812,43 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
     );
   }
 
-  const renderFileItem = (file: ConfigFile) => (
-    <button
-      key={file.path}
-      onClick={() => loadConfigContent(file)}
-      className={`w-full py-2 px-3 text-left hover:bg-muted/50 transition-colors flex items-center gap-2 text-sm ${
-        selectedConfig?.path === file.path ? "bg-primary/10 border-l-2 border-l-primary" : ""
-      }`}
-    >
-      {getConfigIcon(file.type)}
-      <span className="truncate flex-1">{file.name}</span>
-    </button>
-  );
+  const renderFileItem = (file: ConfigFile, category?: ConfigCategory) => {
+    const isCustom = category && !category.is_built_in;
+    return (
+      <div
+        key={file.path}
+        className={`group/file w-full py-2 px-3 text-left hover:bg-muted/50 transition-colors flex items-center gap-2 text-sm ${
+          selectedConfig?.path === file.path ? "bg-primary/10 border-l-2 border-l-primary" : ""
+        }`}
+      >
+        <button
+          onClick={() => loadConfigContent(file)}
+          className="flex items-center gap-2 flex-1 text-left"
+        >
+          {getConfigIcon(file.type)}
+          <span className="truncate flex-1">{file.name}</span>
+        </button>
+        {isCustom && file.id && (
+          <div className="opacity-0 group-hover/file:opacity-100 transition-opacity flex items-center gap-0.5">
+            <button
+              onClick={(e) => { e.stopPropagation(); openEditPathDialog(category.id, file); }}
+              className="p-0.5 rounded hover:bg-muted"
+              title="Edit path"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); handleDeletePath(category.id, file.id!); }}
+              className="p-0.5 rounded hover:bg-destructive hover:text-white"
+              title="Remove path"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div ref={containerRef} className="flex h-[600px] gap-0">
@@ -755,7 +864,7 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
               <Button 
                 variant="ghost" 
                 size="sm" 
-                onClick={() => setShowAddCategoryDialog(true)} 
+                onClick={openAddCategoryDialog} 
                 className="h-7 w-7 p-0"
                 title="Add custom category"
               >
@@ -808,6 +917,13 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
                           <Plus className="h-3 w-3" />
                         </button>
                         <button
+                          onClick={() => openEditCategoryDialog(category)}
+                          className="p-1 rounded hover:bg-muted"
+                          title="Edit category"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                        <button
                           onClick={() => handleDeleteCategory(category.id)}
                           className="p-1 rounded hover:bg-destructive hover:text-white"
                           title="Delete category"
@@ -838,14 +954,14 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
                           </button>
                           {expandedSubcats.has(subcat.id) && (
                             <div className="ml-4">
-                              {subcat.files.map(renderFileItem)}
+                              {subcat.files.map((file) => renderFileItem(file, category))}
                             </div>
                           )}
                         </div>
                       ))}
                       
                       {/* Direct files (no subcategory) */}
-                      {category.files?.map(renderFileItem)}
+                      {category.files?.map((file) => renderFileItem(file, category))}
                       
                       {/* Add file hint for empty custom categories */}
                       {isCustom && (!category.files || category.files.length === 0) && (!category.subcategories || category.subcategories.length === 0) && (
@@ -959,13 +1075,13 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
         </CardContent>
       </Card>
 
-      {/* Add Category Dialog */}
-      <Dialog open={showAddCategoryDialog} onOpenChange={setShowAddCategoryDialog}>
+      {/* Add/Edit Category Dialog */}
+      <Dialog open={showAddCategoryDialog} onOpenChange={(open) => { setShowAddCategoryDialog(open); if (!open) setEditingCategoryId(null); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Add Custom Category</DialogTitle>
+            <DialogTitle>{editingCategoryId ? "Edit Category" : "Add Custom Category"}</DialogTitle>
             <DialogDescription>
-              Create a new category to organize custom config files.
+              {editingCategoryId ? "Update category name, emoji, or color." : "Create a new category to organize custom config files."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -1010,23 +1126,23 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddCategoryDialog(false)}>
+            <Button variant="outline" onClick={() => { setShowAddCategoryDialog(false); setEditingCategoryId(null); }}>
               Cancel
             </Button>
-            <Button onClick={handleCreateCategory} disabled={submitting}>
-              {submitting ? "Creating..." : "Create Category"}
+            <Button onClick={editingCategoryId ? handleUpdateCategory : handleCreateCategory} disabled={submitting}>
+              {submitting ? (editingCategoryId ? "Saving..." : "Creating...") : (editingCategoryId ? "Save Changes" : "Create Category")}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Add Path Dialog */}
-      <Dialog open={showAddPathDialog} onOpenChange={setShowAddPathDialog}>
+      {/* Add/Edit Path Dialog */}
+      <Dialog open={showAddPathDialog} onOpenChange={(open) => { setShowAddPathDialog(open); if (!open) setEditingPathId(null); }}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Add File Path</DialogTitle>
+            <DialogTitle>{editingPathId ? "Edit File Path" : "Add File Path"}</DialogTitle>
             <DialogDescription>
-              Add a configuration file to this category.
+              {editingPathId ? "Update the file path configuration." : "Add a configuration file to this category."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -1078,11 +1194,11 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddPathDialog(false)}>
+            <Button variant="outline" onClick={() => { setShowAddPathDialog(false); setEditingPathId(null); }}>
               Cancel
             </Button>
-            <Button onClick={handleAddPath} disabled={submitting}>
-              {submitting ? "Adding..." : "Add File"}
+            <Button onClick={editingPathId ? handleUpdatePath : handleAddPath} disabled={submitting}>
+              {submitting ? (editingPathId ? "Saving..." : "Adding...") : (editingPathId ? "Save Changes" : "Add File")}
             </Button>
           </DialogFooter>
         </DialogContent>

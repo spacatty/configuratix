@@ -35,10 +35,13 @@ type WriteFileRequest struct {
 
 // ListConfigsResponse lists available config files on a machine
 type ConfigFile struct {
-	Name     string `json:"name"`
-	Path     string `json:"path"`
-	Type     string `json:"type"` // nginx, nginx_site, php, ssh
-	Readonly bool   `json:"readonly"`
+	ID            string  `json:"id,omitempty"`      // Only for custom paths
+	Name          string  `json:"name"`
+	Path          string  `json:"path"`
+	Type          string  `json:"type"`              // nginx, nginx_site, php, ssh, text
+	FileType      string  `json:"file_type,omitempty"` // Alias for type (custom paths)
+	Readonly      bool    `json:"readonly"`
+	ReloadCommand *string `json:"reload_command,omitempty"`
 }
 
 // ReadConfig reads a configuration file from the machine
@@ -338,10 +341,13 @@ func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 		files := []ConfigFile{}
 		for _, p := range paths {
 			files = append(files, ConfigFile{
-				Name:     p.Name,
-				Path:     p.Path,
-				Type:     p.FileType,
-				Readonly: false,
+				ID:            p.ID.String(),
+				Name:          p.Name,
+				Path:          p.Path,
+				Type:          p.FileType,
+				FileType:      p.FileType,
+				Readonly:      false,
+				ReloadCommand: p.ReloadCommand,
 			})
 		}
 

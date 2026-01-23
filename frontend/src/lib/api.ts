@@ -1315,10 +1315,20 @@ export interface PHPExtensionTemplate {
 }
 
 export interface ConfigFile {
+  id?: string; // Only set for custom paths (from DB)
   name: string;
   path: string;
   type: string; // nginx, nginx_site, php, ssh, text
+  file_type?: string; // alias for type
   readonly: boolean;
+  reload_command?: string;
+}
+
+export interface ConfigPath {
+  id: string;
+  name: string;
+  path: string;
+  file_type: string;
   reload_command?: string;
 }
 
