@@ -1051,49 +1051,72 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 
 	ctx := context.Background()
 	
+	// Always try to find the existing record first to get correct ID
+	findAndUpdateExisting := func() (string, error) {
+		remoteRecords, listErr := provider.ListRecords(ctx, recordInfo.DomainFQDN)
+		if listErr != nil {
+			return "", listErr
+		}
+		for _, remote := range remoteRecords {
+			// Match by name and type (Cloudflare returns full name like "amelle.domain.com")
+			remoteName := remote.Name
+			if remoteName == recordInfo.Name+"."+recordInfo.DomainFQDN || remoteName == recordInfo.Name {
+				if remote.Type == recordInfo.RecordType {
+					log.Printf("Found existing record %s (ID: %s, value: %s) - updating to %s", 
+						remoteName, remote.ID, remote.Value, machineIP)
+					dnsRecord.ID = remote.ID
+					_, updateErr := provider.UpdateRecord(ctx, recordInfo.DomainFQDN, remote.ID, dnsRecord)
+					if updateErr != nil {
+						return "", updateErr
+					}
+					return remote.ID, nil
+				}
+			}
+		}
+		return "", fmt.Errorf("record not found on provider")
+	}
+
 	// Try to update existing record, or create if it doesn't exist
 	if providerRecordID != "" {
 		// Update existing record
 		_, err = provider.UpdateRecord(ctx, recordInfo.DomainFQDN, providerRecordID, dnsRecord)
 		if err != nil {
-			log.Printf("Failed to update record on provider, trying delete+create: %v", err)
-			// Try delete and recreate
-			provider.DeleteRecord(ctx, recordInfo.DomainFQDN, providerRecordID)
-			createdRecord, createErr := provider.CreateRecord(ctx, recordInfo.DomainFQDN, dnsRecord)
-			if createErr != nil {
-				h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", 
-					createErr.Error(), recordID)
-				return fmt.Errorf("failed to sync DNS record: %w", createErr)
+			log.Printf("Failed to update record on provider (stale ID?), searching for existing: %v", err)
+			// The stored ID is probably stale - find the actual record
+			foundID, findErr := findAndUpdateExisting()
+			if findErr != nil {
+				// Try to create new
+				createdRecord, createErr := provider.CreateRecord(ctx, recordInfo.DomainFQDN, dnsRecord)
+				if createErr != nil {
+					h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", 
+						createErr.Error(), recordID)
+					return fmt.Errorf("failed to sync DNS record: %w", createErr)
+				}
+				providerRecordID = createdRecord.ID
+			} else {
+				providerRecordID = foundID
 			}
-			providerRecordID = createdRecord.ID
 		}
 	} else {
-		// Create new record on provider
-		createdRecord, createErr := provider.CreateRecord(ctx, recordInfo.DomainFQDN, dnsRecord)
-		if createErr != nil {
-			// Record might already exist - try to find it and update
-			remoteRecords, listErr := provider.ListRecords(ctx, recordInfo.DomainFQDN)
-			if listErr == nil {
-				for _, remote := range remoteRecords {
-					if remote.Name == recordInfo.Name && remote.Type == recordInfo.RecordType {
-						// Found existing record - update it
-						dnsRecord.ID = remote.ID
-						updatedRecord, updateErr := provider.UpdateRecord(ctx, recordInfo.DomainFQDN, remote.ID, dnsRecord)
-						if updateErr == nil {
-							providerRecordID = updatedRecord.ID
-							createErr = nil
-						}
-						break
-					}
-				}
-			}
+		// No stored ID - try to find existing or create new
+		foundID, findErr := findAndUpdateExisting()
+		if findErr != nil {
+			// Create new record
+			createdRecord, createErr := provider.CreateRecord(ctx, recordInfo.DomainFQDN, dnsRecord)
 			if createErr != nil {
-				h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", 
-					createErr.Error(), recordID)
-				return fmt.Errorf("failed to create DNS record on provider: %w", createErr)
+				// If create fails, try find again (race condition)
+				foundID2, findErr2 := findAndUpdateExisting()
+				if findErr2 != nil {
+					h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", 
+						createErr.Error(), recordID)
+					return fmt.Errorf("failed to sync DNS record: %w", createErr)
+				}
+				providerRecordID = foundID2
+			} else {
+				providerRecordID = createdRecord.ID
 			}
 		} else {
-			providerRecordID = createdRecord.ID
+			providerRecordID = foundID
 		}
 	}
 
