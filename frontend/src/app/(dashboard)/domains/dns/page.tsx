@@ -550,7 +550,7 @@ function DNSSettingsDialog({
 
   // Form state
   const [dnsAccountId, setDnsAccountId] = useState<string>("");
-  const [proxyMode, setProxyMode] = useState<string>("separate");
+  const [proxyMode, setProxyMode] = useState<string>("static");
 
   // Passthrough state
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -593,7 +593,7 @@ function DNSSettingsDialog({
   useEffect(() => {
     if (domain && open) {
       setDnsAccountId(domain.dns_account_id || "");
-      setProxyMode(domain.proxy_mode || "separate");
+      setProxyMode(domain.proxy_mode || "static");
       setExpectedNS(null);
       setNsStatus(null);
       loadRecords();
@@ -993,11 +993,12 @@ function DNSSettingsDialog({
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="settings">Settings</TabsTrigger>
             <TabsTrigger value="records" disabled={!dnsAccountId || proxyMode === "wildcard"}>Records</TabsTrigger>
-            <TabsTrigger value="passthrough" disabled={!dnsAccountId || proxyMode === "separate"}>Passthrough</TabsTrigger>
+            <TabsTrigger value="passthrough" disabled={!dnsAccountId || proxyMode === "static"}>Passthrough</TabsTrigger>
             <TabsTrigger value="sync" disabled={!dnsAccountId}>Sync</TabsTrigger>
+            <TabsTrigger value="debug" disabled={!dnsAccountId}>Debug</TabsTrigger>
           </TabsList>
 
           <TabsContent value="settings" className="space-y-6 mt-6">
@@ -1081,175 +1082,88 @@ function DNSSettingsDialog({
 
             {/* Proxy Mode Selector - Right after DNS Account */}
             {dnsAccountId && (
-              <div className="p-4 border rounded-lg bg-muted/20 space-y-3">
-                <div>
-                  <Label className="text-sm font-medium">Proxy Mode</Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">How to manage DNS records for this domain</p>
-                </div>
-                <div className="flex gap-4">
-                  <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "separate" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
-                    <input
-                      type="radio"
-                      name="proxy_mode"
-                      value="separate"
-                      checked={proxyMode === "separate"}
-                      onChange={() => setProxyMode("separate")}
-                      className="sr-only"
-                    />
-                    <div className="flex items-center gap-2 mb-1">
-                      <Settings2 className="h-4 w-4" />
-                      <span className="font-medium text-sm">Separate Records</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">Manage each subdomain individually. Configure static or dynamic mode per record.</p>
-                  </label>
-                  <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "wildcard" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
-                    <input
-                      type="radio"
-                      name="proxy_mode"
-                      value="wildcard"
-                      checked={proxyMode === "wildcard"}
-                      onChange={() => setProxyMode("wildcard")}
-                      className="sr-only"
-                    />
-                    <div className="flex items-center gap-2 mb-1">
-                      <Zap className="h-4 w-4" />
-                      <span className="font-medium text-sm">Wildcard Passthrough</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">Route all subdomains (*.{domain?.fqdn}) through a rotating proxy pool.</p>
-                  </label>
-                </div>
-              </div>
-            )}
-
-            {/* NS Status */}
-            {dnsAccountId && (
-              <div className="p-4 border rounded-lg bg-muted/20">
-                <div className="flex items-center justify-between">
+              <div className="p-4 border rounded-lg bg-muted/20 space-y-4">
+                {/* Primary Mode: Static vs Dynamic */}
+                <div className="space-y-3">
                   <div>
-                    <Label className="text-sm font-medium">Nameserver Status</Label>
-                    <p className="text-xs text-muted-foreground mt-0.5">Check if domain nameservers point to the DNS provider</p>
+                    <Label className="text-sm font-medium">Proxy Mode</Label>
+                    <p className="text-xs text-muted-foreground mt-0.5">How DNS records are routed</p>
                   </div>
-                  <Button variant="outline" size="sm" onClick={handleCheckNS} disabled={loading}>
-                    <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-                    Check Now
-                  </Button>
+                  <div className="flex gap-4">
+                    <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "static" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
+                      <input
+                        type="radio"
+                        name="proxy_mode"
+                        value="static"
+                        checked={proxyMode === "static"}
+                        onChange={() => setProxyMode("static")}
+                        className="sr-only"
+                      />
+                      <div className="flex items-center gap-2 mb-1">
+                        <Globe className="h-4 w-4" />
+                        <span className="font-medium text-sm">Static</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Direct DNS to provider. Records point to specified IPs.</p>
+                    </label>
+                    <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode !== "static" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
+                      <input
+                        type="radio"
+                        name="proxy_mode"
+                        value="dynamic"
+                        checked={proxyMode !== "static"}
+                        onChange={() => setProxyMode("separate")}
+                        className="sr-only"
+                      />
+                      <div className="flex items-center gap-2 mb-1">
+                        <Zap className="h-4 w-4" />
+                        <span className="font-medium text-sm">Dynamic (Passthrough)</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Route through rotating proxy pool. Auto-managed DNS records.</p>
+                    </label>
+                  </div>
                 </div>
-                {nsStatus && (
-                  <div className="mt-3 p-3 rounded-md bg-background/50 space-y-2 text-sm">
-                    <div className="flex items-center gap-2">
-                      {nsStatus.status === "valid" ? (
-                        <CheckCircle className="h-4 w-4 text-green-500" />
-                      ) : nsStatus.status === "pending" ? (
-                        <RefreshCw className="h-4 w-4 text-yellow-500" />
-                      ) : (
-                        <XCircle className="h-4 w-4 text-red-500" />
-                      )}
-                      <span className="font-medium">{nsStatus.message}</span>
+
+                {/* Secondary Mode: Separate vs Wildcard (only if Dynamic) */}
+                {proxyMode !== "static" && (
+                  <div className="space-y-3 pt-3 border-t border-border/50">
+                    <div>
+                      <Label className="text-sm font-medium">Passthrough Mode</Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">How proxy pools are organized</p>
                     </div>
-                    {nsStatus.expected && nsStatus.expected.length > 0 && (
-                      <div className="text-xs">
-                        <span className="text-muted-foreground">Expected: </span>
-                        <code className="bg-muted px-1 py-0.5 rounded">{nsStatus.expected.join(", ")}</code>
-                      </div>
-                    )}
-                    {nsStatus.actual && nsStatus.actual.length > 0 && (
-                      <div className="text-xs">
-                        <span className="text-muted-foreground">Current: </span>
-                        <code className="bg-muted px-1 py-0.5 rounded">{nsStatus.actual.join(", ")}</code>
-                      </div>
-                    )}
+                    <div className="flex gap-4">
+                      <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "separate" ? "border-purple-500 bg-purple-500/10" : "border-border hover:bg-muted/30"}`}>
+                        <input
+                          type="radio"
+                          name="passthrough_mode"
+                          value="separate"
+                          checked={proxyMode === "separate"}
+                          onChange={() => setProxyMode("separate")}
+                          className="sr-only"
+                        />
+                        <div className="flex items-center gap-2 mb-1">
+                          <Settings2 className="h-4 w-4" />
+                          <span className="font-medium text-sm">Separate Records</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">Each subdomain has its own pool, target server, and port config.</p>
+                      </label>
+                      <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "wildcard" ? "border-purple-500 bg-purple-500/10" : "border-border hover:bg-muted/30"}`}>
+                        <input
+                          type="radio"
+                          name="passthrough_mode"
+                          value="wildcard"
+                          checked={proxyMode === "wildcard"}
+                          onChange={() => setProxyMode("wildcard")}
+                          className="sr-only"
+                        />
+                        <div className="flex items-center gap-2 mb-1">
+                          <Zap className="h-4 w-4" />
+                          <span className="font-medium text-sm">Wildcard</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">Single pool handles *.{domain?.fqdn}. One target server.</p>
+                      </label>
+                    </div>
                   </div>
                 )}
-              </div>
-            )}
-
-            {/* DNS Debug Tools */}
-            {dnsAccountId && (
-              <div className="p-4 border rounded-lg bg-muted/20 space-y-4">
-                <div>
-                  <Label className="text-sm font-medium">DNS Debug Tools</Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">Query DNS records for debugging</p>
-                </div>
-
-                {/* List all from provider */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={handleListProviderRecords} disabled={loadingProviderRecords}>
-                      <RefreshCw className={`h-4 w-4 mr-2 ${loadingProviderRecords ? "animate-spin" : ""}`} />
-                      List All from Provider
-                    </Button>
-                    <span className="text-xs text-muted-foreground">Fetch all records from {isCloudflare ? "Cloudflare" : "DNSPod"}</span>
-                  </div>
-                  {providerRecords && (
-                    <div className="mt-2 border rounded overflow-hidden">
-                      <table className="w-full text-xs">
-                        <thead className="bg-muted/50">
-                          <tr>
-                            <th className="text-left p-1.5 font-medium">Name</th>
-                            <th className="text-left p-1.5 font-medium">Type</th>
-                            <th className="text-left p-1.5 font-medium">Value</th>
-                            <th className="text-left p-1.5 font-medium">TTL</th>
-                            {isCloudflare && <th className="text-left p-1.5 font-medium">Proxy</th>}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {providerRecords.length === 0 ? (
-                            <tr><td colSpan={isCloudflare ? 5 : 4} className="p-2 text-center text-muted-foreground">No records on provider</td></tr>
-                          ) : (
-                            providerRecords.map((r, i) => (
-                              <tr key={i} className="border-t">
-                                <td className="p-1.5 font-mono">{r.name}</td>
-                                <td className="p-1.5"><Badge variant="outline" className="text-xs py-0">{r.type}</Badge></td>
-                                <td className="p-1.5 font-mono max-w-[200px] truncate" title={r.value}>{r.value}</td>
-                                <td className="p-1.5">{r.ttl}</td>
-                                {isCloudflare && (
-                                  <td className="p-1.5">
-                                    <Cloud className={`h-3 w-3 ${r.proxied ? "text-orange-400" : "text-muted-foreground/30"}`} />
-                                  </td>
-                                )}
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-
-                {/* Public DNS Lookup */}
-                <div className="border-t pt-4 space-y-2">
-                  <div className="flex gap-2 items-center">
-                    <Input
-                      className="h-8 w-28 text-sm"
-                      placeholder="@ or www"
-                      value={lookupSubdomain}
-                      onChange={(e) => setLookupSubdomain(e.target.value || "@")}
-                    />
-                    <span className="text-xs text-muted-foreground">.{domain?.fqdn}</span>
-                    <Button variant="outline" size="sm" onClick={handleDNSLookup} disabled={loadingLookup}>
-                      <RefreshCw className={`h-4 w-4 mr-2 ${loadingLookup ? "animate-spin" : ""}`} />
-                      Public Lookup
-                    </Button>
-                  </div>
-                  {dnsLookupResult && (
-                    <div className="grid grid-cols-3 gap-2">
-                      {Object.entries(dnsLookupResult.results).map(([type, data]) => (
-                        <div key={type} className="p-2 rounded bg-background/50 text-xs">
-                          <div className="font-medium text-muted-foreground mb-1">{type}</div>
-                          {data.records.length > 0 ? (
-                            <div className="space-y-0.5">
-                              {data.records.map((r, i) => (
-                                <code key={i} className="block font-mono text-foreground truncate" title={r}>{r}</code>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground/50">—</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
               </div>
             )}
 
@@ -1511,8 +1425,26 @@ function DNSSettingsDialog({
             )}
           </TabsContent>
 
-          {/* Passthrough Tab - Wildcard Mode */}
+          {/* Passthrough Tab - Dynamic Mode Configuration */}
           <TabsContent value="passthrough" className="space-y-6 mt-6">
+            {/* Separate Mode - Per-record configuration */}
+            {proxyMode === "separate" && (
+              <div className="p-6 text-center border rounded-lg bg-muted/10">
+                <Settings2 className="h-12 w-12 mx-auto mb-4 text-purple-500 opacity-70" />
+                <h3 className="font-semibold mb-2">Separate Records Mode</h3>
+                <p className="text-muted-foreground text-sm mb-4">
+                  Each DNS record has its own proxy pool and target server configuration.<br />
+                  Go to the <strong>Records</strong> tab to configure passthrough for individual A records.
+                </p>
+                <Button variant="outline" onClick={() => setActiveTab("records")}>
+                  Go to Records
+                </Button>
+              </div>
+            )}
+
+            {/* Wildcard Mode - Single pool configuration */}
+            {proxyMode === "wildcard" && (
+              <>
             <div className="p-4 border rounded-lg bg-gradient-to-r from-purple-500/10 to-blue-500/10">
               <div className="flex items-center gap-2 mb-2">
                 <Zap className="h-5 w-5 text-purple-500" />
@@ -1688,6 +1620,8 @@ function DNSSettingsDialog({
                 {loading ? "Saving..." : "Save Passthrough Configuration"}
               </Button>
             </div>
+              </>
+            )}
           </TabsContent>
 
           <TabsContent value="sync" className="space-y-4 mt-4">
@@ -1787,6 +1721,187 @@ function DNSSettingsDialog({
                   </div>
                 )}
               </>
+            )}
+          </TabsContent>
+
+          {/* Debug Tab */}
+          <TabsContent value="debug" className="space-y-6 mt-6">
+            {/* Expected Nameservers */}
+            {dnsAccountId && expectedNS && (
+              <div className="p-4 border rounded-lg bg-muted/20 space-y-3">
+                <div>
+                  <Label className="text-sm font-medium">Expected Nameservers</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Nameservers you should configure at your registrar</p>
+                </div>
+                {loadingNS ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <RefreshCw className="h-3 w-3 animate-spin" />
+                    Loading nameservers...
+                  </div>
+                ) : expectedNS.found ? (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap gap-2">
+                      {expectedNS.nameservers.map((ns, i) => (
+                        <code 
+                          key={i} 
+                          className="px-2 py-1 bg-muted rounded text-sm cursor-pointer hover:bg-muted/80" 
+                          onClick={() => copyToClipboard(ns)}
+                          title="Click to copy"
+                        >
+                          {ns}
+                        </code>
+                      ))}
+                    </div>
+                    <Button variant="outline" size="sm" onClick={() => copyToClipboard(expectedNS.nameservers.join("\n"))}>
+                      <Copy className="h-3 w-3 mr-1" />
+                      Copy All
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">{expectedNS.message}</p>
+                )}
+              </div>
+            )}
+
+            {/* NS Status */}
+            {dnsAccountId && (
+              <div className="p-4 border rounded-lg bg-muted/20">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-sm font-medium">Nameserver Status</Label>
+                    <p className="text-xs text-muted-foreground mt-0.5">Check if domain nameservers point to the DNS provider</p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={handleCheckNS} disabled={loading}>
+                    <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+                    Check Now
+                  </Button>
+                </div>
+                {nsStatus && (
+                  <div className="mt-3 p-3 rounded-md bg-background/50 space-y-2 text-sm">
+                    <div className="flex items-center gap-2">
+                      {nsStatus.status === "valid" ? (
+                        <CheckCircle className="h-4 w-4 text-green-500" />
+                      ) : nsStatus.status === "pending" ? (
+                        <RefreshCw className="h-4 w-4 text-yellow-500" />
+                      ) : (
+                        <XCircle className="h-4 w-4 text-red-500" />
+                      )}
+                      <span className="font-medium">{nsStatus.message}</span>
+                    </div>
+                    {nsStatus.expected && nsStatus.expected.length > 0 && (
+                      <div className="text-xs">
+                        <span className="text-muted-foreground">Expected: </span>
+                        <code className="bg-muted px-1 py-0.5 rounded">{nsStatus.expected.join(", ")}</code>
+                      </div>
+                    )}
+                    {nsStatus.actual && nsStatus.actual.length > 0 && (
+                      <div className="text-xs">
+                        <span className="text-muted-foreground">Current: </span>
+                        <code className="bg-muted px-1 py-0.5 rounded">{nsStatus.actual.join(", ")}</code>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* DNS Debug Tools */}
+            {dnsAccountId && (
+              <div className="p-4 border rounded-lg bg-muted/20 space-y-4">
+                <div>
+                  <Label className="text-sm font-medium">Provider Records</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Fetch all records directly from {isCloudflare ? "Cloudflare" : "DNSPod"}</p>
+                </div>
+
+                <div className="space-y-2">
+                  <Button variant="outline" size="sm" onClick={handleListProviderRecords} disabled={loadingProviderRecords}>
+                    <RefreshCw className={`h-4 w-4 mr-2 ${loadingProviderRecords ? "animate-spin" : ""}`} />
+                    List All from Provider
+                  </Button>
+                  {providerRecords && (
+                    <div className="border rounded overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead className="bg-muted/50">
+                          <tr>
+                            <th className="text-left p-1.5 font-medium">Name</th>
+                            <th className="text-left p-1.5 font-medium">Type</th>
+                            <th className="text-left p-1.5 font-medium">Value</th>
+                            <th className="text-left p-1.5 font-medium">TTL</th>
+                            {isCloudflare && <th className="text-left p-1.5 font-medium">Proxy</th>}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {providerRecords.length === 0 ? (
+                            <tr><td colSpan={isCloudflare ? 5 : 4} className="p-2 text-center text-muted-foreground">No records on provider</td></tr>
+                          ) : (
+                            providerRecords.map((r, i) => (
+                              <tr key={i} className="border-t">
+                                <td className="p-1.5 font-mono">{r.name}</td>
+                                <td className="p-1.5"><Badge variant="outline" className="text-xs py-0">{r.type}</Badge></td>
+                                <td className="p-1.5 font-mono max-w-[200px] truncate" title={r.value}>{r.value}</td>
+                                <td className="p-1.5">{r.ttl}</td>
+                                {isCloudflare && (
+                                  <td className="p-1.5">
+                                    <Cloud className={`h-3 w-3 ${r.proxied ? "text-orange-400" : "text-muted-foreground/30"}`} />
+                                  </td>
+                                )}
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Public DNS Lookup */}
+            {dnsAccountId && (
+              <div className="p-4 border rounded-lg bg-muted/20 space-y-4">
+                <div>
+                  <Label className="text-sm font-medium">Public DNS Lookup</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Query public DNS servers for record propagation</p>
+                </div>
+                <div className="flex gap-2 items-center">
+                  <Input
+                    className="h-8 w-28 text-sm"
+                    placeholder="@ or www"
+                    value={lookupSubdomain}
+                    onChange={(e) => setLookupSubdomain(e.target.value || "@")}
+                  />
+                  <span className="text-xs text-muted-foreground">.{domain?.fqdn}</span>
+                  <Button variant="outline" size="sm" onClick={handleDNSLookup} disabled={loadingLookup}>
+                    <RefreshCw className={`h-4 w-4 mr-2 ${loadingLookup ? "animate-spin" : ""}`} />
+                    Lookup
+                  </Button>
+                </div>
+                {dnsLookupResult && (
+                  <div className="grid grid-cols-3 gap-2">
+                    {Object.entries(dnsLookupResult.results).map(([type, data]) => (
+                      <div key={type} className="p-2 rounded bg-background/50 text-xs">
+                        <div className="font-medium text-muted-foreground mb-1">{type}</div>
+                        {data.records.length > 0 ? (
+                          <div className="space-y-0.5">
+                            {data.records.map((r, i) => (
+                              <code key={i} className="block font-mono text-foreground truncate" title={r}>{r}</code>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground/50">—</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!dnsAccountId && (
+              <div className="p-8 text-center text-muted-foreground">
+                <AlertTriangle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p>Debug tools require a configured DNS account.</p>
+              </div>
             )}
           </TabsContent>
         </Tabs>

@@ -2,9 +2,10 @@
 -- This enables automatic DNS record rotation between a pool of proxy servers
 
 -- Add proxy_mode to dns_managed_domains
-ALTER TABLE dns_managed_domains ADD COLUMN IF NOT EXISTS proxy_mode VARCHAR(20) DEFAULT 'separate';
--- 'separate' = individual record management (default)
--- 'wildcard' = *.domain.com passthrough through single pool
+ALTER TABLE dns_managed_domains ADD COLUMN IF NOT EXISTS proxy_mode VARCHAR(20) DEFAULT 'static';
+-- 'static' = direct DNS management (default)
+-- 'separate' = dynamic passthrough with per-record pools
+-- 'wildcard' = dynamic passthrough with single *.domain pool
 
 -- Add mode to dns_records for per-record static/dynamic
 ALTER TABLE dns_records ADD COLUMN IF NOT EXISTS mode VARCHAR(20) DEFAULT 'static';
