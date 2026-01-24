@@ -937,15 +937,28 @@ func (h *SecurityHandler) AgentSecuritySync(w http.ResponseWriter, r *http.Reque
 			)
 		`, ownerID, ban.IPAddress)
 		if whitelisted {
+			log.Printf("Skipping whitelisted IP: %s", ban.IPAddress)
 			continue
 		}
 
-		// Insert ban (ignore duplicates)
-		h.db.Exec(`
-			INSERT INTO security_ip_bans (ip_address, source_machine_id, reason, details, banned_at)
-			VALUES ($1, $2, $3, $4, $5)
-			ON CONFLICT DO NOTHING
-		`, ban.IPAddress, machineID, ban.Reason, ban.Details, ban.BannedAt)
+		// Insert ban with expiry (ignore duplicates)
+		expiresAt := time.Now().Add(30 * 24 * time.Hour) // 30 day default
+		if ban.ExpiresAt != nil {
+			expiresAt = *ban.ExpiresAt
+		}
+		_, err := h.db.Exec(`
+			INSERT INTO security_ip_bans (ip_address, source_machine_id, reason, details, banned_at, expires_at, is_active)
+			VALUES ($1, $2, $3, $4, $5, $6, true)
+			ON CONFLICT (ip_address) DO UPDATE SET
+				is_active = true,
+				expires_at = $6,
+				updated_at = NOW()
+		`, ban.IPAddress, machineID, ban.Reason, ban.Details, ban.BannedAt, expiresAt)
+		if err != nil {
+			log.Printf("Failed to insert ban for %s: %v", ban.IPAddress, err)
+		} else {
+			log.Printf("Banned IP %s from agent (reason: %s)", ban.IPAddress, ban.Reason)
+		}
 	}
 
 	// Update machine's last sync and ban count

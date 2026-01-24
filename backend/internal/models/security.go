@@ -211,6 +211,7 @@ type AgentBanReport struct {
 	Reason    string          `json:"reason"`
 	Details   json.RawMessage `json:"details"`
 	BannedAt  time.Time       `json:"banned_at"`
+	ExpiresAt *time.Time      `json:"expires_at,omitempty"`
 }
 
 // AgentSecuritySyncResponse from backend to agent

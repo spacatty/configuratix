@@ -25,6 +25,7 @@ type BanReport struct {
 	Reason    string          `json:"reason"`
 	Details   json.RawMessage `json:"details"`
 	BannedAt  time.Time       `json:"banned_at"`
+	ExpiresAt *time.Time      `json:"expires_at,omitempty"`
 }
 
 // SyncRequest to backend
@@ -201,6 +202,7 @@ func (m *Module) handleBlockedRequest(ip, reason, userAgent, path string) {
 		Reason:    reason,
 		Details:   details,
 		BannedAt:  time.Now(),
+		ExpiresAt: &expiresAt,
 	})
 
 	log.Printf("Banned IP %s (reason: %s)", ip, reason)
