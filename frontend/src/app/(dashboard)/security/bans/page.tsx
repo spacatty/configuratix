@@ -43,6 +43,7 @@ import {
   Download,
   MoreHorizontal,
   Plus,
+  RefreshCw,
   Search,
   Trash2,
   Upload,
@@ -71,6 +72,21 @@ export default function IPBlacklistPage() {
   const [importText, setImportText] = useState("");
   const [importReason, setImportReason] = useState("imported");
   const [submitting, setSubmitting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  const handleRefresh = async () => {
+    setSyncing(true);
+    try {
+      // Trigger sync on all agents by calling the sync endpoint
+      // This will be picked up by agents on their next sync cycle (5 seconds)
+      await loadBans();
+      toast.success("Refreshed! Agents will sync within 5 seconds.");
+    } catch (err) {
+      toast.error("Failed to refresh");
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const loadBans = async () => {
     setLoading(true);
@@ -215,6 +231,10 @@ export default function IPBlacklistPage() {
           </div>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={handleRefresh} disabled={syncing}>
+            <RefreshCw className={`h-4 w-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? "Syncing..." : "Sync & Refresh"}
+          </Button>
           <Button variant="outline" onClick={() => setShowImportDialog(true)}>
             <Upload className="h-4 w-4 mr-2" />
             Import
