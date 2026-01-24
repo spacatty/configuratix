@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -33,7 +34,14 @@ type structuredConfig struct {
 	DenyAllCatchall         *bool  `json:"deny_all_catchall"`
 	UABlockingEnabled       bool   `json:"ua_blocking_enabled"`
 	EndpointBlockingEnabled bool   `json:"endpoint_blocking_enabled"`
-	Locations               []struct {
+	ProxySettings           *struct {
+		Enabled           bool   `json:"enabled"`
+		ProxyType         string `json:"proxy_type"`          // cloudflare, proxy_protocol, custom
+		UseProxyProtocol  bool   `json:"use_proxy_protocol"`  // Use PROXY protocol for listen
+		ProxyProtocolPort int    `json:"proxy_protocol_port"` // Custom port for PROXY protocol
+		CustomTrustedIPs  string `json:"custom_trusted_ips"`  // Comma-separated trusted IPs
+	} `json:"proxy_settings"`
+	Locations []struct {
 		Path       string `json:"path"`
 		MatchType  string `json:"match_type"`
 		Type       string `json:"type"`
@@ -48,6 +56,35 @@ type structuredConfig struct {
 		Enabled  bool `json:"enabled"`
 		AllowAll bool `json:"allow_all"`
 	} `json:"cors"`
+}
+
+// Cloudflare IP ranges for real IP extraction
+var cloudflareIPv4Ranges = []string{
+	"173.245.48.0/20",
+	"103.21.244.0/22",
+	"103.22.200.0/22",
+	"103.31.4.0/22",
+	"141.101.64.0/18",
+	"108.162.192.0/18",
+	"190.93.240.0/20",
+	"188.114.96.0/20",
+	"197.234.240.0/22",
+	"198.41.128.0/17",
+	"162.158.0.0/15",
+	"104.16.0.0/13",
+	"104.24.0.0/14",
+	"172.64.0.0/13",
+	"131.0.72.0/22",
+}
+
+var cloudflareIPv6Ranges = []string{
+	"2400:cb00::/32",
+	"2606:4700::/32",
+	"2803:f800::/32",
+	"2405:b500::/32",
+	"2405:8100::/32",
+	"2a06:98c0::/29",
+	"2c0f:f248::/32",
 }
 
 // isPassthroughConfig checks if the structured JSON is a passthrough config
@@ -87,9 +124,26 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 	denyAllCatchall := structured.DenyAllCatchall == nil || *structured.DenyAllCatchall
 
 	config := "server {\n"
-	config += "    listen 80;\n"
-	if structured.SSLMode != "disabled" {
-		config += "    listen 443 ssl http2;\n"
+
+	// Handle listen directives with optional PROXY protocol
+	useProxyProtocol := structured.ProxySettings != nil && structured.ProxySettings.UseProxyProtocol
+	proxyProtocolPort := 443
+	if structured.ProxySettings != nil && structured.ProxySettings.ProxyProtocolPort > 0 {
+		proxyProtocolPort = structured.ProxySettings.ProxyProtocolPort
+	}
+
+	if useProxyProtocol {
+		// With PROXY protocol - use custom port
+		config += fmt.Sprintf("    listen %d proxy_protocol;\n", proxyProtocolPort)
+		if structured.SSLMode != "disabled" {
+			config += fmt.Sprintf("    listen %d ssl http2 proxy_protocol;\n", proxyProtocolPort)
+		}
+	} else {
+		// Standard listen
+		config += "    listen 80;\n"
+		if structured.SSLMode != "disabled" {
+			config += "    listen 443 ssl http2;\n"
+		}
 	}
 	config += "    server_name " + domain + ";\n\n"
 
@@ -97,6 +151,45 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 		config += "    ssl_certificate /etc/letsencrypt/live/" + domain + "/fullchain.pem;\n"
 		config += "    ssl_certificate_key /etc/letsencrypt/live/" + domain + "/privkey.pem;\n"
 		config += "    ssl_protocols TLSv1.2 TLSv1.3;\n\n"
+	}
+
+	// Real IP configuration for proxied requests
+	if structured.ProxySettings != nil && structured.ProxySettings.Enabled {
+		config += "    # Real IP extraction from proxy\n"
+
+		switch structured.ProxySettings.ProxyType {
+		case "cloudflare":
+			// Add Cloudflare IP ranges
+			for _, ip := range cloudflareIPv4Ranges {
+				config += "    set_real_ip_from " + ip + ";\n"
+			}
+			for _, ip := range cloudflareIPv6Ranges {
+				config += "    set_real_ip_from " + ip + ";\n"
+			}
+			config += "    real_ip_header CF-Connecting-IP;\n"
+			config += "    real_ip_recursive on;\n\n"
+
+		case "proxy_protocol":
+			// PROXY protocol - trust all sources (safe because PROXY protocol can't be spoofed at TCP level)
+			config += "    set_real_ip_from 0.0.0.0/0;\n"
+			config += "    set_real_ip_from ::/0;\n"
+			config += "    real_ip_header proxy_protocol;\n"
+			config += "    real_ip_recursive on;\n\n"
+
+		case "custom":
+			// Custom trusted IPs
+			if structured.ProxySettings.CustomTrustedIPs != "" {
+				ips := strings.Split(structured.ProxySettings.CustomTrustedIPs, ",")
+				for _, ip := range ips {
+					ip = strings.TrimSpace(ip)
+					if ip != "" {
+						config += "    set_real_ip_from " + ip + ";\n"
+					}
+				}
+			}
+			config += "    real_ip_header X-Forwarded-For;\n"
+			config += "    real_ip_recursive on;\n\n"
+		}
 	}
 
 	// Security settings

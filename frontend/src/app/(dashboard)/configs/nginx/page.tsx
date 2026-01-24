@@ -15,7 +15,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api, NginxConfig, NginxConfigStructured, LocationConfig, Landing, SecurityConfigSettings, SecurityEndpointRule } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
-import { MoreHorizontal, Pencil, Trash, Copy, FileCode, Cog, Lock, LockOpen, Shield, ShieldOff, GripVertical, ChevronUp, ChevronDown } from "lucide-react";
+import { MoreHorizontal, Pencil, Trash, Copy, FileCode, Cog, Lock, LockOpen, Shield, ShieldOff, GripVertical, ChevronUp, ChevronDown, Globe } from "lucide-react";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
 
@@ -50,6 +50,13 @@ export default function NginxConfigsPage() {
   const [formEndpointRules, setFormEndpointRules] = useState<SecurityEndpointRule[]>([]);
   const [newEndpointPattern, setNewEndpointPattern] = useState("");
   const [newEndpointDescription, setNewEndpointDescription] = useState("");
+  
+  // Proxy/Real IP settings
+  const [formProxyEnabled, setFormProxyEnabled] = useState(false);
+  const [formProxyType, setFormProxyType] = useState<'cloudflare' | 'proxy_protocol' | 'custom'>('cloudflare');
+  const [formUseProxyProtocol, setFormUseProxyProtocol] = useState(false);
+  const [formProxyProtocolPort, setFormProxyProtocolPort] = useState(8443);
+  const [formCustomTrustedIPs, setFormCustomTrustedIPs] = useState("");
   
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -90,6 +97,12 @@ export default function NginxConfigsPage() {
     setFormEndpointRules([]);
     setNewEndpointPattern("");
     setNewEndpointDescription("");
+    // Proxy settings
+    setFormProxyEnabled(false);
+    setFormProxyType('cloudflare');
+    setFormUseProxyProtocol(false);
+    setFormProxyProtocolPort(8443);
+    setFormCustomTrustedIPs("");
   };
 
   const handleCreateConfig = async () => {
@@ -109,6 +122,14 @@ export default function NginxConfigsPage() {
         cors: formIsPassthrough ? null : { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
         autoindex_off: formIsPassthrough ? undefined : formAutoindexOff,
         deny_all_catchall: formIsPassthrough ? undefined : formDenyAllCatchall,
+        // Proxy settings
+        proxy_settings: formProxyEnabled ? {
+          enabled: formProxyEnabled,
+          proxy_type: formProxyType,
+          use_proxy_protocol: formUseProxyProtocol,
+          proxy_protocol_port: formProxyProtocolPort,
+          custom_trusted_ips: formCustomTrustedIPs,
+        } : undefined,
         // Include security settings
         ua_blocking_enabled: formUABlocking,
         endpoint_blocking_enabled: formEndpointBlocking,
@@ -146,6 +167,14 @@ export default function NginxConfigsPage() {
         cors: formIsPassthrough ? null : { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
         autoindex_off: formIsPassthrough ? undefined : formAutoindexOff,
         deny_all_catchall: formIsPassthrough ? undefined : formDenyAllCatchall,
+        // Proxy settings
+        proxy_settings: formProxyEnabled ? {
+          enabled: formProxyEnabled,
+          proxy_type: formProxyType,
+          use_proxy_protocol: formUseProxyProtocol,
+          proxy_protocol_port: formProxyProtocolPort,
+          custom_trusted_ips: formCustomTrustedIPs,
+        } : undefined,
         // Include security settings in structured_json
         ua_blocking_enabled: formUABlocking,
         endpoint_blocking_enabled: formEndpointBlocking,
@@ -203,6 +232,12 @@ export default function NginxConfigsPage() {
       setFormLocations(structured.locations || [{ path: "/", type: "proxy", proxy_url: "" }]);
       // Check if any static location has PHP enabled
       setFormEnablePHP(structured.locations?.some(loc => loc.use_php) ?? false);
+      // Proxy settings
+      setFormProxyEnabled(structured.proxy_settings?.enabled ?? false);
+      setFormProxyType(structured.proxy_settings?.proxy_type || 'cloudflare');
+      setFormUseProxyProtocol(structured.proxy_settings?.use_proxy_protocol ?? false);
+      setFormProxyProtocolPort(structured.proxy_settings?.proxy_protocol_port || 8443);
+      setFormCustomTrustedIPs(structured.proxy_settings?.custom_trusted_ips || "");
     }
     // Load security settings - first try from structured_json, then from separate API
     const structured = config.structured_json as NginxConfigStructured;
@@ -725,6 +760,86 @@ export default function NginxConfigsPage() {
                   </CardContent>
                 </Card>
               </div>
+
+              {/* Proxy / Real IP Settings */}
+              <Card className="border-blue-500/30 bg-blue-500/5">
+                <CardHeader className="py-3 px-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Globe className="h-4 w-4 text-blue-500" />
+                      <CardTitle className="text-sm font-medium">Proxy / Real IP</CardTitle>
+                    </div>
+                    <Switch checked={formProxyEnabled} onCheckedChange={setFormProxyEnabled} />
+                  </div>
+                  <CardDescription className="text-xs">
+                    Extract real client IP when behind a proxy (Cloudflare, Load Balancer, etc.)
+                  </CardDescription>
+                </CardHeader>
+                {formProxyEnabled && (
+                  <CardContent className="space-y-4 px-4 pb-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label className="text-sm">Proxy Type</Label>
+                        <Select value={formProxyType} onValueChange={(v) => setFormProxyType(v as typeof formProxyType)}>
+                          <SelectTrigger className="h-9">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="cloudflare">Cloudflare</SelectItem>
+                            <SelectItem value="proxy_protocol">PROXY Protocol</SelectItem>
+                            <SelectItem value="custom">Custom</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          {formProxyType === 'cloudflare' && 'Uses CF-Connecting-IP header with Cloudflare IP ranges'}
+                          {formProxyType === 'proxy_protocol' && 'Uses PROXY protocol header (for passthrough setups)'}
+                          {formProxyType === 'custom' && 'Uses X-Forwarded-For with your trusted IPs'}
+                        </p>
+                      </div>
+
+                      {formProxyType === 'custom' && (
+                        <div className="space-y-2">
+                          <Label className="text-sm">Trusted IP Ranges</Label>
+                          <Input 
+                            placeholder="10.0.0.0/8, 192.168.0.0/16"
+                            value={formCustomTrustedIPs}
+                            onChange={(e) => setFormCustomTrustedIPs(e.target.value)}
+                            className="h-9"
+                          />
+                          <p className="text-xs text-muted-foreground">Comma-separated CIDR ranges</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {formProxyType === 'proxy_protocol' && (
+                      <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label className="text-sm">Use PROXY Protocol Listen</Label>
+                            <p className="text-xs text-muted-foreground">Add proxy_protocol to listen directive</p>
+                          </div>
+                          <Switch checked={formUseProxyProtocol} onCheckedChange={setFormUseProxyProtocol} />
+                        </div>
+                        {formUseProxyProtocol && (
+                          <div className="space-y-2">
+                            <Label className="text-sm">Listen Port</Label>
+                            <Input 
+                              type="number"
+                              placeholder="8443"
+                              value={formProxyProtocolPort}
+                              onChange={(e) => setFormProxyProtocolPort(parseInt(e.target.value) || 8443)}
+                              className="h-9 w-32"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Use a different port to avoid conflicts with regular SSL traffic
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                )}
+              </Card>
 
               {/* Features & Security Row */}
               <div className="grid grid-cols-3 gap-4">

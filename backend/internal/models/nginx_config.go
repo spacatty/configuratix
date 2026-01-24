@@ -32,9 +32,21 @@ type NginxConfigStructured struct {
 	AutoindexOff    *bool            `json:"autoindex_off,omitempty"`     // Deny directory listing (default: true)
 	DenyAllCatchall *bool            `json:"deny_all_catchall,omitempty"` // Add deny all catch-all (default: true)
 
+	// Proxy/Real IP settings
+	ProxySettings *ProxySettings `json:"proxy_settings,omitempty"` // Configure real IP extraction from proxies
+
 	// Security settings
 	UABlockingEnabled       bool `json:"ua_blocking_enabled,omitempty"`       // Block requests from bad user agents
 	EndpointBlockingEnabled bool `json:"endpoint_blocking_enabled,omitempty"` // Block requests to non-allowed endpoints
+}
+
+// ProxySettings configures real IP handling for proxied requests
+type ProxySettings struct {
+	Enabled           bool   `json:"enabled"`                        // Enable real IP extraction
+	ProxyType         string `json:"proxy_type"`                     // cloudflare, proxy_protocol, custom
+	UseProxyProtocol  bool   `json:"use_proxy_protocol,omitempty"`   // Use PROXY protocol for listen
+	ProxyProtocolPort int    `json:"proxy_protocol_port,omitempty"`  // Custom port for PROXY protocol (default: 443)
+	CustomTrustedIPs  string `json:"custom_trusted_ips,omitempty"`   // Comma-separated trusted IPs for custom type
 }
 
 type LocationConfig struct {

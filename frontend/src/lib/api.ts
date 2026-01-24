@@ -468,9 +468,20 @@ export interface NginxConfigStructured {
   autoindex_off?: boolean;      // Deny directory listing (default: true)
   deny_all_catchall?: boolean;  // Add deny all catch-all for unmatched paths (default: true)
 
+  // Proxy/Real IP settings
+  proxy_settings?: ProxySettings;
+
   // Security settings
   ua_blocking_enabled?: boolean;       // Block requests from bad user agents
   endpoint_blocking_enabled?: boolean; // Block requests to non-allowed endpoints
+}
+
+export interface ProxySettings {
+  enabled: boolean;
+  proxy_type: 'cloudflare' | 'proxy_protocol' | 'custom';
+  use_proxy_protocol?: boolean;   // Use PROXY protocol for listen directive
+  proxy_protocol_port?: number;   // Custom port for PROXY protocol (default: 443)
+  custom_trusted_ips?: string;    // Comma-separated trusted IPs for custom type
 }
 
 export interface LocationConfig {
