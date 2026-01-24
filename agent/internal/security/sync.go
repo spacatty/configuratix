@@ -59,7 +59,7 @@ func (m *Module) deltaSync() error {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+m.config.APIKey)
+	httpReq.Header.Set("X-API-Key", m.config.APIKey)
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(httpReq)
@@ -140,7 +140,7 @@ func (m *Module) syncWhitelist() error {
 	if err != nil {
 		return err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+m.config.APIKey)
+	httpReq.Header.Set("X-API-Key", m.config.APIKey)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(httpReq)
@@ -199,7 +199,7 @@ func (m *Module) syncUAPatterns() error {
 	if err != nil {
 		return err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+m.config.APIKey)
+	httpReq.Header.Set("X-API-Key", m.config.APIKey)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(httpReq)
