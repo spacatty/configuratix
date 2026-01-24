@@ -623,20 +623,20 @@ export default function NginxConfigsPage() {
   );
 
   const renderFormContent = () => (
-    <div ref={scrollContainerRef} className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
-      {/* Basic Settings */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label>Configuration Name</Label>
-          <Input placeholder="My Nginx Config" value={formName} onChange={(e) => setFormName(e.target.value)} className="h-9" />
+    <div ref={scrollContainerRef} className="space-y-5 max-h-[70vh] overflow-y-auto pr-3 -mr-2">
+      {/* Basic Settings - Horizontal Row */}
+      <div className="grid grid-cols-3 gap-4">
+        <div className="col-span-2 space-y-1.5">
+          <Label className="text-sm font-medium">Configuration Name</Label>
+          <Input placeholder="my-domain-config" value={formName} onChange={(e) => setFormName(e.target.value)} className="h-10" />
         </div>
-        <div className="space-y-2">
-          <Label>Mode</Label>
+        <div className="space-y-1.5">
+          <Label className="text-sm font-medium">Mode</Label>
           <Select value={formMode} onValueChange={setFormMode}>
-            <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="auto">Auto (UI Builder)</SelectItem>
-              <SelectItem value="manual">Manual (Raw Config)</SelectItem>
+              <SelectItem value="auto">UI Builder</SelectItem>
+              <SelectItem value="manual">Manual Config</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -727,259 +727,205 @@ export default function NginxConfigsPage() {
           {/* Only show standard config if NOT passthrough */}
           {!formIsPassthrough && (
             <>
-              {/* SSL & CORS Row */}
-              <div className="grid grid-cols-2 gap-4">
-                <Card className="border-border/50 bg-card/30">
-                  <CardContent className="p-4 space-y-3">
-                    <Label className="text-sm font-medium">SSL Settings</Label>
-                    <Select value={formSslMode} onValueChange={setFormSslMode}>
-                      <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="disabled">Disabled</SelectItem>
-                        <SelectItem value="allow_http">Allow HTTP</SelectItem>
-                        <SelectItem value="redirect_https">Force HTTPS</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {formSslMode !== "disabled" && (
-                      <Input type="email" placeholder="admin@example.com" value={formSslEmail} onChange={(e) => setFormSslEmail(e.target.value)} className="h-9" />
-                    )}
-                  </CardContent>
-                </Card>
-                <Card className="border-border/50 bg-card/30">
-                  <CardContent className="p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-sm font-medium">CORS</Label>
-                      <Switch checked={formCorsEnabled} onCheckedChange={setFormCorsEnabled} />
+              {/* Core Settings Row - SSL, CORS, Quick Toggles */}
+              <div className="grid grid-cols-4 gap-3">
+                {/* SSL */}
+                <div className="p-3 rounded-lg border border-border/50 bg-card/50 space-y-2">
+                  <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">SSL Mode</Label>
+                  <Select value={formSslMode} onValueChange={setFormSslMode}>
+                    <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="disabled">Disabled</SelectItem>
+                      <SelectItem value="allow_http">Allow HTTP</SelectItem>
+                      <SelectItem value="redirect_https">Force HTTPS</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {formSslMode !== "disabled" && (
+                    <Input type="email" placeholder="admin@example.com" value={formSslEmail} onChange={(e) => setFormSslEmail(e.target.value)} className="h-8 text-sm" />
+                  )}
+                </div>
+
+                {/* CORS */}
+                <div className="p-3 rounded-lg border border-border/50 bg-card/50 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">CORS</Label>
+                    <Switch checked={formCorsEnabled} onCheckedChange={setFormCorsEnabled} />
+                  </div>
+                  {formCorsEnabled && (
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-xs text-muted-foreground">Allow All</span>
+                      <Switch checked={formCorsAllowAll} onCheckedChange={setFormCorsAllowAll} />
                     </div>
-                    {formCorsEnabled && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-muted-foreground">Allow All Origins</span>
-                        <Switch checked={formCorsAllowAll} onCheckedChange={setFormCorsAllowAll} />
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
+                  )}
+                </div>
+
+                {/* PHP Toggle */}
+                <div className="p-3 rounded-lg border border-border/50 bg-card/50 flex flex-col justify-between">
+                  <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">PHP</Label>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-sm">Enable</span>
+                    <Switch checked={formEnablePHP} onCheckedChange={setFormEnablePHP} />
+                  </div>
+                </div>
+
+                {/* Security Quick Toggles */}
+                <div className="p-3 rounded-lg border border-border/50 bg-card/50 space-y-2">
+                  <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Quick Options</Label>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs">No Dir Listing</span>
+                    <Switch checked={formAutoindexOff} onCheckedChange={setFormAutoindexOff} />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs">Deny Catch-all</span>
+                    <Switch checked={formDenyAllCatchall} onCheckedChange={setFormDenyAllCatchall} />
+                  </div>
+                </div>
               </div>
 
-              {/* Proxy / Real IP Settings */}
-              <Card className="border-blue-500/30 bg-blue-500/5">
-                <CardHeader className="py-3 px-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Globe className="h-4 w-4 text-blue-500" />
-                      <CardTitle className="text-sm font-medium">Proxy / Real IP</CardTitle>
+              {/* Proxy & Security Row - Side by Side */}
+              <div className="grid grid-cols-2 gap-4">
+                {/* Proxy / Real IP Settings */}
+                <Card className="border-blue-500/30 bg-blue-500/5">
+                  <CardHeader className="py-2.5 px-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Globe className="h-4 w-4 text-blue-500" />
+                        <CardTitle className="text-sm font-medium">Proxy / Real IP</CardTitle>
+                      </div>
+                      <Switch checked={formProxyEnabled} onCheckedChange={setFormProxyEnabled} />
                     </div>
-                    <Switch checked={formProxyEnabled} onCheckedChange={setFormProxyEnabled} />
-                  </div>
-                  <CardDescription className="text-xs">
-                    Extract real client IP when behind a proxy (Cloudflare, Load Balancer, etc.)
-                  </CardDescription>
-                </CardHeader>
-                {formProxyEnabled && (
-                  <CardContent className="space-y-4 px-4 pb-4">
-                    <div className="grid grid-cols-2 gap-4">
+                  </CardHeader>
+                  {formProxyEnabled && (
+                    <CardContent className="space-y-3 px-4 pb-4 pt-0">
                       <div className="space-y-2">
-                        <Label className="text-sm">Proxy Type</Label>
+                        <Label className="text-xs">Proxy Type</Label>
                         <Select value={formProxyType} onValueChange={(v) => setFormProxyType(v as typeof formProxyType)}>
-                          <SelectTrigger className="h-9">
-                            <SelectValue />
-                          </SelectTrigger>
+                          <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="cloudflare">Cloudflare</SelectItem>
                             <SelectItem value="proxy_protocol">PROXY Protocol</SelectItem>
                             <SelectItem value="custom">Custom</SelectItem>
                           </SelectContent>
                         </Select>
-                        <p className="text-xs text-muted-foreground">
-                          {formProxyType === 'cloudflare' && 'Uses CF-Connecting-IP header with Cloudflare IP ranges'}
-                          {formProxyType === 'proxy_protocol' && 'Uses PROXY protocol header (for passthrough setups)'}
-                          {formProxyType === 'custom' && 'Uses X-Forwarded-For with your trusted IPs'}
-                        </p>
                       </div>
 
                       {formProxyType === 'custom' && (
-                        <div className="space-y-2">
-                          <Label className="text-sm">Trusted IP Ranges</Label>
-                          <Input 
-                            placeholder="10.0.0.0/8, 192.168.0.0/16"
-                            value={formCustomTrustedIPs}
-                            onChange={(e) => setFormCustomTrustedIPs(e.target.value)}
-                            className="h-9"
-                          />
-                          <p className="text-xs text-muted-foreground">Comma-separated CIDR ranges</p>
+                        <div className="space-y-1.5">
+                          <Label className="text-xs">Trusted IP Ranges</Label>
+                          <Input placeholder="10.0.0.0/8, 192.168.0.0/16" value={formCustomTrustedIPs} onChange={(e) => setFormCustomTrustedIPs(e.target.value)} className="h-8 text-sm" />
                         </div>
+                      )}
+
+                      {formProxyType === 'proxy_protocol' && (
+                        <div className="p-2.5 rounded border border-amber-500/30 bg-amber-500/10 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-xs">Use proxy_protocol listen</Label>
+                            <Switch checked={formUseProxyProtocol} onCheckedChange={setFormUseProxyProtocol} />
+                          </div>
+                          {formUseProxyProtocol && (
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs">Port:</Label>
+                              <Input type="number" value={formProxyProtocolPort} onChange={(e) => setFormProxyProtocolPort(parseInt(e.target.value) || 8443)} className="h-7 w-20 text-sm" />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </CardContent>
+                  )}
+                </Card>
+
+
+                {/* Security Section - Right Column */}
+                <Card className="border-destructive/30 bg-destructive/5">
+                  <CardHeader className="py-2.5 px-4">
+                    <div className="flex items-center gap-2">
+                      <Shield className="h-4 w-4 text-destructive" />
+                      <CardTitle className="text-sm font-medium">Security</CardTitle>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-3 px-4 pb-4 pt-0">
+                    {/* UA Blocking Toggle */}
+                    <div className="flex items-center justify-between p-2.5 rounded border border-border/50 bg-background/50">
+                      <div>
+                        <Label className="text-sm">User-Agent Blocking</Label>
+                        <p className="text-xs text-muted-foreground">Block bots/scrapers</p>
+                      </div>
+                      <Switch 
+                        checked={formUABlocking} 
+                        onCheckedChange={(checked) => {
+                          setFormUABlocking(checked);
+                          if (selectedConfig) handleSaveSecuritySettings();
+                        }} 
+                      />
+                    </div>
+
+                    {/* Endpoint Blocking Toggle */}
+                    <div className="flex items-center justify-between p-2.5 rounded border border-border/50 bg-background/50">
+                      <div>
+                        <Label className="text-sm">Endpoint Allowlist</Label>
+                        <p className="text-xs text-muted-foreground">Ban IPs on invalid paths</p>
+                      </div>
+                      <Switch 
+                        checked={formEndpointBlocking} 
+                        onCheckedChange={(checked) => {
+                          setFormEndpointBlocking(checked);
+                          if (selectedConfig) handleSaveSecuritySettings();
+                        }} 
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Endpoint Rules (full width when editing and blocking enabled) */}
+              {selectedConfig && formEndpointBlocking && (
+                <Card className="border-border/50">
+                  <CardHeader className="py-2.5 px-4">
+                    <CardTitle className="text-sm font-medium">Allowed Path Patterns</CardTitle>
+                    <CardDescription className="text-xs">Requests not matching will trigger IP ban</CardDescription>
+                  </CardHeader>
+                  <CardContent className="px-4 pb-4 pt-0 space-y-3">
+                    {/* Existing rules */}
+                    <div className="flex flex-wrap gap-2">
+                      {formEndpointRules.map((rule) => (
+                        <div key={rule.id} className="flex items-center gap-1.5 px-2 py-1 rounded border bg-muted/50 group">
+                          <code className="text-xs font-mono">{rule.pattern}</code>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteEndpointRule(rule.id)}
+                            className="text-destructive hover:text-destructive h-4 w-4 p-0 opacity-50 group-hover:opacity-100"
+                          >
+                            <Trash className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ))}
+                      {formEndpointRules.length === 0 && (
+                        <span className="text-xs text-muted-foreground">No rules - all paths blocked</span>
                       )}
                     </div>
 
-                    {formProxyType === 'proxy_protocol' && (
-                      <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <Label className="text-sm">Use PROXY Protocol Listen</Label>
-                            <p className="text-xs text-muted-foreground">Add proxy_protocol to listen directive</p>
-                          </div>
-                          <Switch checked={formUseProxyProtocol} onCheckedChange={setFormUseProxyProtocol} />
-                        </div>
-                        {formUseProxyProtocol && (
-                          <div className="space-y-2">
-                            <Label className="text-sm">Listen Port</Label>
-                            <Input 
-                              type="number"
-                              placeholder="8443"
-                              value={formProxyProtocolPort}
-                              onChange={(e) => setFormProxyProtocolPort(parseInt(e.target.value) || 8443)}
-                              className="h-9 w-32"
-                            />
-                            <p className="text-xs text-muted-foreground">
-                              Use a different port to avoid conflicts with regular SSL traffic
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    {/* Add new rule */}
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="^/api/.*"
+                        value={newEndpointPattern}
+                        onChange={(e) => setNewEndpointPattern(e.target.value)}
+                        className="font-mono text-xs h-8 flex-1"
+                      />
+                      <Input
+                        placeholder="Description"
+                        value={newEndpointDescription}
+                        onChange={(e) => setNewEndpointDescription(e.target.value)}
+                        className="text-xs h-8 w-32"
+                      />
+                      <Button variant="outline" size="sm" onClick={handleAddEndpointRule} disabled={!newEndpointPattern.trim()} className="h-8">
+                        Add
+                      </Button>
+                    </div>
                   </CardContent>
-                )}
-              </Card>
-
-              {/* Features & Security Row */}
-              <div className="grid grid-cols-3 gap-4">
-                <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/30">
-                  <div>
-                    <Label className="text-sm">PHP Support</Label>
-                    <p className="text-xs text-muted-foreground">Process .php files</p>
-                  </div>
-                  <Switch checked={formEnablePHP} onCheckedChange={setFormEnablePHP} />
-                </div>
-                <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/30">
-                  <div>
-                    <Label className="text-sm">No Directory List</Label>
-                    <p className="text-xs text-muted-foreground">autoindex off</p>
-                  </div>
-                  <Switch checked={formAutoindexOff} onCheckedChange={setFormAutoindexOff} />
-                </div>
-                <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/30">
-                  <div>
-                    <Label className="text-sm">Deny Catch-all</Label>
-                    <p className="text-xs text-muted-foreground">Block undefined paths</p>
-                  </div>
-                  <Switch checked={formDenyAllCatchall} onCheckedChange={setFormDenyAllCatchall} />
-                </div>
-              </div>
-
-              {/* Security Section */}
-              <Card className="border-destructive/30 bg-destructive/5">
-                <CardHeader className="py-3 px-4">
-                  <div className="flex items-center gap-2">
-                    <Shield className="h-4 w-4 text-destructive" />
-                    <CardTitle className="text-sm font-medium">Security Settings</CardTitle>
-                  </div>
-                  <CardDescription className="text-xs">
-                    Block malicious requests and auto-ban IPs
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4 px-4 pb-4">
-                  {/* UA Blocking Toggle */}
-                  <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-background/50">
-                    <div>
-                      <Label className="text-sm">User-Agent Blocking</Label>
-                      <p className="text-xs text-muted-foreground">Block requests from known bots/scrapers</p>
-                    </div>
-                    <Switch 
-                      checked={formUABlocking} 
-                      onCheckedChange={(checked) => {
-                        setFormUABlocking(checked);
-                        if (selectedConfig) handleSaveSecuritySettings();
-                      }} 
-                    />
-                  </div>
-
-                  {/* Endpoint Blocking Toggle */}
-                  <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-background/50">
-                    <div>
-                      <Label className="text-sm">Endpoint Blocking (Allowlist)</Label>
-                      <p className="text-xs text-muted-foreground">Only allow defined paths, ban IPs hitting others</p>
-                    </div>
-                    <Switch 
-                      checked={formEndpointBlocking} 
-                      onCheckedChange={(checked) => {
-                        setFormEndpointBlocking(checked);
-                        if (selectedConfig) handleSaveSecuritySettings();
-                      }} 
-                    />
-                  </div>
-
-                  {/* Endpoint Rules (only show when editing and blocking enabled) */}
-                  {selectedConfig && formEndpointBlocking && (
-                    <div className="space-y-3 pt-2 border-t border-border/50">
-                      <Label className="text-sm">Allowed Path Patterns</Label>
-                      <p className="text-xs text-muted-foreground">
-                        Requests to paths NOT matching any pattern will trigger a ban
-                      </p>
-                      
-                      {/* Existing rules */}
-                      <div className="space-y-2">
-                        {formEndpointRules.map((rule) => (
-                          <div key={rule.id} className="flex items-center justify-between p-2 rounded border bg-background">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <code className="text-sm font-mono bg-muted px-2 py-0.5 rounded">
-                                {rule.pattern}
-                              </code>
-                              {rule.description && (
-                                <span className="text-xs text-muted-foreground truncate">
-                                  {rule.description}
-                                </span>
-                              )}
-                            </div>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeleteEndpointRule(rule.id)}
-                              className="text-destructive hover:text-destructive h-6 w-6 p-0"
-                            >
-                              <Trash className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        ))}
-                        {formEndpointRules.length === 0 && (
-                          <p className="text-xs text-muted-foreground text-center py-2">
-                            No rules yet. Add patterns for allowed paths.
-                          </p>
-                        )}
-                      </div>
-
-                      {/* Add new rule */}
-                      <div className="flex gap-2">
-                        <Input
-                          placeholder="^/api/.*"
-                          value={newEndpointPattern}
-                          onChange={(e) => setNewEndpointPattern(e.target.value)}
-                          className="font-mono text-sm h-8 flex-1"
-                        />
-                        <Input
-                          placeholder="Description (optional)"
-                          value={newEndpointDescription}
-                          onChange={(e) => setNewEndpointDescription(e.target.value)}
-                          className="text-sm h-8 w-40"
-                        />
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleAddEndpointRule}
-                          disabled={!newEndpointPattern.trim()}
-                          className="h-8"
-                        >
-                          Add
-                        </Button>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        Use regex patterns. Common: <code className="bg-muted px-1 rounded">^/$</code> (root), 
-                        <code className="bg-muted px-1 rounded ml-1">^/api/.*</code> (API),
-                        <code className="bg-muted px-1 rounded ml-1">^/static/.*</code> (static files)
-                      </p>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                </Card>
+              )}
 
               {/* Locations Section */}
               <div className="space-y-3">
@@ -1041,7 +987,7 @@ export default function NginxConfigsPage() {
 
       {/* Create Dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="max-w-4xl max-h-[90vh]">
+        <DialogContent className="max-w-[90vw] sm:max-w-6xl max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>Create Nginx Configuration</DialogTitle>
             <DialogDescription>Configure nginx settings for your domains.</DialogDescription>
@@ -1056,7 +1002,7 @@ export default function NginxConfigsPage() {
 
       {/* Edit Dialog */}
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="max-w-4xl max-h-[90vh]">
+        <DialogContent className="max-w-[90vw] sm:max-w-6xl max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>Edit Nginx Configuration</DialogTitle>
             <DialogDescription>Update nginx settings.</DialogDescription>

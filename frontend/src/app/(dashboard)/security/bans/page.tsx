@@ -49,6 +49,7 @@ import {
   Upload,
   AlertTriangle,
   Shield,
+  ShieldCheck,
 } from "lucide-react";
 
 export default function IPBlacklistPage() {
@@ -170,6 +171,22 @@ export default function IPBlacklistPage() {
       loadBans();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to unban");
+    }
+  };
+
+  const handleWhitelist = async (ban: SecurityIPBan) => {
+    try {
+      // Add to whitelist
+      await api.createSecurityWhitelistEntry({
+        ip_cidr: ban.ip_address,
+        description: `Whitelisted from ban (was banned for: ${ban.reason})`,
+      });
+      // Remove from ban list
+      await api.deleteSecurityBan(ban.id);
+      toast.success(`${ban.ip_address} added to whitelist`);
+      loadBans();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to whitelist");
     }
   };
 
@@ -375,6 +392,10 @@ export default function IPBlacklistPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => handleWhitelist(ban)}>
+                          <ShieldCheck className="h-4 w-4 mr-2" />
+                          Add to Whitelist
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handleDelete(ban)}>
                           <Trash2 className="h-4 w-4 mr-2" />
                           Unban
