@@ -77,10 +77,9 @@ export default function IPBlacklistPage() {
   const handleRefresh = async () => {
     setSyncing(true);
     try {
-      // Trigger sync on all agents by calling the sync endpoint
-      // This will be picked up by agents on their next sync cycle (5 seconds)
+      // Reload bans from database
       await loadBans();
-      toast.success("Refreshed! Agents will sync within 5 seconds.");
+      toast.success("Bans reloaded from database");
     } catch (err) {
       toast.error("Failed to refresh");
     } finally {

@@ -238,16 +238,19 @@ func (m *Module) isWhitelisted(ipStr string) bool {
 
 // syncLoop periodically syncs with backend
 func (m *Module) syncLoop() {
+	log.Printf("Security sync loop started (interval: %v)", m.config.SyncInterval)
 	ticker := time.NewTicker(m.config.SyncInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
+			log.Println("Running periodic security sync...")
 			if err := m.deltaSync(); err != nil {
 				log.Printf("Security sync failed: %v", err)
 			}
 		case <-m.stopCh:
+			log.Println("Security sync loop stopped")
 			return
 		}
 	}
