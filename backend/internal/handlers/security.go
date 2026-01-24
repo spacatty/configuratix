@@ -979,13 +979,18 @@ func (h *SecurityHandler) AgentSecuritySync(w http.ResponseWriter, r *http.Reque
 		lastSync = &t
 	}
 
-	h.db.Select(&missingBans, `
+	// Get ALL active bans, not just since last sync
+	// This ensures agents get all bans they might be missing
+	err = h.db.Select(&missingBans, `
 		SELECT ip_address, expires_at
 		FROM security_ip_bans
 		WHERE is_active = true 
-		AND banned_at > $1
 		AND (expires_at IS NULL OR expires_at > NOW())
-	`, lastSync)
+	`)
+	if err != nil {
+		log.Printf("Failed to get missing bans: %v", err)
+	}
+	log.Printf("Agent sync: returning %d active bans to agent (agent has %d)", len(missingBans), req.BanCount)
 
 	// Get IPs to remove (only expired/inactive bans that agent might still have)
 	var bansToRemove []string

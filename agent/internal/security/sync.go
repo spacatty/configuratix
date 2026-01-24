@@ -78,6 +78,10 @@ func (m *Module) deltaSync() error {
 		return fmt.Errorf("failed to decode sync response: %w", err)
 	}
 
+	// Log what we received
+	log.Printf("Sync response: %d missing bans, %d to remove, whitelist_updated=%v",
+		len(syncResp.MissingBans), len(syncResp.BansToRemove), syncResp.WhitelistUpdated)
+
 	// Process response
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -86,9 +90,11 @@ func (m *Module) deltaSync() error {
 	m.lastSyncAt = &now
 
 	// Apply missing bans
+	addedCount := 0
 	for _, ban := range syncResp.MissingBans {
 		// Check whitelist first
 		if m.isWhitelisted(ban.IPAddress) {
+			log.Printf("Skipping whitelisted IP from sync: %s", ban.IPAddress)
 			continue
 		}
 
@@ -105,6 +111,12 @@ func (m *Module) deltaSync() error {
 				log.Printf("Failed to add ban to nftables: %v", err)
 			}
 		}
+		addedCount++
+	}
+
+	// Update nginx ban file if we added any bans
+	if addedCount > 0 {
+		m.updateNginxBanFile()
 	}
 
 	// Remove bans for whitelisted/expired IPs
