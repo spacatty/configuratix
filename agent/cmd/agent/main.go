@@ -124,7 +124,9 @@ func run() error {
 
 	// Start security module (Linux only)
 	var securityModule *security.Module
+	log.Printf("OS: %s, starting security module check...", runtime.GOOS)
 	if runtime.GOOS == "linux" {
+		log.Println("Initializing security module...")
 		securityModule = security.New(security.Config{
 			Enabled:          true,
 			ServerURL:        cfg.ServerURL,
@@ -137,7 +139,11 @@ func run() error {
 		if err := securityModule.Start(); err != nil {
 			log.Printf("Security module failed to start: %v", err)
 			// Continue anyway - non-fatal
+		} else {
+			log.Println("Security module initialized successfully")
 		}
+	} else {
+		log.Printf("Security module skipped (OS: %s, requires linux)", runtime.GOOS)
 	}
 
 	// Heartbeat ticker
