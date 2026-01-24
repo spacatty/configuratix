@@ -12,9 +12,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { api, Machine, UFWRule, Job, ConfigFile, ConfigCategory, ConfigPath } from "@/lib/api";
+import { api, Machine, UFWRule, Job, ConfigFile, ConfigCategory, ConfigPath, SecurityMachineSettings } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
-import { ChevronDown, ChevronRight, RefreshCw, FileCode, Save, RotateCcw, Loader2, FileText, Settings, Lock, Copy, Plus, Trash2, Pencil } from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw, FileCode, Save, RotateCcw, Loader2, FileText, Settings, Lock, Copy, Plus, Trash2, Pencil, Ban } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
@@ -1242,6 +1242,9 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
   const [fail2banEnabled, setFail2banEnabled] = useState(false);
   const [pendingUFW, setPendingUFW] = useState(false);
   const [pendingFail2ban, setPendingFail2ban] = useState(false);
+  
+  // Machine security settings (nftables)
+  const [machineSecuritySettings, setMachineSecuritySettings] = useState<SecurityMachineSettings | null>(null);
 
   // Title editing state
   const [showTitleDialog, setShowTitleDialog] = useState(false);
@@ -1277,6 +1280,7 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
   // Initial load
   useEffect(() => {
     loadMachine();
+    loadMachineSecuritySettings();
   }, [id]);
 
   // Periodic refresh for stats only (not notes)
@@ -1339,6 +1343,15 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
       if (!pendingFail2ban) setFail2banEnabled(data.fail2ban_enabled);
     } catch (err) {
       console.error("Failed to load stats:", err);
+    }
+  };
+
+  const loadMachineSecuritySettings = async () => {
+    try {
+      const settings = await api.getMachineSecuritySettings(id);
+      setMachineSecuritySettings(settings);
+    } catch (err) {
+      console.error("Failed to load machine security settings:", err);
     }
   };
 
@@ -1945,6 +1958,95 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
               </CardContent>
             </Card>
           </div>
+
+          {/* IP Banning (nftables) Section */}
+          <Card className="border-destructive/30 bg-card/50">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-destructive/10">
+                  <Ban className="h-5 w-5 text-destructive" />
+                </div>
+                <div>
+                  <CardTitle>IP Banning (nftables)</CardTitle>
+                  <CardDescription>
+                    Automatic IP blocking for malicious requests
+                  </CardDescription>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">
+                    {machineSecuritySettings?.nftables_enabled ? "Enabled" : "Disabled"}
+                  </span>
+                  <Switch 
+                    checked={machineSecuritySettings?.nftables_enabled ?? false}
+                    onCheckedChange={async (checked) => {
+                      try {
+                        const updated = await api.updateMachineSecuritySettings(machine.id, {
+                          nftables_enabled: checked,
+                        });
+                        setMachineSecuritySettings(updated);
+                        toast.success(checked ? "nftables enabled" : "nftables disabled");
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : "Failed to update");
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="p-4 rounded-lg bg-muted/30 border border-border/50">
+                  <p className="text-sm text-muted-foreground">Active Bans</p>
+                  <p className="text-2xl font-bold">{machineSecuritySettings?.ban_count ?? 0}</p>
+                </div>
+                <div className="p-4 rounded-lg bg-muted/30 border border-border/50">
+                  <p className="text-sm text-muted-foreground">Last Sync</p>
+                  <p className="text-sm font-medium">
+                    {machineSecuritySettings?.last_sync_at 
+                      ? new Date(machineSecuritySettings.last_sync_at).toLocaleString()
+                      : "Never"
+                    }
+                  </p>
+                </div>
+                <div className="p-4 rounded-lg bg-muted/30 border border-border/50">
+                  <p className="text-sm text-muted-foreground">Sync Interval</p>
+                  <p className="text-sm font-medium">Every 2 minutes</p>
+                </div>
+              </div>
+              <div className="mt-4 flex items-center gap-2">
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={async () => {
+                    try {
+                      await loadMachineSecuritySettings();
+                      toast.success("Settings refreshed");
+                    } catch {
+                      toast.error("Failed to refresh");
+                    }
+                  }}
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Refresh
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  asChild
+                >
+                  <a href="/security/bans">
+                    View All Bans
+                  </a>
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-4">
+                When enabled, the agent will automatically ban IPs that trigger security rules (blocked UA, invalid paths).
+                Bans are synced across all machines every 2 minutes.
+              </p>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Logs Tab */}

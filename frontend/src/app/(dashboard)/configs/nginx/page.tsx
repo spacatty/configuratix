@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { DataTable } from "@/components/ui/data-table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { api, NginxConfig, NginxConfigStructured, LocationConfig, Landing } from "@/lib/api";
+import { api, NginxConfig, NginxConfigStructured, LocationConfig, Landing, SecurityConfigSettings, SecurityEndpointRule } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
 import { MoreHorizontal, Pencil, Trash, Copy, FileCode, Cog, Lock, LockOpen, Shield, ShieldOff, GripVertical, ChevronUp, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
@@ -43,6 +43,13 @@ export default function NginxConfigsPage() {
   const [formDenyAllCatchall, setFormDenyAllCatchall] = useState(true);
   const [formLocations, setFormLocations] = useState<LocationConfig[]>([{ path: "/", match_type: "prefix", type: "proxy", proxy_url: "" }]);
   const [formRawText, setFormRawText] = useState("");
+  
+  // Security settings
+  const [formUABlocking, setFormUABlocking] = useState(false);
+  const [formEndpointBlocking, setFormEndpointBlocking] = useState(false);
+  const [formEndpointRules, setFormEndpointRules] = useState<SecurityEndpointRule[]>([]);
+  const [newEndpointPattern, setNewEndpointPattern] = useState("");
+  const [newEndpointDescription, setNewEndpointDescription] = useState("");
   
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -77,6 +84,12 @@ export default function NginxConfigsPage() {
     setFormDenyAllCatchall(true);
     setFormLocations([{ path: "/", type: "proxy", proxy_url: "" }]);
     setFormRawText("");
+    // Security
+    setFormUABlocking(false);
+    setFormEndpointBlocking(false);
+    setFormEndpointRules([]);
+    setNewEndpointPattern("");
+    setNewEndpointDescription("");
   };
 
   const handleCreateConfig = async () => {
@@ -162,7 +175,7 @@ export default function NginxConfigsPage() {
     }
   };
 
-  const openEditDialog = (config: NginxConfig) => {
+  const openEditDialog = async (config: NginxConfig) => {
     setSelectedConfig(config);
     setFormName(config.name);
     setFormMode(config.mode);
@@ -183,12 +196,66 @@ export default function NginxConfigsPage() {
       // Check if any static location has PHP enabled
       setFormEnablePHP(structured.locations?.some(loc => loc.use_php) ?? false);
     }
+    // Load security settings
+    try {
+      const [secSettings, rules] = await Promise.all([
+        api.getSecuritySettings(config.id),
+        api.listSecurityEndpointRules(config.id),
+      ]);
+      setFormUABlocking(secSettings.ua_blocking_enabled);
+      setFormEndpointBlocking(secSettings.endpoint_blocking_enabled);
+      setFormEndpointRules(rules);
+    } catch {
+      // Settings may not exist yet - use defaults
+      setFormUABlocking(false);
+      setFormEndpointBlocking(false);
+      setFormEndpointRules([]);
+    }
     setShowEditDialog(true);
   };
 
   const openDeleteDialog = (config: NginxConfig) => {
     setSelectedConfig(config);
     setShowDeleteDialog(true);
+  };
+
+  const handleAddEndpointRule = async () => {
+    if (!selectedConfig || !newEndpointPattern.trim()) return;
+    try {
+      const rule = await api.createSecurityEndpointRule(selectedConfig.id, {
+        pattern: newEndpointPattern.trim(),
+        description: newEndpointDescription.trim(),
+      });
+      setFormEndpointRules([...formEndpointRules, rule]);
+      setNewEndpointPattern("");
+      setNewEndpointDescription("");
+      toast.success("Endpoint rule added");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to add rule");
+    }
+  };
+
+  const handleDeleteEndpointRule = async (ruleId: string) => {
+    if (!selectedConfig) return;
+    try {
+      await api.deleteSecurityEndpointRule(selectedConfig.id, ruleId);
+      setFormEndpointRules(formEndpointRules.filter(r => r.id !== ruleId));
+      toast.success("Rule deleted");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete rule");
+    }
+  };
+
+  const handleSaveSecuritySettings = async () => {
+    if (!selectedConfig) return;
+    try {
+      await api.updateSecuritySettings(selectedConfig.id, {
+        ua_blocking_enabled: formUABlocking,
+        endpoint_blocking_enabled: formEndpointBlocking,
+      });
+    } catch (err) {
+      console.error("Failed to save security settings:", err);
+    }
   };
 
   const addLocation = useCallback(() => {
@@ -664,6 +731,121 @@ export default function NginxConfigsPage() {
                   <Switch checked={formDenyAllCatchall} onCheckedChange={setFormDenyAllCatchall} />
                 </div>
               </div>
+
+              {/* Security Section */}
+              <Card className="border-destructive/30 bg-destructive/5">
+                <CardHeader className="py-3 px-4">
+                  <div className="flex items-center gap-2">
+                    <Shield className="h-4 w-4 text-destructive" />
+                    <CardTitle className="text-sm font-medium">Security Settings</CardTitle>
+                  </div>
+                  <CardDescription className="text-xs">
+                    Block malicious requests and auto-ban IPs
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4 px-4 pb-4">
+                  {/* UA Blocking Toggle */}
+                  <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-background/50">
+                    <div>
+                      <Label className="text-sm">User-Agent Blocking</Label>
+                      <p className="text-xs text-muted-foreground">Block requests from known bots/scrapers</p>
+                    </div>
+                    <Switch 
+                      checked={formUABlocking} 
+                      onCheckedChange={(checked) => {
+                        setFormUABlocking(checked);
+                        if (selectedConfig) handleSaveSecuritySettings();
+                      }} 
+                    />
+                  </div>
+
+                  {/* Endpoint Blocking Toggle */}
+                  <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-background/50">
+                    <div>
+                      <Label className="text-sm">Endpoint Blocking (Allowlist)</Label>
+                      <p className="text-xs text-muted-foreground">Only allow defined paths, ban IPs hitting others</p>
+                    </div>
+                    <Switch 
+                      checked={formEndpointBlocking} 
+                      onCheckedChange={(checked) => {
+                        setFormEndpointBlocking(checked);
+                        if (selectedConfig) handleSaveSecuritySettings();
+                      }} 
+                    />
+                  </div>
+
+                  {/* Endpoint Rules (only show when editing and blocking enabled) */}
+                  {selectedConfig && formEndpointBlocking && (
+                    <div className="space-y-3 pt-2 border-t border-border/50">
+                      <Label className="text-sm">Allowed Path Patterns</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Requests to paths NOT matching any pattern will trigger a ban
+                      </p>
+                      
+                      {/* Existing rules */}
+                      <div className="space-y-2">
+                        {formEndpointRules.map((rule) => (
+                          <div key={rule.id} className="flex items-center justify-between p-2 rounded border bg-background">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <code className="text-sm font-mono bg-muted px-2 py-0.5 rounded">
+                                {rule.pattern}
+                              </code>
+                              {rule.description && (
+                                <span className="text-xs text-muted-foreground truncate">
+                                  {rule.description}
+                                </span>
+                              )}
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteEndpointRule(rule.id)}
+                              className="text-destructive hover:text-destructive h-6 w-6 p-0"
+                            >
+                              <Trash className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ))}
+                        {formEndpointRules.length === 0 && (
+                          <p className="text-xs text-muted-foreground text-center py-2">
+                            No rules yet. Add patterns for allowed paths.
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Add new rule */}
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="^/api/.*"
+                          value={newEndpointPattern}
+                          onChange={(e) => setNewEndpointPattern(e.target.value)}
+                          className="font-mono text-sm h-8 flex-1"
+                        />
+                        <Input
+                          placeholder="Description (optional)"
+                          value={newEndpointDescription}
+                          onChange={(e) => setNewEndpointDescription(e.target.value)}
+                          className="text-sm h-8 w-40"
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleAddEndpointRule}
+                          disabled={!newEndpointPattern.trim()}
+                          className="h-8"
+                        >
+                          Add
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Use regex patterns. Common: <code className="bg-muted px-1 rounded">^/$</code> (root), 
+                        <code className="bg-muted px-1 rounded ml-1">^/api/.*</code> (API),
+                        <code className="bg-muted px-1 rounded ml-1">^/static/.*</code> (static files)
+                      </p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
 
               {/* Locations Section */}
               <div className="space-y-3">
