@@ -112,10 +112,7 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 		for _, pattern := range securityCfg.UAPatterns {
 			config += "    if ($http_user_agent ~* \"" + escapeNginxRegex(pattern) + "\") { set $block_ua 1; }\n"
 		}
-		config += "    if ($block_ua = 1) {\n"
-		config += "        access_log /var/log/nginx/security-blocked.log;\n"
-		config += "        return 403;\n"
-		config += "    }\n\n"
+		config += "    if ($block_ua = 1) { return 403; }\n\n"
 	}
 
 	// Endpoint blocking (allowlist mode)
@@ -125,10 +122,7 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 		for _, pattern := range securityCfg.EndpointRules {
 			config += "    if ($request_uri ~* \"" + escapeNginxRegex(pattern) + "\") { set $allowed_endpoint 1; }\n"
 		}
-		config += "    if ($allowed_endpoint = 0) {\n"
-		config += "        access_log /var/log/nginx/security-blocked.log;\n"
-		config += "        return 403;\n"
-		config += "    }\n\n"
+		config += "    if ($allowed_endpoint = 0) { return 403; }\n\n"
 	}
 
 	if structured.CORS.Enabled && structured.CORS.AllowAll {
@@ -487,7 +481,7 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 					var patterns []string
 					err := h.db.Select(&patterns, `
 						SELECT pattern FROM security_ua_patterns 
-						WHERE is_enabled = true
+						WHERE is_active = true
 					`)
 					if err != nil {
 						log.Printf("Warning: Failed to fetch UA patterns: %v", err)
