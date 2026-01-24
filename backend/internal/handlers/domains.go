@@ -482,24 +482,34 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 			if secCheck.UABlockingEnabled || secCheck.EndpointBlockingEnabled {
 				securityCfg = &SecurityConfig{}
 
-				// Fetch UA patterns if UA blocking is enabled
+				// Fetch UA patterns if UA blocking is enabled (using main db, not transaction)
 				if secCheck.UABlockingEnabled {
 					var patterns []string
-					tx.Select(&patterns, `
+					err := h.db.Select(&patterns, `
 						SELECT pattern FROM security_ua_patterns 
 						WHERE is_enabled = true
 					`)
-					securityCfg.UAPatterns = patterns
+					if err != nil {
+						log.Printf("Warning: Failed to fetch UA patterns: %v", err)
+					} else {
+						securityCfg.UAPatterns = patterns
+						log.Printf("Loaded %d UA patterns for blocking", len(patterns))
+					}
 				}
 
-				// Fetch endpoint rules if endpoint blocking is enabled
+				// Fetch endpoint rules if endpoint blocking is enabled (using main db, not transaction)
 				if secCheck.EndpointBlockingEnabled {
 					var rules []string
-					tx.Select(&rules, `
+					err := h.db.Select(&rules, `
 						SELECT pattern FROM security_endpoint_rules 
 						WHERE nginx_config_id = $1
 					`, req.ConfigID)
-					securityCfg.EndpointRules = rules
+					if err != nil {
+						log.Printf("Warning: Failed to fetch endpoint rules: %v", err)
+					} else {
+						securityCfg.EndpointRules = rules
+						log.Printf("Loaded %d endpoint rules for blocking", len(rules))
+					}
 				}
 			}
 
