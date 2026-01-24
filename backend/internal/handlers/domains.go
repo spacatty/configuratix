@@ -479,9 +479,15 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 				// Fetch UA patterns if UA blocking is enabled (using main db, not transaction)
 				if secCheck.UABlockingEnabled {
 					var patterns []string
+					// Use DISTINCT to avoid duplicates, only get 'contains' patterns (not 'exact')
+					// Skip empty patterns and single-char patterns that are too broad
 					err := h.db.Select(&patterns, `
-						SELECT pattern FROM security_ua_patterns 
-						WHERE is_active = true
+						SELECT DISTINCT pattern FROM security_ua_patterns 
+						WHERE is_active = true 
+						  AND match_type = 'contains'
+						  AND pattern != ''
+						  AND pattern != '-'
+						  AND LENGTH(pattern) > 2
 					`)
 					if err != nil {
 						log.Printf("Warning: Failed to fetch UA patterns: %v", err)
