@@ -226,8 +226,8 @@ type AgentSecuritySyncResponse struct {
 
 // AgentBanEntry represents a ban for agent to apply
 type AgentBanEntry struct {
-	IPAddress string    `json:"ip_address"`
-	ExpiresAt time.Time `json:"expires_at"`
+	IPAddress string     `json:"ip_address" db:"ip_address"`
+	ExpiresAt *time.Time `json:"expires_at" db:"expires_at"`
 }
 
 // AgentUAPatternsResponse for agent to get UA patterns
