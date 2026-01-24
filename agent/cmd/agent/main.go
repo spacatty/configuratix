@@ -131,8 +131,8 @@ func run() error {
 			Enabled:          true,
 			ServerURL:        cfg.ServerURL,
 			APIKey:           cfg.APIKey,
-			MachineID:        cfg.AgentID,     // Using AgentID as machine identifier
-			SyncInterval:     5 * time.Second, // 5 seconds for testing, increase in production
+			MachineID:        cfg.AgentID,              // Using AgentID as machine identifier
+			SyncInterval:     2 * time.Minute,          // Sync every 2 minutes
 			SecurityLogPath:  "/var/log/nginx/security-blocked.log",
 			NginxIncludePath: "/etc/nginx/snippets/configuratix-security.conf",
 		})
