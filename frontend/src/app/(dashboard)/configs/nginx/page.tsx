@@ -109,6 +109,9 @@ export default function NginxConfigsPage() {
         cors: formIsPassthrough ? null : { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
         autoindex_off: formIsPassthrough ? undefined : formAutoindexOff,
         deny_all_catchall: formIsPassthrough ? undefined : formDenyAllCatchall,
+        // Include security settings
+        ua_blocking_enabled: formUABlocking,
+        endpoint_blocking_enabled: formEndpointBlocking,
       };
       await api.createNginxConfig({
         name: formName,
@@ -143,6 +146,9 @@ export default function NginxConfigsPage() {
         cors: formIsPassthrough ? null : { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
         autoindex_off: formIsPassthrough ? undefined : formAutoindexOff,
         deny_all_catchall: formIsPassthrough ? undefined : formDenyAllCatchall,
+        // Include security settings in structured_json
+        ua_blocking_enabled: formUABlocking,
+        endpoint_blocking_enabled: formEndpointBlocking,
       };
       await api.updateNginxConfig(selectedConfig.id, {
         name: formName,
@@ -150,6 +156,8 @@ export default function NginxConfigsPage() {
         structured_json: formMode === "auto" ? structured : undefined,
         raw_text: formMode === "manual" ? formRawText : undefined,
       });
+      // Also save security settings separately
+      await handleSaveSecuritySettings();
       setShowEditDialog(false);
       setSelectedConfig(null);
       resetForm();
@@ -196,19 +204,30 @@ export default function NginxConfigsPage() {
       // Check if any static location has PHP enabled
       setFormEnablePHP(structured.locations?.some(loc => loc.use_php) ?? false);
     }
-    // Load security settings
+    // Load security settings - first try from structured_json, then from separate API
+    const structured = config.structured_json as NginxConfigStructured;
+    if (structured?.ua_blocking_enabled !== undefined || structured?.endpoint_blocking_enabled !== undefined) {
+      // Load from structured_json
+      setFormUABlocking(structured.ua_blocking_enabled ?? false);
+      setFormEndpointBlocking(structured.endpoint_blocking_enabled ?? false);
+    }
+    // Always try to load rules from API
     try {
-      const [secSettings, rules] = await Promise.all([
-        api.getSecuritySettings(config.id),
-        api.listSecurityEndpointRules(config.id),
-      ]);
-      setFormUABlocking(secSettings.ua_blocking_enabled);
-      setFormEndpointBlocking(secSettings.endpoint_blocking_enabled);
+      const rules = await api.listSecurityEndpointRules(config.id);
       setFormEndpointRules(rules);
+      // If structured_json doesn't have security settings, try API
+      if (structured?.ua_blocking_enabled === undefined && structured?.endpoint_blocking_enabled === undefined) {
+        try {
+          const secSettings = await api.getSecuritySettings(config.id);
+          setFormUABlocking(secSettings.ua_blocking_enabled);
+          setFormEndpointBlocking(secSettings.endpoint_blocking_enabled);
+        } catch {
+          setFormUABlocking(false);
+          setFormEndpointBlocking(false);
+        }
+      }
     } catch {
-      // Settings may not exist yet - use defaults
-      setFormUABlocking(false);
-      setFormEndpointBlocking(false);
+      // Rules may not exist yet
       setFormEndpointRules([]);
     }
     setShowEditDialog(true);

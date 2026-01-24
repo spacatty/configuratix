@@ -467,6 +467,10 @@ export interface NginxConfigStructured {
   cors: CORSConfig | null;
   autoindex_off?: boolean;      // Deny directory listing (default: true)
   deny_all_catchall?: boolean;  // Add deny all catch-all for unmatched paths (default: true)
+
+  // Security settings
+  ua_blocking_enabled?: boolean;       // Block requests from bad user agents
+  endpoint_blocking_enabled?: boolean; // Block requests to non-allowed endpoints
 }
 
 export interface LocationConfig {

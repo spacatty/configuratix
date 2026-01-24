@@ -16,14 +16,24 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// escapeNginxRegex escapes special characters for use in Nginx regex
+func escapeNginxRegex(pattern string) string {
+	// Escape double quotes and backslashes for Nginx string context
+	result := strings.ReplaceAll(pattern, `\`, `\\`)
+	result = strings.ReplaceAll(result, `"`, `\"`)
+	return result
+}
+
 // structuredConfig is used for parsing the structured JSON
 type structuredConfig struct {
-	IsPassthrough     bool   `json:"is_passthrough"`
-	PassthroughTarget string `json:"passthrough_target"`
-	SSLMode           string `json:"ssl_mode"`
-	AutoindexOff      *bool  `json:"autoindex_off"`
-	DenyAllCatchall   *bool  `json:"deny_all_catchall"`
-	Locations         []struct {
+	IsPassthrough           bool   `json:"is_passthrough"`
+	PassthroughTarget       string `json:"passthrough_target"`
+	SSLMode                 string `json:"ssl_mode"`
+	AutoindexOff            *bool  `json:"autoindex_off"`
+	DenyAllCatchall         *bool  `json:"deny_all_catchall"`
+	UABlockingEnabled       bool   `json:"ua_blocking_enabled"`
+	EndpointBlockingEnabled bool   `json:"endpoint_blocking_enabled"`
+	Locations               []struct {
 		Path       string `json:"path"`
 		MatchType  string `json:"match_type"`
 		Type       string `json:"type"`
@@ -54,9 +64,16 @@ func getPassthroughTarget(structuredJSON json.RawMessage) string {
 	return cfg.PassthroughTarget
 }
 
+// SecurityConfig holds security settings for Nginx config generation
+type SecurityConfig struct {
+	UAPatterns    []string // Regex patterns for blocked user agents
+	EndpointRules []string // Allowed endpoint regex patterns
+}
+
 // generateNginxFromStructured creates nginx config from structured JSON
 // phpVersion is optional - if provided, uses the specific PHP-FPM socket, otherwise uses default
-func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, phpVersion string) string {
+// securityCfg is optional security configuration for UA/endpoint blocking
+func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, phpVersion string, securityCfg *SecurityConfig) string {
 	var structured structuredConfig
 	json.Unmarshal(structuredJSON, &structured)
 
@@ -86,6 +103,32 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 	if autoindexOff {
 		config += "    # Deny directory listing\n"
 		config += "    autoindex off;\n\n"
+	}
+
+	// User-Agent blocking
+	if structured.UABlockingEnabled && securityCfg != nil && len(securityCfg.UAPatterns) > 0 {
+		config += "    # Block bad user agents\n"
+		config += "    set $block_ua 0;\n"
+		for _, pattern := range securityCfg.UAPatterns {
+			config += "    if ($http_user_agent ~* \"" + escapeNginxRegex(pattern) + "\") { set $block_ua 1; }\n"
+		}
+		config += "    if ($block_ua = 1) {\n"
+		config += "        access_log /var/log/nginx/security-blocked.log;\n"
+		config += "        return 403;\n"
+		config += "    }\n\n"
+	}
+
+	// Endpoint blocking (allowlist mode)
+	if structured.EndpointBlockingEnabled && securityCfg != nil && len(securityCfg.EndpointRules) > 0 {
+		config += "    # Endpoint allowlist - block requests not matching allowed patterns\n"
+		config += "    set $allowed_endpoint 0;\n"
+		for _, pattern := range securityCfg.EndpointRules {
+			config += "    if ($request_uri ~* \"" + escapeNginxRegex(pattern) + "\") { set $allowed_endpoint 1; }\n"
+		}
+		config += "    if ($allowed_endpoint = 0) {\n"
+		config += "        access_log /var/log/nginx/security-blocked.log;\n"
+		config += "        return 403;\n"
+		config += "    }\n\n"
 	}
 
 	if structured.CORS.Enabled && structured.CORS.AllowAll {
@@ -426,8 +469,42 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 		if config.Mode == "manual" && config.RawText != nil {
 			nginxConfig = *config.RawText
 		} else {
-			// Generate nginx config from structured JSON with PHP version
-			nginxConfig = generateNginxFromStructured(config.StructuredJSON, domainFQDN, phpVersion)
+			// Fetch security configuration for this nginx config
+			var securityCfg *SecurityConfig
+
+			// Parse structured JSON to check if security is enabled
+			var secCheck struct {
+				UABlockingEnabled       bool `json:"ua_blocking_enabled"`
+				EndpointBlockingEnabled bool `json:"endpoint_blocking_enabled"`
+			}
+			json.Unmarshal(config.StructuredJSON, &secCheck)
+
+			if secCheck.UABlockingEnabled || secCheck.EndpointBlockingEnabled {
+				securityCfg = &SecurityConfig{}
+
+				// Fetch UA patterns if UA blocking is enabled
+				if secCheck.UABlockingEnabled {
+					var patterns []string
+					tx.Select(&patterns, `
+						SELECT pattern FROM security_ua_patterns 
+						WHERE is_enabled = true
+					`)
+					securityCfg.UAPatterns = patterns
+				}
+
+				// Fetch endpoint rules if endpoint blocking is enabled
+				if secCheck.EndpointBlockingEnabled {
+					var rules []string
+					tx.Select(&rules, `
+						SELECT pattern FROM security_endpoint_rules 
+						WHERE nginx_config_id = $1
+					`, req.ConfigID)
+					securityCfg.EndpointRules = rules
+				}
+			}
+
+			// Generate nginx config from structured JSON with PHP version and security config
+			nginxConfig = generateNginxFromStructured(config.StructuredJSON, domainFQDN, phpVersion, securityCfg)
 		}
 	}
 
