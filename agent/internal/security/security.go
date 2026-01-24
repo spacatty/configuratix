@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"log"
 	"net"
+	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -75,11 +78,11 @@ type Module struct {
 
 	// State
 	mu            sync.RWMutex
-	localBans     map[string]*Ban    // IP -> Ban
-	whitelist     map[string]bool    // IP/CIDR -> true
-	whitelistNets []*net.IPNet       // Parsed CIDRs
-	uaPatterns    []string           // UA patterns from backend
-	pendingBans   []BanReport        // Bans to sync to backend
+	localBans     map[string]*Ban // IP -> Ban
+	whitelist     map[string]bool // IP/CIDR -> true
+	whitelistNets []*net.IPNet    // Parsed CIDRs
+	uaPatterns    []string        // UA patterns from backend
+	pendingBans   []BanReport     // Bans to sync to backend
 	lastSyncAt    *time.Time
 
 	// Control
@@ -185,12 +188,15 @@ func (m *Module) handleBlockedRequest(ip, reason, userAgent, path string) {
 	}
 	m.localBans[ip] = ban
 
-	// Add to nftables
+	// Add to nftables (works for direct traffic, not proxied)
 	if m.nftables != nil {
 		if err := m.nftables.AddBan(ip, expiresAt); err != nil {
 			log.Printf("Failed to add ban to nftables: %v", err)
 		}
 	}
+
+	// Update nginx deny file (works for proxied traffic via Cloudflare etc)
+	m.updateNginxBanFile()
 
 	// Queue for sync
 	details, _ := json.Marshal(map[string]string{
@@ -292,3 +298,41 @@ func (m *Module) GetUAPatterns() []string {
 	return m.uaPatterns
 }
 
+// updateNginxBanFile writes banned IPs to nginx include file and reloads nginx
+func (m *Module) updateNginxBanFile() {
+	// Path for nginx ban file
+	banFilePath := "/etc/nginx/snippets/configuratix-bans.conf"
+
+	// Ensure directory exists
+	os.MkdirAll("/etc/nginx/snippets", 0755)
+
+	// Build deny rules
+	var content strings.Builder
+	content.WriteString("# Configuratix Security - Banned IPs\n")
+	content.WriteString("# Auto-generated - do not edit manually\n")
+	content.WriteString("# Updated: " + time.Now().Format(time.RFC3339) + "\n\n")
+
+	for ip := range m.localBans {
+		content.WriteString("deny " + ip + ";\n")
+	}
+
+	// Write file
+	if err := os.WriteFile(banFilePath, []byte(content.String()), 0644); err != nil {
+		log.Printf("Failed to write nginx ban file: %v", err)
+		return
+	}
+
+	// Reload nginx
+	cmd := exec.Command("nginx", "-t")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("Nginx config test failed: %s", string(output))
+		return
+	}
+
+	cmd = exec.Command("systemctl", "reload", "nginx")
+	if err := cmd.Run(); err != nil {
+		log.Printf("Failed to reload nginx: %v", err)
+	} else {
+		log.Printf("Nginx reloaded with %d banned IPs", len(m.localBans))
+	}
+}

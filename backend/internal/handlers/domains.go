@@ -153,6 +153,10 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 		config += "    ssl_protocols TLSv1.2 TLSv1.3;\n\n"
 	}
 
+	// Include banned IPs file (for proxied traffic blocking)
+	config += "    # Banned IPs (works with real_ip for Cloudflare etc)\n"
+	config += "    include /etc/nginx/snippets/configuratix-bans.conf;\n\n"
+
 	// Real IP configuration for proxied requests
 	if structured.ProxySettings != nil && structured.ProxySettings.Enabled {
 		config += "    # Real IP extraction from proxy\n"
