@@ -105,24 +105,47 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 		config += "    autoindex off;\n\n"
 	}
 
+	// Security blocking with proper logging
+	hasSecurityBlocking := (structured.UABlockingEnabled && securityCfg != nil && len(securityCfg.UAPatterns) > 0) ||
+		(structured.EndpointBlockingEnabled && securityCfg != nil && len(securityCfg.EndpointRules) > 0)
+
+	if hasSecurityBlocking {
+		// Set variables to track block reason
+		config += "    # Security blocking variables\n"
+		config += "    set $security_block \"\";\n"
+		config += "    set $block_reason \"\";\n\n"
+	}
+
 	// User-Agent blocking
 	if structured.UABlockingEnabled && securityCfg != nil && len(securityCfg.UAPatterns) > 0 {
 		config += "    # Block bad user agents\n"
-		config += "    set $block_ua 0;\n"
 		for _, pattern := range securityCfg.UAPatterns {
-			config += "    if ($http_user_agent ~* \"" + escapeNginxRegex(pattern) + "\") { set $block_ua 1; }\n"
+			config += "    if ($http_user_agent ~* \"" + escapeNginxRegex(pattern) + "\") {\n"
+			config += "        set $security_block \"1\";\n"
+			config += "        set $block_reason \"blocked_ua\";\n"
+			config += "    }\n"
 		}
-		config += "    if ($block_ua = 1) { return 403; }\n\n"
+		config += "\n"
 	}
 
 	// Endpoint blocking (allowlist mode)
 	if structured.EndpointBlockingEnabled && securityCfg != nil && len(securityCfg.EndpointRules) > 0 {
 		config += "    # Endpoint allowlist - block requests not matching allowed patterns\n"
-		config += "    set $allowed_endpoint 0;\n"
+		config += "    set $endpoint_allowed 0;\n"
 		for _, pattern := range securityCfg.EndpointRules {
-			config += "    if ($request_uri ~* \"" + escapeNginxRegex(pattern) + "\") { set $allowed_endpoint 1; }\n"
+			config += "    if ($request_uri ~* \"" + escapeNginxRegex(pattern) + "\") { set $endpoint_allowed 1; }\n"
 		}
-		config += "    if ($allowed_endpoint = 0) { return 403; }\n\n"
+		config += "    if ($endpoint_allowed = 0) {\n"
+		config += "        set $security_block \"1\";\n"
+		config += "        set $block_reason \"invalid_endpoint\";\n"
+		config += "    }\n\n"
+	}
+
+	// Add error_page and blocked location if security is enabled
+	if hasSecurityBlocking {
+		config += "    # Redirect blocked requests to logging location\n"
+		config += "    if ($security_block = \"1\") { return 493; }\n"
+		config += "    error_page 493 = @security_blocked;\n\n"
 	}
 
 	if structured.CORS.Enabled && structured.CORS.AllowAll {
@@ -215,6 +238,16 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 		config += "        fastcgi_index index.php;\n"
 		config += "        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n"
 		config += "        include fastcgi_params;\n"
+		config += "    }\n\n"
+	}
+
+	// Add security blocked location for logging
+	if hasSecurityBlocking {
+		config += "    # Security blocked location - logs blocked requests for agent to process\n"
+		config += "    location @security_blocked {\n"
+		config += "        internal;\n"
+		config += "        access_log /var/log/nginx/security-blocked.log combined;\n"
+		config += "        return 403;\n"
 		config += "    }\n\n"
 	}
 

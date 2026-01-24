@@ -154,25 +154,72 @@ func (w *LogWatcher) readNewLines(reader *bufio.Reader) {
 }
 
 // parseLine parses a security log line
-// Expected format: IP|REASON|USER_AGENT|PATH|TIMESTAMP
+// Supports two formats:
+// 1. Custom format: IP|REASON|USER_AGENT|PATH|TIMESTAMP
+// 2. Combined log format: 192.168.1.1 - - [24/Jan/2026:01:23:45 +0000] "GET /path HTTP/1.1" 403 ...
 func (w *LogWatcher) parseLine(line string) {
-	parts := strings.Split(line, "|")
-	if len(parts) < 4 {
-		log.Printf("Invalid security log line: %s", line)
-		return
+	// Try custom pipe-delimited format first
+	if strings.Contains(line, "|") && strings.Count(line, "|") >= 3 {
+		parts := strings.Split(line, "|")
+		if len(parts) >= 4 {
+			ip := strings.TrimSpace(parts[0])
+			reason := strings.TrimSpace(parts[1])
+			userAgent := strings.TrimSpace(parts[2])
+			path := strings.TrimSpace(parts[3])
+
+			if ip != "" && reason != "" {
+				w.handler(ip, reason, userAgent, path)
+				return
+			}
+		}
 	}
 
-	ip := strings.TrimSpace(parts[0])
-	reason := strings.TrimSpace(parts[1])
-	userAgent := strings.TrimSpace(parts[2])
-	path := strings.TrimSpace(parts[3])
-
-	if ip == "" || reason == "" {
-		return
+	// Parse combined/common log format
+	// Format: IP - - [date] "METHOD PATH PROTO" STATUS SIZE "REFERER" "USER_AGENT"
+	ip := w.parseNginxCombinedLog(line)
+	if ip != "" {
+		// Extract path and user agent from the log line
+		path := "-"
+		userAgent := "-"
+		
+		// Extract request (between first and second quotes)
+		if idx := strings.Index(line, "\""); idx != -1 {
+			rest := line[idx+1:]
+			if endIdx := strings.Index(rest, "\""); endIdx != -1 {
+				request := rest[:endIdx]
+				parts := strings.Split(request, " ")
+				if len(parts) >= 2 {
+					path = parts[1]
+				}
+			}
+		}
+		
+		// Extract user agent (last quoted string)
+		parts := strings.Split(line, "\"")
+		if len(parts) >= 6 {
+			userAgent = parts[5] // User agent is typically the 6th part
+		}
+		
+		// All requests in this log are blocked, infer reason from context
+		reason := "blocked_request"
+		w.handler(ip, reason, userAgent, path)
 	}
+}
 
-	// Call handler
-	w.handler(ip, reason, userAgent, path)
+// parseNginxCombinedLog extracts the IP from a combined log format line
+func (w *LogWatcher) parseNginxCombinedLog(line string) string {
+	// Combined format starts with IP address
+	parts := strings.SplitN(line, " ", 2)
+	if len(parts) < 2 {
+		return ""
+	}
+	
+	ip := parts[0]
+	// Validate it looks like an IP
+	if strings.Contains(ip, ".") || strings.Contains(ip, ":") {
+		return ip
+	}
+	return ""
 }
 
 // Stop stops the log watcher
