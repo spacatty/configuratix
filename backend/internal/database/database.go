@@ -73,6 +73,7 @@ func (db *DB) RunMigrations() error {
 		"021_passthrough_http_port.sql",
 		"022_security_module.sql",
 		"023_fix_ua_patterns_duplicates.sql",
+		"024_security_ip_bans_unique.sql",
 	}
 
 	// Get current working directory for debugging

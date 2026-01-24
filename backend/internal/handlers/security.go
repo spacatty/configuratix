@@ -987,20 +987,12 @@ func (h *SecurityHandler) AgentSecuritySync(w http.ResponseWriter, r *http.Reque
 		AND (expires_at IS NULL OR expires_at > NOW())
 	`, lastSync)
 
-	// Get IPs to remove (whitelisted or expired)
+	// Get IPs to remove (only expired/inactive bans that agent might still have)
 	var bansToRemove []string
-	// Get whitelist IPs
 	h.db.Select(&bansToRemove, `
-		SELECT ip_cidr::text FROM security_ip_whitelist WHERE owner_id = $1
-	`, ownerID)
-
-	// Add expired bans
-	var expiredBans []string
-	h.db.Select(&expiredBans, `
 		SELECT ip_address::text FROM security_ip_bans 
 		WHERE is_active = false OR (expires_at IS NOT NULL AND expires_at <= NOW())
 	`)
-	bansToRemove = append(bansToRemove, expiredBans...)
 
 	// Get full whitelist for agent
 	var whitelist []string
