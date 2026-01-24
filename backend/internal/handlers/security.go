@@ -907,10 +907,11 @@ func (h *SecurityHandler) GetSecurityStats(w http.ResponseWriter, r *http.Reques
 func (h *SecurityHandler) AgentSecuritySync(w http.ResponseWriter, r *http.Request) {
 	agentID := r.Context().Value("agent_id").(uuid.UUID)
 
-	// Get machine ID from agent
+	// Get machine ID from agent (machines.agent_id -> agents.id)
 	var machineID uuid.UUID
-	err := h.db.Get(&machineID, `SELECT machine_id FROM agents WHERE id = $1`, agentID)
+	err := h.db.Get(&machineID, `SELECT id FROM machines WHERE agent_id = $1`, agentID)
 	if err != nil {
+		log.Printf("Agent %s has no associated machine: %v", agentID, err)
 		http.Error(w, "Agent not found", http.StatusUnauthorized)
 		return
 	}
@@ -1013,14 +1014,14 @@ func (h *SecurityHandler) AgentSecuritySync(w http.ResponseWriter, r *http.Reque
 func (h *SecurityHandler) AgentGetUAPatterns(w http.ResponseWriter, r *http.Request) {
 	agentID := r.Context().Value("agent_id").(uuid.UUID)
 
-	// Get machine owner
+	// Get machine owner (machines.agent_id -> agents.id)
 	var ownerID uuid.UUID
 	err := h.db.Get(&ownerID, `
-		SELECT m.owner_id FROM agents a 
-		JOIN machines m ON a.machine_id = m.id 
-		WHERE a.id = $1
+		SELECT m.owner_id FROM machines m 
+		WHERE m.agent_id = $1
 	`, agentID)
 	if err != nil {
+		log.Printf("Agent %s has no associated machine: %v", agentID, err)
 		http.Error(w, "Agent not found", http.StatusUnauthorized)
 		return
 	}
@@ -1068,14 +1069,14 @@ func (h *SecurityHandler) AgentGetUAPatterns(w http.ResponseWriter, r *http.Requ
 func (h *SecurityHandler) AgentGetWhitelist(w http.ResponseWriter, r *http.Request) {
 	agentID := r.Context().Value("agent_id").(uuid.UUID)
 
-	// Get machine owner
+	// Get machine owner (machines.agent_id -> agents.id)
 	var ownerID uuid.UUID
 	err := h.db.Get(&ownerID, `
-		SELECT m.owner_id FROM agents a 
-		JOIN machines m ON a.machine_id = m.id 
-		WHERE a.id = $1
+		SELECT m.owner_id FROM machines m 
+		WHERE m.agent_id = $1
 	`, agentID)
 	if err != nil {
+		log.Printf("Agent %s has no associated machine: %v", agentID, err)
 		http.Error(w, "Agent not found", http.StatusUnauthorized)
 		return
 	}
