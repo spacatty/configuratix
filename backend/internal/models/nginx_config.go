@@ -31,6 +31,10 @@ type NginxConfigStructured struct {
 	CORS            *CORSConfig      `json:"cors"`
 	AutoindexOff    *bool            `json:"autoindex_off,omitempty"`     // Deny directory listing (default: true)
 	DenyAllCatchall *bool            `json:"deny_all_catchall,omitempty"` // Add deny all catch-all (default: true)
+
+	// Security settings
+	UABlockingEnabled       bool `json:"ua_blocking_enabled,omitempty"`       // Block requests from bad user agents
+	EndpointBlockingEnabled bool `json:"endpoint_blocking_enabled,omitempty"` // Block requests to non-allowed endpoints
 }
 
 type LocationConfig struct {
