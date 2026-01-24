@@ -951,8 +951,8 @@ func (h *SecurityHandler) AgentSecuritySync(w http.ResponseWriter, r *http.Reque
 			VALUES ($1, $2, $3, $4, $5, $6, true)
 			ON CONFLICT (ip_address) DO UPDATE SET
 				is_active = true,
-				expires_at = $6,
-				updated_at = NOW()
+				expires_at = EXCLUDED.expires_at,
+				banned_at = EXCLUDED.banned_at
 		`, ban.IPAddress, machineID, ban.Reason, ban.Details, ban.BannedAt, expiresAt)
 		if err != nil {
 			log.Printf("Failed to insert ban for %s: %v", ban.IPAddress, err)

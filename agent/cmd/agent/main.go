@@ -21,7 +21,7 @@ import (
 	"configuratix/agent/internal/updater"
 )
 
-const Version = "0.5.0"
+const Version = "0.5.1"
 
 func main() {
 	enrollCmd := flag.NewFlagSet("enroll", flag.ExitOnError)
@@ -132,7 +132,7 @@ func run() error {
 			ServerURL:        cfg.ServerURL,
 			APIKey:           cfg.APIKey,
 			MachineID:        cfg.AgentID,     // Using AgentID as machine identifier
-			SyncInterval:     2 * time.Minute, // Sync every 2 minutes
+			SyncInterval:     1 * time.Minute, // Sync every minute
 			SecurityLogPath:  "/var/log/nginx/security-blocked.log",
 			NginxIncludePath: "/etc/nginx/snippets/configuratix-security.conf",
 		})
