@@ -21,7 +21,7 @@ import (
 	"configuratix/agent/internal/updater"
 )
 
-const Version = "0.5.1"
+const Version = "0.5.2"
 
 func main() {
 	enrollCmd := flag.NewFlagSet("enroll", flag.ExitOnError)

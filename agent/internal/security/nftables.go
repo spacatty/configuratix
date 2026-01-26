@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"net"
 	"os/exec"
 	"strings"
 	"sync"
@@ -13,10 +14,11 @@ import (
 )
 
 const (
-	nftTable   = "configuratix"
-	nftChain   = "input"
-	nftSet     = "banned"
-	nftFamily  = "inet"
+	nftTable    = "configuratix"
+	nftChain    = "input"
+	nftSetV4    = "banned4"
+	nftSetV6    = "banned6"
+	nftFamily   = "inet"
 )
 
 // NftablesState represents the current state
@@ -32,10 +34,11 @@ type NftablesState struct {
 
 // NftablesManager manages nftables rules for IP banning
 type NftablesManager struct {
-	mu         sync.Mutex
-	enabled    bool
-	ruleHandle string // Handle of the drop rule for removal
-	lastError  string
+	mu           sync.Mutex
+	enabled      bool
+	ruleHandleV4 string // Handle of the IPv4 drop rule for removal
+	ruleHandleV6 string // Handle of the IPv6 drop rule for removal
+	lastError    string
 }
 
 // NewNftablesManager creates a new nftables manager
@@ -45,7 +48,7 @@ func NewNftablesManager() *NftablesManager {
 	}
 }
 
-// Init initializes the nftables table, set, and chain
+// Init initializes the nftables table, sets, and chain
 func (n *NftablesManager) Init() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -59,11 +62,19 @@ func (n *NftablesManager) Init() error {
 		}
 	}
 
-	// Create set for banned IPs with timeout support
-	if err := n.runNft("add set", nftFamily, nftTable, nftSet, "{ type ipv4_addr; flags timeout; }"); err != nil {
+	// Create set for banned IPv4 addresses with timeout support
+	if err := n.runNft("add set", nftFamily, nftTable, nftSetV4, "{ type ipv4_addr; flags timeout; }"); err != nil {
 		if !strings.Contains(err.Error(), "File exists") {
 			n.lastError = err.Error()
-			return fmt.Errorf("failed to create set: %w", err)
+			return fmt.Errorf("failed to create IPv4 set: %w", err)
+		}
+	}
+
+	// Create set for banned IPv6 addresses with timeout support
+	if err := n.runNft("add set", nftFamily, nftTable, nftSetV6, "{ type ipv6_addr; flags timeout; }"); err != nil {
+		if !strings.Contains(err.Error(), "File exists") {
+			n.lastError = err.Error()
+			return fmt.Errorf("failed to create IPv6 set: %w", err)
 		}
 	}
 
@@ -75,13 +86,13 @@ func (n *NftablesManager) Init() error {
 		}
 	}
 
-	// Add drop rule for banned IPs
-	if err := n.ensureDropRule(); err != nil {
+	// Add drop rules for banned IPs (both v4 and v6)
+	if err := n.ensureDropRules(); err != nil {
 		n.lastError = err.Error()
-		return fmt.Errorf("failed to add drop rule: %w", err)
+		return fmt.Errorf("failed to add drop rules: %w", err)
 	}
 
-	log.Println("nftables initialized successfully")
+	log.Println("nftables initialized successfully (IPv4 + IPv6)")
 	return nil
 }
 
@@ -98,33 +109,63 @@ func (n *NftablesManager) runNft(action string, args ...string) error {
 	return nil
 }
 
-// ensureDropRule ensures the drop rule exists for the banned set
-func (n *NftablesManager) ensureDropRule() error {
-	// Check if rule already exists
+// ensureDropRules ensures drop rules exist for both IPv4 and IPv6 banned sets
+func (n *NftablesManager) ensureDropRules() error {
+	// Check if rules already exist
 	cmd := exec.Command("nft", "-a", "list", "chain", nftFamily, nftTable, nftChain)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return err
 	}
 
-	// Look for existing rule
+	// Look for existing rules
 	lines := strings.Split(string(output), "\n")
+	hasV4Rule := false
+	hasV6Rule := false
 	for _, line := range lines {
-		if strings.Contains(line, "@"+nftSet) && strings.Contains(line, "drop") {
-			// Rule exists, extract handle
+		if strings.Contains(line, "@"+nftSetV4) && strings.Contains(line, "drop") {
+			hasV4Rule = true
 			parts := strings.Split(line, "# handle ")
 			if len(parts) > 1 {
-				n.ruleHandle = strings.TrimSpace(parts[1])
+				n.ruleHandleV4 = strings.TrimSpace(parts[1])
 			}
-			return nil
+		}
+		if strings.Contains(line, "@"+nftSetV6) && strings.Contains(line, "drop") {
+			hasV6Rule = true
+			parts := strings.Split(line, "# handle ")
+			if len(parts) > 1 {
+				n.ruleHandleV6 = strings.TrimSpace(parts[1])
+			}
 		}
 	}
 
-	// Add rule: drop packets from banned IPs
-	return n.runNft("add rule", nftFamily, nftTable, nftChain, "ip saddr @"+nftSet, "drop")
+	// Add IPv4 rule if missing
+	if !hasV4Rule {
+		if err := n.runNft("add rule", nftFamily, nftTable, nftChain, "ip saddr @"+nftSetV4, "drop"); err != nil {
+			return fmt.Errorf("failed to add IPv4 drop rule: %w", err)
+		}
+	}
+
+	// Add IPv6 rule if missing
+	if !hasV6Rule {
+		if err := n.runNft("add rule", nftFamily, nftTable, nftChain, "ip6 saddr @"+nftSetV6, "drop"); err != nil {
+			return fmt.Errorf("failed to add IPv6 drop rule: %w", err)
+		}
+	}
+
+	return nil
 }
 
-// AddBan adds an IP to the banned set
+// isIPv6 checks if the given IP string is an IPv6 address
+func isIPv6(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	return parsed.To4() == nil // If To4() returns nil, it's IPv6
+}
+
+// AddBan adds an IP to the appropriate banned set (v4 or v6)
 func (n *NftablesManager) AddBan(ip string, expiresAt time.Time) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -145,8 +186,14 @@ func (n *NftablesManager) AddBan(ip string, expiresAt time.Time) error {
 		timeoutStr = fmt.Sprintf("%dd", int(timeout.Hours()/24))
 	}
 
+	// Choose the right set based on IP version
+	setName := nftSetV4
+	if isIPv6(ip) {
+		setName = nftSetV6
+	}
+
 	// Add element with timeout
-	cmd := exec.Command("nft", "add", "element", nftFamily, nftTable, nftSet, 
+	cmd := exec.Command("nft", "add", "element", nftFamily, nftTable, setName, 
 		fmt.Sprintf("{ %s timeout %s }", ip, timeoutStr))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -158,12 +205,18 @@ func (n *NftablesManager) AddBan(ip string, expiresAt time.Time) error {
 	return nil
 }
 
-// RemoveBan removes an IP from the banned set
+// RemoveBan removes an IP from the appropriate banned set
 func (n *NftablesManager) RemoveBan(ip string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	cmd := exec.Command("nft", "delete", "element", nftFamily, nftTable, nftSet,
+	// Choose the right set based on IP version
+	setName := nftSetV4
+	if isIPv6(ip) {
+		setName = nftSetV6
+	}
+
+	cmd := exec.Command("nft", "delete", "element", nftFamily, nftTable, setName,
 		fmt.Sprintf("{ %s }", ip))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -175,15 +228,16 @@ func (n *NftablesManager) RemoveBan(ip string) error {
 	return nil
 }
 
-// ListBans returns all currently banned IPs
-func (n *NftablesManager) ListBans() ([]string, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	cmd := exec.Command("nft", "list", "set", nftFamily, nftTable, nftSet)
+// listBansFromSet returns all IPs from a specific set
+func (n *NftablesManager) listBansFromSet(setName string) ([]string, error) {
+	cmd := exec.Command("nft", "list", "set", nftFamily, nftTable, setName)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("failed to list bans: %s - %s", err, string(output))
+		// If set doesn't exist, return empty
+		if strings.Contains(string(output), "No such file") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to list bans from %s: %s - %s", setName, err, string(output))
 	}
 
 	var ips []string
@@ -230,47 +284,88 @@ func (n *NftablesManager) ListBans() ([]string, error) {
 	return ips, nil
 }
 
-// ClearAll removes all IPs from the banned set
+// ListBans returns all currently banned IPs (both IPv4 and IPv6)
+func (n *NftablesManager) ListBans() ([]string, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	var allIPs []string
+
+	// Get IPv4 bans
+	v4IPs, err := n.listBansFromSet(nftSetV4)
+	if err != nil {
+		return nil, err
+	}
+	allIPs = append(allIPs, v4IPs...)
+
+	// Get IPv6 bans
+	v6IPs, err := n.listBansFromSet(nftSetV6)
+	if err != nil {
+		return nil, err
+	}
+	allIPs = append(allIPs, v6IPs...)
+
+	return allIPs, nil
+}
+
+// ClearAll removes all IPs from both banned sets
 func (n *NftablesManager) ClearAll() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	cmd := exec.Command("nft", "flush", "set", nftFamily, nftTable, nftSet)
+	// Clear IPv4 set
+	cmd := exec.Command("nft", "flush", "set", nftFamily, nftTable, nftSetV4)
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to clear bans: %s - %s", err, string(output))
+	if err != nil && !strings.Contains(string(output), "No such file") {
+		return fmt.Errorf("failed to clear IPv4 bans: %s - %s", err, string(output))
 	}
+
+	// Clear IPv6 set
+	cmd = exec.Command("nft", "flush", "set", nftFamily, nftTable, nftSetV6)
+	output, err = cmd.CombinedOutput()
+	if err != nil && !strings.Contains(string(output), "No such file") {
+		return fmt.Errorf("failed to clear IPv6 bans: %s - %s", err, string(output))
+	}
+
 	return nil
 }
 
-// Enable enables the drop rule
+// Enable enables the drop rules
 func (n *NftablesManager) Enable() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	n.enabled = true
-	return n.ensureDropRule()
+	return n.ensureDropRules()
 }
 
-// Disable disables the drop rule (bans still tracked, just not enforced)
+// Disable disables the drop rules (bans still tracked, just not enforced)
 func (n *NftablesManager) Disable() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	n.enabled = false
 
-	if n.ruleHandle == "" {
-		return nil
+	// Remove IPv4 drop rule
+	if n.ruleHandleV4 != "" {
+		cmd := exec.Command("nft", "delete", "rule", nftFamily, nftTable, nftChain, 
+			"handle", n.ruleHandleV4)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			log.Printf("Warning: failed to disable IPv4 rule: %s - %s", err, string(output))
+		}
+		n.ruleHandleV4 = ""
 	}
 
-	// Remove the drop rule
-	cmd := exec.Command("nft", "delete", "rule", nftFamily, nftTable, nftChain, 
-		"handle", n.ruleHandle)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to disable: %s - %s", err, string(output))
+	// Remove IPv6 drop rule
+	if n.ruleHandleV6 != "" {
+		cmd := exec.Command("nft", "delete", "rule", nftFamily, nftTable, nftChain, 
+			"handle", n.ruleHandleV6)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			log.Printf("Warning: failed to disable IPv6 rule: %s - %s", err, string(output))
+		}
+		n.ruleHandleV6 = ""
 	}
-	n.ruleHandle = ""
+
 	return nil
 }
 
@@ -291,23 +386,37 @@ func (n *NftablesManager) GetState() *NftablesState {
 		state.TableExists = true
 	}
 
-	// Check set exists and get count
-	cmd = exec.Command("nft", "list", "set", nftFamily, nftTable, nftSet)
+	// Check IPv4 set exists and get count
+	cmd = exec.Command("nft", "list", "set", nftFamily, nftTable, nftSetV4)
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		state.SetExists = true
 		// Count elements
-		count := strings.Count(string(output), ",") + 1
 		if strings.Contains(string(output), "elements = {") {
-			state.BanCount = count
+			count := strings.Count(string(output), ",") + 1
+			state.BanCount += count
 		}
 	}
 
-	// Check rule exists
+	// Check IPv6 set exists and add to count
+	cmd = exec.Command("nft", "list", "set", nftFamily, nftTable, nftSetV6)
+	output, err = cmd.CombinedOutput()
+	if err == nil {
+		state.SetExists = true
+		if strings.Contains(string(output), "elements = {") {
+			count := strings.Count(string(output), ",") + 1
+			state.BanCount += count
+		}
+	}
+
+	// Check rules exist
 	cmd = exec.Command("nft", "-a", "list", "chain", nftFamily, nftTable, nftChain)
 	output, err = cmd.CombinedOutput()
 	if err == nil {
-		if strings.Contains(string(output), "@"+nftSet) && strings.Contains(string(output), "drop") {
+		if strings.Contains(string(output), "@"+nftSetV4) && strings.Contains(string(output), "drop") {
+			state.RuleExists = true
+		}
+		if strings.Contains(string(output), "@"+nftSetV6) && strings.Contains(string(output), "drop") {
 			state.RuleExists = true
 		}
 	}
