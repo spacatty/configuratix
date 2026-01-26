@@ -126,6 +126,10 @@ func main() {
 	apiRouter.HandleFunc("/machines/{id}/fail2ban", machinesHandler.ToggleFail2ban).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/logs", machinesHandler.GetMachineLogs).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/exec", machinesHandler.ExecTerminalCommand).Methods("POST", "OPTIONS")
+	// Speed Test / Tools
+	apiRouter.HandleFunc("/machines/{id}/tools/speedtest", machinesHandler.RunSpeedTest).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/tools/speedtest/sync", machinesHandler.RunSpeedTestAndWait).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/machines/tools/list", machinesHandler.GetMachinesForSpeedTest).Methods("GET", "OPTIONS")
 
 	// Machine Configs (file editing)
 	configsHandler := handlers.NewConfigsHandler(db)

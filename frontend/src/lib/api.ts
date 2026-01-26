@@ -254,7 +254,7 @@ export interface DNSManagedDomain {
 export interface DNSAccount {
   id: string;
   owner_id: string;
-  provider: string; // dnspod, cloudflare
+  provider: string; // dnspod, cloudflare, desec
   name: string;
   is_default: boolean;
   created_at: string;
@@ -858,6 +858,25 @@ class ApiClient {
       method: "POST",
       body: JSON.stringify({ command }),
     });
+  }
+
+  // Speed Test / Tools
+  async runSpeedTest(machineId: string, request: SpeedTestRequest): Promise<Job> {
+    return this.request<Job>(`/api/machines/${machineId}/tools/speedtest`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  async runSpeedTestSync(machineId: string, request: SpeedTestRequest): Promise<SpeedTestResult> {
+    return this.request<SpeedTestResult>(`/api/machines/${machineId}/tools/speedtest/sync`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  async getMachinesForSpeedTest(): Promise<SpeedTestMachine[]> {
+    return this.request<SpeedTestMachine[]>("/api/machines/tools/list");
   }
 
   // Enrollment Tokens
@@ -1874,6 +1893,34 @@ export interface NftablesState {
   rule_exists: boolean;
   last_error?: string;
   checked_at: string;
+}
+
+// Speed Test / Tools Types
+export interface SpeedTestRequest {
+  type: "public" | "download" | "upload" | "iperf_server" | "iperf_client" | "latency" | "network_info" | "machine_download" | "serve";
+  url?: string;
+  target_ip?: string;
+  port?: number;
+  size_mb?: number;
+  duration?: number;
+  reverse?: boolean;
+  count?: number;
+}
+
+export interface SpeedTestResult {
+  job_id: string;
+  status: string;
+  type: string;
+  logs: string;
+  finished: boolean;
+}
+
+export interface SpeedTestMachine {
+  id: string;
+  title: string | null;
+  hostname: string | null;
+  ip_address: string | null;
+  is_online: boolean;
 }
 
 export const api = new ApiClient(API_URL);

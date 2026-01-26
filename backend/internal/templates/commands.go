@@ -983,6 +983,339 @@ sed -i 's/^pm.max_spare_servers.*/pm.max_spare_servers = {{max_spare_servers}}/'
 			{Action: "exec", Command: "systemctl restart php{{version}}-fpm", Timeout: 60},
 		},
 	},
+
+	// ==================== SPEED TEST TOOLS ====================
+
+	"speedtest_public": {
+		ID:          "speedtest_public",
+		Name:        "Public Speedtest",
+		Description: "Run a public internet speed test using speedtest-cli",
+		Category:    "tools",
+		Variables:   []VariableDef{},
+		OnError:     "stop",
+		Steps: []Step{
+			{Action: "exec", Command: `
+# Check if speedtest is installed, if not install it
+if ! command -v speedtest &> /dev/null && ! command -v speedtest-cli &> /dev/null; then
+    echo "Installing speedtest-cli..."
+    apt-get update >/dev/null 2>&1
+    apt-get install -y speedtest-cli >/dev/null 2>&1 || pip3 install speedtest-cli 2>/dev/null
+fi
+
+# Try speedtest (ookla) first, then speedtest-cli
+if command -v speedtest &> /dev/null; then
+    speedtest --accept-license --accept-gdpr 2>/dev/null || speedtest
+elif command -v speedtest-cli &> /dev/null; then
+    speedtest-cli --simple
+else
+    echo "ERROR: speedtest not available"
+    exit 1
+fi
+`, Timeout: 120},
+		},
+	},
+
+	"speedtest_download": {
+		ID:          "speedtest_download",
+		Name:        "Download Speed Test",
+		Description: "Test download speed from a URL",
+		Category:    "tools",
+		Variables: []VariableDef{
+			{Name: "url", Type: "string", Required: true, Description: "URL to download from"},
+			{Name: "size_mb", Type: "int", Required: false, Default: "100", Description: "Expected file size in MB (for reference)"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			{Action: "exec", Command: `
+URL="{{url}}"
+echo "Testing download speed from: $URL"
+echo "=========================================="
+
+# Use curl with progress and timing
+START=$(date +%s.%N)
+RESULT=$(curl -w "\nDownload Size: %{size_download} bytes\nTime: %{time_total}s\nSpeed: %{speed_download} bytes/sec\n" -o /dev/null -L --max-time 120 "$URL" 2>&1)
+END=$(date +%s.%N)
+
+echo "$RESULT"
+
+# Parse and display in human-readable format
+SPEED_BPS=$(echo "$RESULT" | grep "Speed:" | awk '{print $2}')
+if [ -n "$SPEED_BPS" ]; then
+    SPEED_MBPS=$(echo "scale=2; $SPEED_BPS * 8 / 1000000" | bc 2>/dev/null || echo "N/A")
+    echo ""
+    echo "=========================================="
+    echo "Download Speed: $SPEED_MBPS Mbps"
+fi
+`, Timeout: 180},
+		},
+	},
+
+	"speedtest_upload": {
+		ID:          "speedtest_upload",
+		Name:        "Upload Speed Test",
+		Description: "Test upload speed to a URL (using temp.sh or custom endpoint)",
+		Category:    "tools",
+		Variables: []VariableDef{
+			{Name: "url", Type: "string", Required: false, Default: "https://temp.sh/upload", Description: "URL to upload to"},
+			{Name: "size_mb", Type: "int", Required: false, Default: "10", Description: "Size of test file in MB"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			{Action: "exec", Command: `
+URL="{{url}}"
+SIZE_MB="{{size_mb}}"
+echo "Testing upload speed to: $URL"
+echo "Test file size: ${SIZE_MB}MB"
+echo "=========================================="
+
+# Create test file
+TEST_FILE="/tmp/speedtest_upload_$$"
+dd if=/dev/urandom of="$TEST_FILE" bs=1M count=$SIZE_MB 2>/dev/null
+
+# Upload and measure
+START=$(date +%s.%N)
+if [ "$URL" = "https://temp.sh/upload" ] || [[ "$URL" == *"temp.sh"* ]]; then
+    # temp.sh uses PUT method
+    RESULT=$(curl -w "\nUpload Size: %{size_upload} bytes\nTime: %{time_total}s\nSpeed: %{speed_upload} bytes/sec\n" \
+        -X PUT -T "$TEST_FILE" --max-time 120 "$URL" 2>&1)
+else
+    # Regular POST upload
+    RESULT=$(curl -w "\nUpload Size: %{size_upload} bytes\nTime: %{time_total}s\nSpeed: %{speed_upload} bytes/sec\n" \
+        -X POST -F "file=@$TEST_FILE" --max-time 120 "$URL" 2>&1)
+fi
+END=$(date +%s.%N)
+
+rm -f "$TEST_FILE"
+
+echo "$RESULT"
+
+# Parse and display in human-readable format
+SPEED_BPS=$(echo "$RESULT" | grep "Speed:" | awk '{print $2}')
+if [ -n "$SPEED_BPS" ]; then
+    SPEED_MBPS=$(echo "scale=2; $SPEED_BPS * 8 / 1000000" | bc 2>/dev/null || echo "N/A")
+    echo ""
+    echo "=========================================="
+    echo "Upload Speed: $SPEED_MBPS Mbps"
+fi
+`, Timeout: 300},
+		},
+	},
+
+	"speedtest_machine_download": {
+		ID:          "speedtest_machine_download",
+		Name:        "Machine-to-Machine Download Test",
+		Description: "Test download speed from another machine",
+		Category:    "tools",
+		Variables: []VariableDef{
+			{Name: "source_ip", Type: "string", Required: true, Description: "Source machine IP address"},
+			{Name: "port", Type: "int", Required: false, Default: "8765", Description: "Port to use for test"},
+			{Name: "size_mb", Type: "int", Required: false, Default: "100", Description: "Size of test file in MB"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			{Action: "exec", Command: `
+SOURCE_IP="{{source_ip}}"
+PORT="{{port}}"
+SIZE_MB="{{size_mb}}"
+echo "Testing download speed from: $SOURCE_IP:$PORT"
+echo "Test file size: ${SIZE_MB}MB"
+echo "=========================================="
+
+# Download from source machine
+START=$(date +%s.%N)
+RESULT=$(curl -w "\nDownload Size: %{size_download} bytes\nTime: %{time_total}s\nSpeed: %{speed_download} bytes/sec\n" \
+    -o /dev/null --max-time 120 "http://$SOURCE_IP:$PORT/speedtest" 2>&1)
+END=$(date +%s.%N)
+
+echo "$RESULT"
+
+# Parse and display in human-readable format
+SPEED_BPS=$(echo "$RESULT" | grep "Speed:" | awk '{print $2}')
+if [ -n "$SPEED_BPS" ]; then
+    SPEED_MBPS=$(echo "scale=2; $SPEED_BPS * 8 / 1000000" | bc 2>/dev/null || echo "N/A")
+    echo ""
+    echo "=========================================="
+    echo "Download Speed: $SPEED_MBPS Mbps"
+fi
+`, Timeout: 180},
+		},
+	},
+
+	"speedtest_serve": {
+		ID:          "speedtest_serve",
+		Name:        "Start Speed Test Server",
+		Description: "Start a temporary HTTP server for speed tests",
+		Category:    "tools",
+		Variables: []VariableDef{
+			{Name: "port", Type: "int", Required: false, Default: "8765", Description: "Port to listen on"},
+			{Name: "size_mb", Type: "int", Required: false, Default: "100", Description: "Size of test file in MB"},
+			{Name: "duration", Type: "int", Required: false, Default: "60", Description: "How long to serve in seconds"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			{Action: "exec", Command: `
+PORT="{{port}}"
+SIZE_MB="{{size_mb}}"
+DURATION="{{duration}}"
+
+echo "Starting speed test server on port $PORT for $DURATION seconds..."
+echo "Test file size: ${SIZE_MB}MB"
+
+# Create test file
+TEST_DIR="/tmp/speedtest_serve_$$"
+mkdir -p "$TEST_DIR"
+dd if=/dev/urandom of="$TEST_DIR/speedtest" bs=1M count=$SIZE_MB 2>/dev/null
+
+# Check if python3 is available
+if command -v python3 &> /dev/null; then
+    cd "$TEST_DIR"
+    timeout $DURATION python3 -m http.server $PORT 2>&1 &
+    SERVER_PID=$!
+    echo "Server started with PID $SERVER_PID"
+    echo "Clients can download from: http://$(hostname -I | awk '{print $1}'):$PORT/speedtest"
+    
+    # Wait for timeout
+    sleep $DURATION
+    kill $SERVER_PID 2>/dev/null
+else
+    echo "ERROR: python3 not available"
+    rm -rf "$TEST_DIR"
+    exit 1
+fi
+
+rm -rf "$TEST_DIR"
+echo "Server stopped"
+`, Timeout: 300},
+		},
+	},
+
+	"speedtest_iperf_server": {
+		ID:          "speedtest_iperf_server",
+		Name:        "Start iPerf3 Server",
+		Description: "Start an iPerf3 server for network bandwidth testing",
+		Category:    "tools",
+		Variables: []VariableDef{
+			{Name: "port", Type: "int", Required: false, Default: "5201", Description: "Port to listen on"},
+			{Name: "duration", Type: "int", Required: false, Default: "60", Description: "How long to serve in seconds"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			{Action: "exec", Command: `
+PORT="{{port}}"
+DURATION="{{duration}}"
+
+# Install iperf3 if not available
+if ! command -v iperf3 &> /dev/null; then
+    echo "Installing iperf3..."
+    apt-get update >/dev/null 2>&1
+    apt-get install -y iperf3 >/dev/null 2>&1
+fi
+
+echo "Starting iPerf3 server on port $PORT for $DURATION seconds..."
+echo "Connect with: iperf3 -c $(hostname -I | awk '{print $1}') -p $PORT"
+
+# Run server for specified duration
+timeout $DURATION iperf3 -s -p $PORT 2>&1 || true
+
+echo "iPerf3 server stopped"
+`, Timeout: 300},
+		},
+	},
+
+	"speedtest_iperf_client": {
+		ID:          "speedtest_iperf_client",
+		Name:        "Run iPerf3 Client",
+		Description: "Run iPerf3 client to test bandwidth to a server",
+		Category:    "tools",
+		Variables: []VariableDef{
+			{Name: "server_ip", Type: "string", Required: true, Description: "iPerf3 server IP address"},
+			{Name: "port", Type: "int", Required: false, Default: "5201", Description: "Server port"},
+			{Name: "duration", Type: "int", Required: false, Default: "10", Description: "Test duration in seconds"},
+			{Name: "reverse", Type: "bool", Required: false, Default: "false", Description: "Reverse mode (download instead of upload)"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			{Action: "exec", Command: `
+SERVER_IP="{{server_ip}}"
+PORT="{{port}}"
+DURATION="{{duration}}"
+REVERSE="{{reverse}}"
+
+# Install iperf3 if not available
+if ! command -v iperf3 &> /dev/null; then
+    echo "Installing iperf3..."
+    apt-get update >/dev/null 2>&1
+    apt-get install -y iperf3 >/dev/null 2>&1
+fi
+
+echo "Running iPerf3 test to $SERVER_IP:$PORT..."
+echo "Duration: ${DURATION}s"
+echo "Mode: $([ "$REVERSE" = "true" ] && echo "Download (reverse)" || echo "Upload")"
+echo "=========================================="
+
+if [ "$REVERSE" = "true" ]; then
+    iperf3 -c "$SERVER_IP" -p "$PORT" -t "$DURATION" -R
+else
+    iperf3 -c "$SERVER_IP" -p "$PORT" -t "$DURATION"
+fi
+`, Timeout: 120},
+		},
+	},
+
+	"speedtest_latency": {
+		ID:          "speedtest_latency",
+		Name:        "Latency Test",
+		Description: "Test network latency to a host",
+		Category:    "tools",
+		Variables: []VariableDef{
+			{Name: "host", Type: "string", Required: true, Description: "Host to ping (IP or domain)"},
+			{Name: "count", Type: "int", Required: false, Default: "10", Description: "Number of ping packets"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			{Action: "exec", Command: `
+HOST="{{host}}"
+COUNT="{{count}}"
+
+echo "Testing latency to: $HOST"
+echo "Sending $COUNT packets..."
+echo "=========================================="
+
+ping -c $COUNT "$HOST" 2>&1
+`, Timeout: 60},
+		},
+	},
+
+	"network_info": {
+		ID:          "network_info",
+		Name:        "Network Information",
+		Description: "Get network interface and routing information",
+		Category:    "tools",
+		Variables:   []VariableDef{},
+		OnError:     "continue",
+		Steps: []Step{
+			{Action: "exec", Command: `
+echo "=== Network Interfaces ==="
+ip -br addr 2>/dev/null || ifconfig -a 2>/dev/null || echo "Cannot get interfaces"
+
+echo ""
+echo "=== Public IP ==="
+curl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 icanhazip.com 2>/dev/null || echo "Cannot get public IP"
+
+echo ""
+echo "=== Default Gateway ==="
+ip route | grep default 2>/dev/null || route -n | grep UG 2>/dev/null || echo "Cannot get gateway"
+
+echo ""
+echo "=== DNS Servers ==="
+cat /etc/resolv.conf 2>/dev/null | grep nameserver || echo "Cannot get DNS"
+
+echo ""
+echo "=== Open Ports ==="
+ss -tlnp 2>/dev/null | head -20 || netstat -tlnp 2>/dev/null | head -20 || echo "Cannot get ports"
+`, Timeout: 30},
+		},
+	},
 }
 
 // GetCommand returns a command template by ID

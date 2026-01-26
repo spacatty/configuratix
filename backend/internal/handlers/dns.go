@@ -99,8 +99,8 @@ func (h *DNSHandler) CreateDNSAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Provider != "dnspod" && req.Provider != "cloudflare" {
-		http.Error(w, "Invalid provider. Must be 'dnspod' or 'cloudflare'", http.StatusBadRequest)
+	if req.Provider != "dnspod" && req.Provider != "cloudflare" && req.Provider != "desec" {
+		http.Error(w, "Invalid provider. Must be 'dnspod', 'cloudflare', or 'desec'", http.StatusBadRequest)
 		return
 	}
 

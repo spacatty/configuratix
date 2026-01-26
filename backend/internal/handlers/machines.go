@@ -947,6 +947,396 @@ func (h *MachinesHandler) ExecTerminalCommand(w http.ResponseWriter, r *http.Req
 }
 
 // ============================================
+// Speed Test / Tools Handlers
+// ============================================
+
+// SpeedTestRequest represents a speed test request
+type SpeedTestRequest struct {
+	Type       string `json:"type"`       // public, download, upload, iperf, latency, network_info
+	URL        string `json:"url"`        // For download/upload tests
+	TargetIP   string `json:"target_ip"`  // For machine-to-machine or iperf tests
+	Port       int    `json:"port"`       // Port for iperf/m2m tests
+	SizeMB     int    `json:"size_mb"`    // Size for upload tests
+	Duration   int    `json:"duration"`   // Duration for iperf tests
+	Reverse    bool   `json:"reverse"`    // Reverse mode for iperf
+	Count      int    `json:"count"`      // Ping count for latency tests
+}
+
+// RunSpeedTest runs a speed test on a machine
+func (h *MachinesHandler) RunSpeedTest(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	var req SpeedTestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Map test type to template and variables
+	var templateID string
+	vars := make(map[string]string)
+
+	switch req.Type {
+	case "public":
+		templateID = "speedtest_public"
+
+	case "download":
+		if req.URL == "" {
+			// Default to a common test file
+			req.URL = "https://speed.hetzner.de/100MB.bin"
+		}
+		templateID = "speedtest_download"
+		vars["url"] = req.URL
+		vars["size_mb"] = "100"
+		if req.SizeMB > 0 {
+			vars["size_mb"] = fmt.Sprintf("%d", req.SizeMB)
+		}
+
+	case "upload":
+		if req.URL == "" {
+			req.URL = "https://temp.sh/upload"
+		}
+		templateID = "speedtest_upload"
+		vars["url"] = req.URL
+		vars["size_mb"] = "10"
+		if req.SizeMB > 0 {
+			vars["size_mb"] = fmt.Sprintf("%d", req.SizeMB)
+		}
+
+	case "iperf_server":
+		templateID = "speedtest_iperf_server"
+		vars["port"] = "5201"
+		if req.Port > 0 {
+			vars["port"] = fmt.Sprintf("%d", req.Port)
+		}
+		vars["duration"] = "60"
+		if req.Duration > 0 {
+			vars["duration"] = fmt.Sprintf("%d", req.Duration)
+		}
+
+	case "iperf_client":
+		if req.TargetIP == "" {
+			http.Error(w, "target_ip is required for iperf client", http.StatusBadRequest)
+			return
+		}
+		templateID = "speedtest_iperf_client"
+		vars["server_ip"] = req.TargetIP
+		vars["port"] = "5201"
+		if req.Port > 0 {
+			vars["port"] = fmt.Sprintf("%d", req.Port)
+		}
+		vars["duration"] = "10"
+		if req.Duration > 0 {
+			vars["duration"] = fmt.Sprintf("%d", req.Duration)
+		}
+		vars["reverse"] = "false"
+		if req.Reverse {
+			vars["reverse"] = "true"
+		}
+
+	case "latency":
+		if req.TargetIP == "" {
+			http.Error(w, "target_ip is required for latency test", http.StatusBadRequest)
+			return
+		}
+		templateID = "speedtest_latency"
+		vars["host"] = req.TargetIP
+		vars["count"] = "10"
+		if req.Count > 0 {
+			vars["count"] = fmt.Sprintf("%d", req.Count)
+		}
+
+	case "network_info":
+		templateID = "network_info"
+
+	case "machine_download":
+		if req.TargetIP == "" {
+			http.Error(w, "target_ip is required for machine download test", http.StatusBadRequest)
+			return
+		}
+		templateID = "speedtest_machine_download"
+		vars["source_ip"] = req.TargetIP
+		vars["port"] = "8765"
+		if req.Port > 0 {
+			vars["port"] = fmt.Sprintf("%d", req.Port)
+		}
+		vars["size_mb"] = "100"
+		if req.SizeMB > 0 {
+			vars["size_mb"] = fmt.Sprintf("%d", req.SizeMB)
+		}
+
+	case "serve":
+		templateID = "speedtest_serve"
+		vars["port"] = "8765"
+		if req.Port > 0 {
+			vars["port"] = fmt.Sprintf("%d", req.Port)
+		}
+		vars["size_mb"] = "100"
+		if req.SizeMB > 0 {
+			vars["size_mb"] = fmt.Sprintf("%d", req.SizeMB)
+		}
+		vars["duration"] = "60"
+		if req.Duration > 0 {
+			vars["duration"] = fmt.Sprintf("%d", req.Duration)
+		}
+
+	default:
+		http.Error(w, "Invalid test type. Valid types: public, download, upload, iperf_server, iperf_client, latency, network_info, machine_download, serve", http.StatusBadRequest)
+		return
+	}
+
+	h.executeTemplate(w, claims, machineID, templateID, vars)
+}
+
+// RunSpeedTestAndWait runs a speed test and waits for the result
+func (h *MachinesHandler) RunSpeedTestAndWait(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+
+	if !h.canAccessMachine(userID, machineID, claims.IsSuperAdmin()) {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	var req SpeedTestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Map test type to template and variables
+	var templateID string
+	vars := make(map[string]string)
+
+	switch req.Type {
+	case "public":
+		templateID = "speedtest_public"
+
+	case "download":
+		if req.URL == "" {
+			req.URL = "https://speed.hetzner.de/100MB.bin"
+		}
+		templateID = "speedtest_download"
+		vars["url"] = req.URL
+		vars["size_mb"] = "100"
+		if req.SizeMB > 0 {
+			vars["size_mb"] = fmt.Sprintf("%d", req.SizeMB)
+		}
+
+	case "upload":
+		if req.URL == "" {
+			req.URL = "https://temp.sh/upload"
+		}
+		templateID = "speedtest_upload"
+		vars["url"] = req.URL
+		vars["size_mb"] = "10"
+		if req.SizeMB > 0 {
+			vars["size_mb"] = fmt.Sprintf("%d", req.SizeMB)
+		}
+
+	case "iperf_client":
+		if req.TargetIP == "" {
+			http.Error(w, "target_ip is required for iperf client", http.StatusBadRequest)
+			return
+		}
+		templateID = "speedtest_iperf_client"
+		vars["server_ip"] = req.TargetIP
+		vars["port"] = "5201"
+		if req.Port > 0 {
+			vars["port"] = fmt.Sprintf("%d", req.Port)
+		}
+		vars["duration"] = "10"
+		if req.Duration > 0 {
+			vars["duration"] = fmt.Sprintf("%d", req.Duration)
+		}
+		vars["reverse"] = "false"
+		if req.Reverse {
+			vars["reverse"] = "true"
+		}
+
+	case "latency":
+		if req.TargetIP == "" {
+			http.Error(w, "target_ip is required for latency test", http.StatusBadRequest)
+			return
+		}
+		templateID = "speedtest_latency"
+		vars["host"] = req.TargetIP
+		vars["count"] = "10"
+		if req.Count > 0 {
+			vars["count"] = fmt.Sprintf("%d", req.Count)
+		}
+
+	case "network_info":
+		templateID = "network_info"
+
+	case "iperf_server":
+		templateID = "speedtest_iperf_server"
+		vars["port"] = "5201"
+		if req.Port > 0 {
+			vars["port"] = fmt.Sprintf("%d", req.Port)
+		}
+		vars["duration"] = "60"
+		if req.Duration > 0 {
+			vars["duration"] = fmt.Sprintf("%d", req.Duration)
+		}
+
+	case "machine_download":
+		if req.TargetIP == "" {
+			http.Error(w, "target_ip is required for machine download test", http.StatusBadRequest)
+			return
+		}
+		templateID = "speedtest_machine_download"
+		vars["source_ip"] = req.TargetIP
+		vars["port"] = "8765"
+		if req.Port > 0 {
+			vars["port"] = fmt.Sprintf("%d", req.Port)
+		}
+		vars["size_mb"] = "100"
+		if req.SizeMB > 0 {
+			vars["size_mb"] = fmt.Sprintf("%d", req.SizeMB)
+		}
+
+	case "serve":
+		templateID = "speedtest_serve"
+		vars["port"] = "8765"
+		if req.Port > 0 {
+			vars["port"] = fmt.Sprintf("%d", req.Port)
+		}
+		vars["size_mb"] = "100"
+		if req.SizeMB > 0 {
+			vars["size_mb"] = fmt.Sprintf("%d", req.SizeMB)
+		}
+		vars["duration"] = "60"
+		if req.Duration > 0 {
+			vars["duration"] = fmt.Sprintf("%d", req.Duration)
+		}
+
+	default:
+		http.Error(w, "Invalid test type for sync execution", http.StatusBadRequest)
+		return
+	}
+
+	// Get command template
+	cmd := templates.GetCommand(templateID)
+	if cmd == nil {
+		http.Error(w, "Template not found: "+templateID, http.StatusInternalServerError)
+		return
+	}
+
+	// Get agent_id for this machine
+	var agentID uuid.UUID
+	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
+	if err != nil {
+		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
+		return
+	}
+
+	// Create job with run type using template
+	payload := cmd.ToPayload(vars)
+
+	var job models.Job
+	err = h.db.Get(&job, `
+		INSERT INTO jobs (agent_id, type, payload_json, status)
+		VALUES ($1, 'run', $2, 'pending')
+		RETURNING *
+	`, agentID, payload)
+	if err != nil {
+		log.Printf("Failed to create job: %v", err)
+		http.Error(w, "Failed to create job", http.StatusInternalServerError)
+		return
+	}
+
+	// Wait for job to complete (poll for up to 2 minutes)
+	maxWait := 240 // 120 seconds
+	for i := 0; i < maxWait; i++ {
+		time.Sleep(500 * time.Millisecond)
+		err = h.db.Get(&job, "SELECT * FROM jobs WHERE id = $1", job.ID)
+		if err != nil {
+			break
+		}
+		if job.Status == "completed" || job.Status == "failed" {
+			break
+		}
+	}
+
+	result := map[string]interface{}{
+		"job_id":   job.ID,
+		"status":   job.Status,
+		"type":     req.Type,
+		"logs":     "",
+		"finished": job.FinishedAt != nil,
+	}
+
+	if job.Logs != nil {
+		result["logs"] = *job.Logs
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+// GetMachineForSpeedTest returns minimal machine info for speed test selection
+func (h *MachinesHandler) GetMachinesForSpeedTest(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
+	type MinimalMachine struct {
+		ID        uuid.UUID `db:"id" json:"id"`
+		Title     *string   `db:"title" json:"title"`
+		Hostname  *string   `db:"hostname" json:"hostname"`
+		IPAddress *string   `db:"ip_address" json:"ip_address"`
+		IsOnline  bool      `db:"is_online" json:"is_online"`
+	}
+
+	var machines []MinimalMachine
+	var err error
+
+	query := `
+		SELECT m.id, m.title, m.hostname, m.ip_address,
+			(a.last_seen IS NOT NULL AND a.last_seen > NOW() - INTERVAL '5 minutes') as is_online
+		FROM machines m
+		LEFT JOIN agents a ON m.agent_id = a.id
+	`
+
+	if claims.IsSuperAdmin() {
+		err = h.db.Select(&machines, query+" ORDER BY m.title, m.hostname")
+	} else {
+		err = h.db.Select(&machines, query+`
+			WHERE m.owner_id = $1 
+			OR m.project_id IN (
+				SELECT id FROM projects WHERE owner_id = $1
+				UNION
+				SELECT project_id FROM project_members WHERE user_id = $1 AND status = 'approved'
+			)
+			ORDER BY m.title, m.hostname
+		`, userID)
+	}
+
+	if err != nil {
+		log.Printf("Failed to list machines for speed test: %v", err)
+		http.Error(w, "Failed to list machines", http.StatusInternalServerError)
+		return
+	}
+
+	if machines == nil {
+		machines = []MinimalMachine{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(machines)
+}
+
+// ============================================
 // Permission Helper Functions
 // ============================================
 

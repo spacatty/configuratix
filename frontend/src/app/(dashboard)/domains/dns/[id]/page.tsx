@@ -294,6 +294,7 @@ export default function DomainDNSSettingsPage() {
   // Get selected account provider
   const selectedAccount = dnsAccounts.find(a => a.id === dnsAccountId);
   const isCloudflare = selectedAccount?.provider === "cloudflare";
+  const isDeSEC = selectedAccount?.provider === "desec";
 
   // New record form
   const [newRecord, setNewRecord] = useState({
@@ -880,7 +881,7 @@ export default function DomainDNSSettingsPage() {
                     <SelectItem value="_none">None</SelectItem>
                     {dnsAccounts.map((acc) => (
                       <SelectItem key={acc.id} value={acc.id}>
-                        {acc.provider === "cloudflare" ? "☁️ Cloudflare" : "🌐 DNSPod"}: {acc.name}
+                        {acc.provider === "cloudflare" ? "☁️ Cloudflare" : acc.provider === "desec" ? "🔒 deSEC" : "🌐 DNSPod"}: {acc.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1071,7 +1072,7 @@ export default function DomainDNSSettingsPage() {
                           onChange={(e) => setNewRecord({ ...newRecord, ttl: parseInt(e.target.value) || 600 })}
                         />
                       </div>
-                      {isCloudflare && (
+                      {isCloudflare && !isDeSEC && (
                         <div className="col-span-1 flex items-center gap-2 pb-2">
                           <Checkbox
                             id="proxied"
@@ -1079,6 +1080,11 @@ export default function DomainDNSSettingsPage() {
                             onCheckedChange={(c) => setNewRecord({ ...newRecord, proxied: !!c })}
                           />
                           <Label htmlFor="proxied" className="text-xs">Proxied</Label>
+                        </div>
+                      )}
+                      {isDeSEC && (
+                        <div className="col-span-1 flex items-center pb-2">
+                          <span className="text-xs text-muted-foreground">Min TTL: 3600s</span>
                         </div>
                       )}
                       <div className="col-span-2 flex items-end">

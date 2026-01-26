@@ -10,13 +10,13 @@ import (
 
 // Record represents a DNS record (provider-agnostic)
 type Record struct {
-	ID        string    `json:"id"`         // Provider's record ID
-	Name      string    `json:"name"`       // Subdomain: "www", "@", "*"
-	Type      string    `json:"type"`       // A, AAAA, CNAME, TXT, MX
-	Value     string    `json:"value"`      // Target value
-	TTL       int       `json:"ttl"`        // Seconds
-	Priority  int       `json:"priority"`   // For MX
-	Proxied   bool      `json:"proxied"`    // CF orange cloud
+	ID        string    `json:"id"`       // Provider's record ID
+	Name      string    `json:"name"`     // Subdomain: "www", "@", "*"
+	Type      string    `json:"type"`     // A, AAAA, CNAME, TXT, MX
+	Value     string    `json:"value"`    // Target value
+	TTL       int       `json:"ttl"`      // Seconds
+	Priority  int       `json:"priority"` // For MX
+	Proxied   bool      `json:"proxied"`  // CF orange cloud
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -86,6 +86,8 @@ func NewProvider(provider string, apiID, apiToken string) (Provider, error) {
 		return NewDNSPodProvider(apiID, apiToken), nil
 	case "cloudflare":
 		return NewCloudflareProvider(apiToken), nil
+	case "desec":
+		return NewDeSECProvider(apiToken), nil
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", provider)
 	}
@@ -140,4 +142,3 @@ func CheckNameservers(domain string, expected []string) *NSStatus {
 
 	return result
 }
-

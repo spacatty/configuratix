@@ -32,7 +32,7 @@ export default function DNSManagementPage() {
 
   // DNS Account form
   const [dnsAccountForm, setDnsAccountForm] = useState({
-    provider: "dnspod",
+    provider: "cloudflare",
     name: "",
     api_id: "",
     api_token: "",
@@ -107,7 +107,7 @@ export default function DNSManagementPage() {
       await api.createDNSAccount(dnsAccountForm);
       toast.success("DNS account created");
       setShowDNSAccountDialog(false);
-      setDnsAccountForm({ provider: "dnspod", name: "", api_id: "", api_token: "", is_default: false });
+      setDnsAccountForm({ provider: "cloudflare", name: "", api_id: "", api_token: "", is_default: false });
       loadData();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to create account");
@@ -195,7 +195,7 @@ export default function DNSManagementPage() {
           return (
             <div className="flex items-center gap-2">
               <Badge variant="outline" className="text-xs">
-                {domain.dns_account_provider === "cloudflare" ? "☁️ CF" : "🌐 DNSPod"}
+                {domain.dns_account_provider === "cloudflare" ? "☁️ CF" : domain.dns_account_provider === "desec" ? "🔒 deSEC" : "🌐 DNSPod"}
               </Badge>
               <span className="text-sm">{domain.dns_account_name}</span>
             </div>
@@ -258,7 +258,7 @@ export default function DNSManagementPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">DNS Management</h1>
-          <p className="text-muted-foreground mt-1">Manage DNS records for your domains via Cloudflare or DNSPod.</p>
+          <p className="text-muted-foreground mt-1">Manage DNS records for your domains via Cloudflare, deSEC, or DNSPod.</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setShowDNSAccountDialog(true)}>
@@ -283,8 +283,8 @@ export default function DNSManagementPage() {
             <div className="flex flex-wrap gap-2">
               {dnsAccounts.map((acc) => (
                 <Badge key={acc.id} variant="secondary" className="flex items-center gap-2 py-1.5 px-3">
-                  <span className={acc.provider === "cloudflare" ? "text-orange-400" : "text-blue-400"}>
-                    {acc.provider === "cloudflare" ? "☁️ Cloudflare" : "🌐 DNSPod"}
+                  <span className={acc.provider === "cloudflare" ? "text-orange-400" : acc.provider === "desec" ? "text-green-400" : "text-blue-400"}>
+                    {acc.provider === "cloudflare" ? "☁️ Cloudflare" : acc.provider === "desec" ? "🔒 deSEC" : "🌐 DNSPod"}
                   </span>
                   <span className="font-medium">{acc.name}</span>
                   {acc.is_default && <CheckCircle className="h-3 w-3 text-green-400" />}
@@ -342,7 +342,7 @@ export default function DNSManagementPage() {
                   <SelectItem value="none">None (manual)</SelectItem>
                   {dnsAccounts.map((acc) => (
                     <SelectItem key={acc.id} value={acc.id}>
-                      {acc.provider === "cloudflare" ? "☁️" : "🌐"} {acc.name}
+                      {acc.provider === "cloudflare" ? "☁️" : acc.provider === "desec" ? "🔒" : "🌐"} {acc.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -381,6 +381,7 @@ export default function DNSManagementPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="cloudflare">☁️ Cloudflare</SelectItem>
+                  <SelectItem value="desec">🔒 deSEC</SelectItem>
                   <SelectItem value="dnspod">🌐 DNSPod</SelectItem>
                 </SelectContent>
               </Select>
@@ -388,7 +389,7 @@ export default function DNSManagementPage() {
             <div className="space-y-2">
               <Label>Account Name</Label>
               <Input
-                placeholder="My Cloudflare Account"
+                placeholder={dnsAccountForm.provider === "cloudflare" ? "My Cloudflare Account" : dnsAccountForm.provider === "desec" ? "My deSEC Account" : "My DNSPod Account"}
                 value={dnsAccountForm.name}
                 onChange={(e) => setDnsAccountForm({ ...dnsAccountForm, name: e.target.value })}
               />

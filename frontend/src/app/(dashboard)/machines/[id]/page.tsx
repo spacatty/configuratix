@@ -12,9 +12,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { api, Machine, UFWRule, Job, ConfigFile, ConfigCategory, ConfigPath, SecurityMachineSettings } from "@/lib/api";
+import { api, Machine, UFWRule, Job, ConfigFile, ConfigCategory, ConfigPath, SecurityMachineSettings, SpeedTestMachine, SpeedTestRequest, SpeedTestResult } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
-import { ChevronDown, ChevronRight, RefreshCw, FileCode, Save, RotateCcw, Loader2, FileText, Settings, Lock, Copy, Plus, Trash2, Pencil, Ban } from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw, FileCode, Save, RotateCcw, Loader2, FileText, Settings, Lock, Copy, Plus, Trash2, Pencil, Ban, Gauge, Activity, Download, Upload, Wifi, Server, Globe, Network, Play, CheckCircle, XCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
@@ -421,6 +421,552 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
   ssr: false, 
   loading: () => <div className="h-[500px] bg-muted/30 rounded-lg animate-pulse" /> 
 });
+
+// Machine Tools Tab Component - Network Speed Testing
+function MachineToolsTab({ machineId, machineIp }: { machineId: string; machineIp: string }) {
+  const [testType, setTestType] = useState<string>("public");
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<string>("");
+  const [machines, setMachines] = useState<SpeedTestMachine[]>([]);
+  const [selectedMachine, setSelectedMachine] = useState<string>("");
+  const [testHistory, setTestHistory] = useState<Array<{ type: string; time: string; status: string; summary: string }>>([]);
+  
+  // Advanced options
+  const [downloadUrl, setDownloadUrl] = useState("https://speed.hetzner.de/100MB.bin");
+  const [uploadSizeMb, setUploadSizeMb] = useState(10);
+  const [iperfPort, setIperfPort] = useState(5201);
+  const [iperfDuration, setIperfDuration] = useState(10);
+  const [iperfReverse, setIperfReverse] = useState(false);
+  const [pingCount, setPingCount] = useState(10);
+  const [customTargetIp, setCustomTargetIp] = useState("");
+  const [serveDuration, setServeDuration] = useState(60);
+  const [servePort, setServePort] = useState(8765);
+  const [serveSizeMb, setServeSizeMb] = useState(100);
+
+  // Load available machines for machine-to-machine tests
+  useEffect(() => {
+    const loadMachines = async () => {
+      try {
+        const data = await api.getMachinesForSpeedTest();
+        // Exclude current machine and machines without IP addresses
+        setMachines(data.filter(m => m.id !== machineId && m.ip_address));
+      } catch (err) {
+        console.error("Failed to load machines:", err);
+      }
+    };
+    loadMachines();
+  }, [machineId]);
+
+  const runTest = async () => {
+    setRunning(true);
+    setResult("");
+    
+    try {
+      let request: SpeedTestRequest = { type: testType as SpeedTestRequest["type"] };
+      
+      // Configure based on test type
+      switch (testType) {
+        case "download":
+          request.url = downloadUrl;
+          break;
+        case "upload":
+          request.size_mb = uploadSizeMb;
+          break;
+        case "iperf_server":
+          request.port = iperfPort;
+          request.duration = serveDuration;
+          break;
+        case "iperf_client":
+          request.target_ip = selectedMachine ? machines.find(m => m.id === selectedMachine)?.ip_address || "" : customTargetIp;
+          request.port = iperfPort;
+          request.duration = iperfDuration;
+          request.reverse = iperfReverse;
+          break;
+        case "latency":
+          request.target_ip = selectedMachine ? machines.find(m => m.id === selectedMachine)?.ip_address || "" : customTargetIp;
+          request.count = pingCount;
+          break;
+        case "machine_download":
+          request.target_ip = selectedMachine ? machines.find(m => m.id === selectedMachine)?.ip_address || "" : customTargetIp;
+          request.port = servePort;
+          request.size_mb = serveSizeMb;
+          break;
+        case "serve":
+          request.port = servePort;
+          request.size_mb = serveSizeMb;
+          request.duration = serveDuration;
+          break;
+      }
+
+      const testResult = await api.runSpeedTestSync(machineId, request);
+      setResult(testResult.logs);
+      
+      // Extract summary from logs
+      const lines = testResult.logs.split("\n");
+      let summary = "";
+      if (testType === "public") {
+        const downloadLine = lines.find(l => l.includes("Download:"));
+        const uploadLine = lines.find(l => l.includes("Upload:"));
+        if (downloadLine && uploadLine) {
+          summary = `${downloadLine.trim()}, ${uploadLine.trim()}`;
+        }
+      } else if (testType === "download" || testType === "machine_download") {
+        const speedLine = lines.find(l => l.includes("Download Speed:"));
+        summary = speedLine?.trim() || "Test completed";
+      } else if (testType === "upload") {
+        const speedLine = lines.find(l => l.includes("Upload Speed:"));
+        summary = speedLine?.trim() || "Test completed";
+      } else if (testType === "latency") {
+        const avgLine = lines.find(l => l.includes("avg"));
+        summary = avgLine?.trim() || "Ping completed";
+      } else {
+        summary = testResult.status === "completed" ? "Test completed successfully" : "Test finished";
+      }
+
+      // Add to history
+      setTestHistory(prev => [{
+        type: testType,
+        time: new Date().toLocaleTimeString(),
+        status: testResult.status,
+        summary: summary
+      }, ...prev.slice(0, 9)]);
+
+    } catch (err) {
+      console.error("Speed test failed:", err);
+      const errorMsg = err instanceof Error ? err.message : "Test failed";
+      setResult(`Error: ${errorMsg}`);
+      toast.error(errorMsg);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const getTestIcon = (type: string) => {
+    switch (type) {
+      case "public": return <Globe className="h-5 w-5" />;
+      case "download": return <Download className="h-5 w-5" />;
+      case "upload": return <Upload className="h-5 w-5" />;
+      case "iperf_server": return <Server className="h-5 w-5" />;
+      case "iperf_client": return <Activity className="h-5 w-5" />;
+      case "latency": return <Wifi className="h-5 w-5" />;
+      case "network_info": return <Network className="h-5 w-5" />;
+      case "machine_download": return <Server className="h-5 w-5" />;
+      case "serve": return <Server className="h-5 w-5" />;
+      default: return <Gauge className="h-5 w-5" />;
+    }
+  };
+
+  const getTestTitle = (type: string) => {
+    switch (type) {
+      case "public": return "Public Internet Speed Test";
+      case "download": return "Download Speed Test";
+      case "upload": return "Upload Speed Test";
+      case "iperf_server": return "Start iPerf3 Server";
+      case "iperf_client": return "Run iPerf3 Client";
+      case "latency": return "Latency Test (Ping)";
+      case "network_info": return "Network Information";
+      case "machine_download": return "Machine-to-Machine Download";
+      case "serve": return "Start Speed Test Server";
+      default: return type;
+    }
+  };
+
+  const getTestDescription = (type: string) => {
+    switch (type) {
+      case "public": return "Test internet speed using speedtest-cli (Ookla)";
+      case "download": return "Download a test file from a URL to measure speed";
+      case "upload": return "Upload a test file to measure upload speed";
+      case "iperf_server": return "Start an iPerf3 server for bandwidth testing";
+      case "iperf_client": return "Connect to an iPerf3 server to test bandwidth";
+      case "latency": return "Measure network latency with ping";
+      case "network_info": return "Get network interfaces, IPs, and routes";
+      case "machine_download": return "Download from another machine running a speed test server";
+      case "serve": return "Start a temporary HTTP server for speed tests";
+      default: return "";
+    }
+  };
+
+  const needsMachineSelection = ["iperf_client", "latency", "machine_download"].includes(testType);
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-3">
+      {/* Test Selection */}
+      <div className="lg:col-span-1 space-y-4">
+        <Card className="border-border/50 bg-card/50">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Gauge className="h-5 w-5 text-primary" />
+              Network Tools
+            </CardTitle>
+            <CardDescription>
+              Test network speed and connectivity
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {/* Test Type Selection */}
+            <div className="space-y-2">
+              <Label>Test Type</Label>
+              <Select value={testType} onValueChange={setTestType}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="public">
+                    <div className="flex items-center gap-2">
+                      <Globe className="h-4 w-4" />
+                      <span>Public Speed Test</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="download">
+                    <div className="flex items-center gap-2">
+                      <Download className="h-4 w-4" />
+                      <span>Download Test</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="upload">
+                    <div className="flex items-center gap-2">
+                      <Upload className="h-4 w-4" />
+                      <span>Upload Test</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="latency">
+                    <div className="flex items-center gap-2">
+                      <Wifi className="h-4 w-4" />
+                      <span>Latency Test</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="network_info">
+                    <div className="flex items-center gap-2">
+                      <Network className="h-4 w-4" />
+                      <span>Network Info</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="iperf_server">
+                    <div className="flex items-center gap-2">
+                      <Server className="h-4 w-4" />
+                      <span>iPerf3 Server</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="iperf_client">
+                    <div className="flex items-center gap-2">
+                      <Activity className="h-4 w-4" />
+                      <span>iPerf3 Client</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="serve">
+                    <div className="flex items-center gap-2">
+                      <Server className="h-4 w-4" />
+                      <span>HTTP Test Server</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="machine_download">
+                    <div className="flex items-center gap-2">
+                      <Server className="h-4 w-4" />
+                      <span>Machine Download</span>
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Test description */}
+            <div className="p-3 bg-muted/30 rounded-lg border border-border/50">
+              <div className="flex items-center gap-2 mb-1">
+                {getTestIcon(testType)}
+                <span className="font-medium text-sm">{getTestTitle(testType)}</span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {getTestDescription(testType)}
+              </p>
+            </div>
+
+            {/* Machine/Target Selection */}
+            {needsMachineSelection && (
+              <div className="space-y-2">
+                <Label>Target</Label>
+                <Select value={selectedMachine || "custom"} onValueChange={(v) => setSelectedMachine(v === "custom" ? "" : v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select target..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="custom">Custom IP</SelectItem>
+                    {machines.map(m => (
+                      <SelectItem key={m.id} value={m.id}>
+                        <div className="flex items-center gap-2">
+                          <div className={`h-2 w-2 rounded-full ${m.is_online ? 'bg-green-500' : 'bg-red-500'}`} />
+                          <span>{m.title || m.hostname || m.ip_address || "Unknown"}</span>
+                          {m.ip_address && <span className="text-muted-foreground font-mono text-xs">({m.ip_address})</span>}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {!selectedMachine && (
+                  <Input
+                    placeholder="Enter IP address..."
+                    value={customTargetIp}
+                    onChange={(e) => setCustomTargetIp(e.target.value)}
+                  />
+                )}
+              </div>
+            )}
+
+            {/* Download options */}
+            {testType === "download" && (
+              <div className="space-y-2">
+                <Label>Download URL</Label>
+                <Input
+                  placeholder="https://speed.hetzner.de/100MB.bin"
+                  value={downloadUrl}
+                  onChange={(e) => setDownloadUrl(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Common test files: Hetzner (100MB), Cloudflare
+                </p>
+              </div>
+            )}
+
+            {/* Upload options */}
+            {testType === "upload" && (
+              <div className="space-y-2">
+                <Label>Upload Size (MB)</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={uploadSizeMb}
+                  onChange={(e) => setUploadSizeMb(parseInt(e.target.value) || 10)}
+                />
+              </div>
+            )}
+
+            {/* iPerf options */}
+            {(testType === "iperf_server" || testType === "iperf_client") && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label>Port</Label>
+                    <Input
+                      type="number"
+                      value={iperfPort}
+                      onChange={(e) => setIperfPort(parseInt(e.target.value) || 5201)}
+                    />
+                  </div>
+                  <div>
+                    <Label>Duration (s)</Label>
+                    <Input
+                      type="number"
+                      value={testType === "iperf_server" ? serveDuration : iperfDuration}
+                      onChange={(e) => testType === "iperf_server" ? setServeDuration(parseInt(e.target.value) || 60) : setIperfDuration(parseInt(e.target.value) || 10)}
+                    />
+                  </div>
+                </div>
+                {testType === "iperf_client" && (
+                  <div className="flex items-center space-x-2">
+                    <Switch checked={iperfReverse} onCheckedChange={setIperfReverse} />
+                    <Label>Reverse mode (download instead of upload)</Label>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Latency options */}
+            {testType === "latency" && (
+              <div className="space-y-2">
+                <Label>Ping Count</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={pingCount}
+                  onChange={(e) => setPingCount(parseInt(e.target.value) || 10)}
+                />
+              </div>
+            )}
+
+            {/* Serve options */}
+            {testType === "serve" && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label>Port</Label>
+                    <Input
+                      type="number"
+                      value={servePort}
+                      onChange={(e) => setServePort(parseInt(e.target.value) || 8765)}
+                    />
+                  </div>
+                  <div>
+                    <Label>Duration (s)</Label>
+                    <Input
+                      type="number"
+                      value={serveDuration}
+                      onChange={(e) => setServeDuration(parseInt(e.target.value) || 60)}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label>File Size (MB)</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={serveSizeMb}
+                    onChange={(e) => setServeSizeMb(parseInt(e.target.value) || 100)}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Machine download options */}
+            {testType === "machine_download" && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label>Port</Label>
+                    <Input
+                      type="number"
+                      value={servePort}
+                      onChange={(e) => setServePort(parseInt(e.target.value) || 8765)}
+                    />
+                  </div>
+                  <div>
+                    <Label>Size (MB)</Label>
+                    <Input
+                      type="number"
+                      value={serveSizeMb}
+                      onChange={(e) => setServeSizeMb(parseInt(e.target.value) || 100)}
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Target machine must have a speed test server running on this port
+                </p>
+              </div>
+            )}
+
+            {/* Run button */}
+            <Button 
+              onClick={runTest} 
+              disabled={running || (needsMachineSelection && !selectedMachine && !customTargetIp)}
+              className="w-full"
+            >
+              {running ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Running...
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4 mr-2" />
+                  Run Test
+                </>
+              )}
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* Test History */}
+        {testHistory.length > 0 && (
+          <Card className="border-border/50 bg-card/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Recent Tests</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {testHistory.map((test, i) => (
+                <div key={i} className="flex items-center gap-2 text-sm p-2 bg-muted/30 rounded">
+                  {getTestIcon(test.type)}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium truncate">{getTestTitle(test.type)}</span>
+                      {test.status === "completed" ? (
+                        <CheckCircle className="h-3 w-3 text-green-500 flex-shrink-0" />
+                      ) : (
+                        <XCircle className="h-3 w-3 text-red-500 flex-shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">{test.summary}</p>
+                  </div>
+                  <span className="text-xs text-muted-foreground flex-shrink-0">{test.time}</span>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {/* Results Panel */}
+      <div className="lg:col-span-2">
+        <Card className="border-border/50 bg-card/50 h-full">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  {getTestIcon(testType)}
+                  {getTestTitle(testType)}
+                </CardTitle>
+                <CardDescription>
+                  {machineIp && <span className="font-mono text-xs">Machine IP: {machineIp}</span>}
+                </CardDescription>
+              </div>
+              {result && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={async () => {
+                    await copyToClipboard(result);
+                    toast.success("Copied to clipboard");
+                  }}
+                >
+                  <Copy className="h-4 w-4 mr-1" />
+                  Copy
+                </Button>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {running ? (
+              <div className="flex flex-col items-center justify-center h-[400px] text-muted-foreground">
+                <Loader2 className="h-12 w-12 animate-spin mb-4" />
+                <p>Running {getTestTitle(testType).toLowerCase()}...</p>
+                <p className="text-xs mt-1">This may take up to 2 minutes</p>
+              </div>
+            ) : result ? (
+              <pre className="bg-black rounded-lg p-4 text-xs font-mono text-green-400 overflow-auto h-[400px] whitespace-pre-wrap">
+                {result}
+              </pre>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-[400px] text-muted-foreground">
+                {getTestIcon(testType)}
+                <p className="mt-4">Select a test type and click Run Test</p>
+                <p className="text-xs mt-1">Results will appear here</p>
+                
+                {/* Quick tips */}
+                <div className="mt-8 max-w-md text-left space-y-3">
+                  <p className="font-medium text-foreground">Quick Tips:</p>
+                  <ul className="text-xs space-y-2">
+                    <li className="flex items-start gap-2">
+                      <Globe className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                      <span><strong>Public Speed Test</strong> - Tests internet speed using speedtest.net</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Server className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                      <span><strong>Machine-to-Machine</strong> - Start a server on one machine, then download from another</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Activity className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                      <span><strong>iPerf3</strong> - Best for testing internal network bandwidth between machines</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
 
 // Config Editor Component
 function ConfigEditorTab({ machineId }: { machineId: string }) {
@@ -1704,6 +2250,7 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
           <TabsTrigger value="logs">Logs</TabsTrigger>
           <TabsTrigger value="configs">Configs</TabsTrigger>
           <TabsTrigger value="runtimes">Runtimes</TabsTrigger>
+          <TabsTrigger value="tools">Tools</TabsTrigger>
           <TabsTrigger value="jobs">Jobs</TabsTrigger>
         </TabsList>
 
@@ -2142,6 +2689,11 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
         {/* Runtimes Tab */}
         <TabsContent value="runtimes" className="space-y-4 mt-6">
           <PHPRuntimeTab machineId={machine.id} />
+        </TabsContent>
+
+        {/* Tools Tab */}
+        <TabsContent value="tools" className="space-y-4 mt-6">
+          <MachineToolsTab machineId={machine.id} machineIp={machine.ip_address || ""} />
         </TabsContent>
 
         {/* Jobs Tab */}
