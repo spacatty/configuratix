@@ -195,7 +195,7 @@ export default function DNSManagementPage() {
           return (
             <div className="flex items-center gap-2">
               <Badge variant="outline" className="text-xs">
-                {domain.dns_account_provider === "cloudflare" ? "☁️ CF" : domain.dns_account_provider === "desec" ? "🔒 deSEC" : domain.dns_account_provider === "njalla" ? "🛡️ Njalla" : "🌐 DNSPod"}
+                {domain.dns_account_provider === "cloudflare" ? "☁️ CF" : domain.dns_account_provider === "desec" ? "🔒 deSEC" : domain.dns_account_provider === "njalla" ? "🛡️ Njalla" : domain.dns_account_provider === "cloudns" ? "🌍 ClouDNS" : "🌐 DNSPod"}
               </Badge>
               <span className="text-sm">{domain.dns_account_name}</span>
             </div>
@@ -258,7 +258,7 @@ export default function DNSManagementPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">DNS Management</h1>
-          <p className="text-muted-foreground mt-1">Manage DNS records for your domains via Cloudflare, deSEC, Njalla, or DNSPod.</p>
+          <p className="text-muted-foreground mt-1">Manage DNS records for your domains via Cloudflare, deSEC, Njalla, ClouDNS, or DNSPod.</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setShowDNSAccountDialog(true)}>
@@ -283,8 +283,8 @@ export default function DNSManagementPage() {
             <div className="flex flex-wrap gap-2">
               {dnsAccounts.map((acc) => (
                 <Badge key={acc.id} variant="secondary" className="flex items-center gap-2 py-1.5 px-3">
-                  <span className={acc.provider === "cloudflare" ? "text-orange-400" : acc.provider === "desec" ? "text-green-400" : acc.provider === "njalla" ? "text-emerald-400" : "text-blue-400"}>
-                    {acc.provider === "cloudflare" ? "☁️ Cloudflare" : acc.provider === "desec" ? "🔒 deSEC" : acc.provider === "njalla" ? "🛡️ Njalla" : "🌐 DNSPod"}
+                  <span className={acc.provider === "cloudflare" ? "text-orange-400" : acc.provider === "desec" ? "text-green-400" : acc.provider === "njalla" ? "text-emerald-400" : acc.provider === "cloudns" ? "text-cyan-400" : "text-blue-400"}>
+                    {acc.provider === "cloudflare" ? "☁️ Cloudflare" : acc.provider === "desec" ? "🔒 deSEC" : acc.provider === "njalla" ? "🛡️ Njalla" : acc.provider === "cloudns" ? "🌍 ClouDNS" : "🌐 DNSPod"}
                   </span>
                   <span className="font-medium">{acc.name}</span>
                   {acc.is_default && <CheckCircle className="h-3 w-3 text-green-400" />}
@@ -342,7 +342,7 @@ export default function DNSManagementPage() {
                   <SelectItem value="none">None (manual)</SelectItem>
                   {dnsAccounts.map((acc) => (
                     <SelectItem key={acc.id} value={acc.id}>
-                      {acc.provider === "cloudflare" ? "☁️" : acc.provider === "desec" ? "🔒" : acc.provider === "njalla" ? "🛡️" : "🌐"} {acc.name}
+                      {acc.provider === "cloudflare" ? "☁️" : acc.provider === "desec" ? "🔒" : acc.provider === "njalla" ? "🛡️" : acc.provider === "cloudns" ? "🌍" : "🌐"} {acc.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -383,6 +383,7 @@ export default function DNSManagementPage() {
                   <SelectItem value="cloudflare">☁️ Cloudflare</SelectItem>
                   <SelectItem value="desec">🔒 deSEC</SelectItem>
                   <SelectItem value="njalla">🛡️ Njalla</SelectItem>
+                  <SelectItem value="cloudns">🌍 ClouDNS</SelectItem>
                   <SelectItem value="dnspod">🌐 DNSPod</SelectItem>
                 </SelectContent>
               </Select>
@@ -390,16 +391,16 @@ export default function DNSManagementPage() {
             <div className="space-y-2">
               <Label>Account Name</Label>
               <Input
-                placeholder={dnsAccountForm.provider === "cloudflare" ? "My Cloudflare Account" : dnsAccountForm.provider === "desec" ? "My deSEC Account" : dnsAccountForm.provider === "njalla" ? "My Njalla Account" : "My DNSPod Account"}
+                placeholder={dnsAccountForm.provider === "cloudflare" ? "My Cloudflare Account" : dnsAccountForm.provider === "desec" ? "My deSEC Account" : dnsAccountForm.provider === "njalla" ? "My Njalla Account" : dnsAccountForm.provider === "cloudns" ? "My ClouDNS Account" : "My DNSPod Account"}
                 value={dnsAccountForm.name}
                 onChange={(e) => setDnsAccountForm({ ...dnsAccountForm, name: e.target.value })}
               />
             </div>
-            {dnsAccountForm.provider === "dnspod" && (
+            {(dnsAccountForm.provider === "dnspod" || dnsAccountForm.provider === "cloudns") && (
               <div className="space-y-2">
-                <Label>API ID</Label>
+                <Label>{dnsAccountForm.provider === "cloudns" ? "Auth ID" : "API ID"}</Label>
                 <Input
-                  placeholder="123456"
+                  placeholder={dnsAccountForm.provider === "cloudns" ? "12345 (or sub-12345 for sub-user)" : "123456"}
                   value={dnsAccountForm.api_id}
                   onChange={(e) => setDnsAccountForm({ ...dnsAccountForm, api_id: e.target.value })}
                 />

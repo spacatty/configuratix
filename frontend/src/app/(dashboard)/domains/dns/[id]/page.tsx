@@ -296,6 +296,7 @@ export default function DomainDNSSettingsPage() {
   const isCloudflare = selectedAccount?.provider === "cloudflare";
   const isDeSEC = selectedAccount?.provider === "desec";
   const isNjalla = selectedAccount?.provider === "njalla";
+  const isClouDNS = selectedAccount?.provider === "cloudns";
 
   // New record form
   const [newRecord, setNewRecord] = useState({
@@ -882,7 +883,7 @@ export default function DomainDNSSettingsPage() {
                     <SelectItem value="_none">None</SelectItem>
                     {dnsAccounts.map((acc) => (
                       <SelectItem key={acc.id} value={acc.id}>
-                        {acc.provider === "cloudflare" ? "☁️ Cloudflare" : acc.provider === "desec" ? "🔒 deSEC" : acc.provider === "njalla" ? "🛡️ Njalla" : "🌐 DNSPod"}: {acc.name}
+                        {acc.provider === "cloudflare" ? "☁️ Cloudflare" : acc.provider === "desec" ? "🔒 deSEC" : acc.provider === "njalla" ? "🛡️ Njalla" : acc.provider === "cloudns" ? "🌍 ClouDNS" : "🌐 DNSPod"}: {acc.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1091,6 +1092,11 @@ export default function DomainDNSSettingsPage() {
                       {isNjalla && (
                         <div className="col-span-1 flex items-center pb-2">
                           <span className="text-xs text-muted-foreground">Privacy-focused DNS</span>
+                        </div>
+                      )}
+                      {isClouDNS && (
+                        <div className="col-span-1 flex items-center pb-2">
+                          <span className="text-xs text-muted-foreground">Free tier: 3 zones</span>
                         </div>
                       )}
                       <div className="col-span-2 flex items-end">

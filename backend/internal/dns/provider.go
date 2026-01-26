@@ -90,6 +90,8 @@ func NewProvider(provider string, apiID, apiToken string) (Provider, error) {
 		return NewDeSECProvider(apiToken), nil
 	case "njalla":
 		return NewNjallaProvider(apiToken), nil
+	case "cloudns":
+		return NewClouDNSProvider(apiID, apiToken), nil
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", provider)
 	}

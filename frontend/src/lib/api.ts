@@ -254,7 +254,7 @@ export interface DNSManagedDomain {
 export interface DNSAccount {
   id: string;
   owner_id: string;
-  provider: string; // dnspod, cloudflare, desec, njalla
+  provider: string; // dnspod, cloudflare, desec, njalla, cloudns
   name: string;
   is_default: boolean;
   created_at: string;
