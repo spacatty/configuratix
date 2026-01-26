@@ -2268,9 +2268,56 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
                     <p className="text-muted-foreground">Hostname</p>
                     <p className="font-medium">{machine.hostname || "Unknown"}</p>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground">IP Address</p>
-                    <p className="font-medium font-mono">{machine.ip_address || "Unknown"}</p>
+                  <div className="col-span-2">
+                    <p className="text-muted-foreground mb-2">Primary IP (used for passthrough)</p>
+                    <div className="flex items-center gap-2">
+                      <Select 
+                        value={machine.primary_ip || machine.ip_address || ""} 
+                        onValueChange={async (ip) => {
+                          try {
+                            await api.updateMachine(machine.id, { primary_ip: ip });
+                            setMachine({ ...machine, primary_ip: ip });
+                            toast.success("Primary IP updated");
+                          } catch (err) {
+                            toast.error("Failed to update primary IP");
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="w-[280px] font-mono">
+                          <SelectValue placeholder="Select primary IP" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {machine.detected_ips && machine.detected_ips.length > 0 ? (
+                            machine.detected_ips.map((ipInfo) => (
+                              <SelectItem key={ipInfo.ip} value={ipInfo.ip}>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono">{ipInfo.ip}</span>
+                                  <Badge variant={ipInfo.is_public ? "default" : "secondary"} className="text-xs">
+                                    {ipInfo.is_public ? "Public" : "Private"}
+                                  </Badge>
+                                  <span className="text-xs text-muted-foreground">{ipInfo.interface}</span>
+                                </div>
+                              </SelectItem>
+                            ))
+                          ) : (
+                            <SelectItem value={machine.ip_address || "unknown"}>
+                              {machine.ip_address || "Unknown"}
+                            </SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      {machine.primary_ip && machine.detected_ips?.find(ip => ip.ip === machine.primary_ip)?.is_public && (
+                        <Badge className="bg-green-500/20 text-green-400">Public</Badge>
+                      )}
+                      {machine.primary_ip && !machine.detected_ips?.find(ip => ip.ip === machine.primary_ip)?.is_public && (
+                        <Badge className="bg-yellow-500/20 text-yellow-400">Private</Badge>
+                      )}
+                    </div>
+                    {machine.detected_ips && machine.detected_ips.length > 1 && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {machine.detected_ips.length} IPs detected • Select the IP to use for passthrough/proxy
+                      </p>
+                    )}
                   </div>
                   <div>
                     <p className="text-muted-foreground">OS Version</p>

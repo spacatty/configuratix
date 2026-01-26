@@ -59,6 +59,13 @@ export interface UFWRule {
   from: string;
 }
 
+export interface InterfaceIP {
+  interface: string;
+  ip: string;
+  is_public: boolean;
+  is_ipv6: boolean;
+}
+
 export interface Machine {
   id: string;
   agent_id: string | null;
@@ -67,6 +74,8 @@ export interface Machine {
   title: string | null;
   hostname: string | null;
   ip_address: string | null;
+  detected_ips: InterfaceIP[] | null;
+  primary_ip: string | null;
   ubuntu_version: string | null;
   notes_md: string | null;
   access_token_set: boolean;
@@ -771,7 +780,7 @@ class ApiClient {
     return this.request<Machine>(`/api/machines/${id}`);
   }
 
-  async updateMachine(id: string, data: { title?: string; project_id?: string | null; notes_md?: string }): Promise<void> {
+  async updateMachine(id: string, data: { title?: string; project_id?: string | null; notes_md?: string; primary_ip?: string }): Promise<void> {
     await this.request(`/api/machines/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),

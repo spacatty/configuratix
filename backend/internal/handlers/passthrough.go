@@ -917,7 +917,7 @@ func (h *PassthroughHandler) rotateToMachine(poolID, recordID uuid.UUID, member 
 
 	var fromIP string
 	if pool.CurrentMachineID != nil {
-		h.db.Get(&fromIP, "SELECT ip_address FROM machines WHERE id = $1", *pool.CurrentMachineID)
+		h.db.Get(&fromIP, "SELECT COALESCE(primary_ip, ip_address) FROM machines WHERE id = $1", *pool.CurrentMachineID)
 	}
 
 	// Update DNS record
@@ -971,7 +971,7 @@ func (h *PassthroughHandler) rotateWildcardToMachine(poolID, domainID uuid.UUID,
 
 	var fromIP string
 	if pool.CurrentMachineID != nil {
-		h.db.Get(&fromIP, "SELECT ip_address FROM machines WHERE id = $1", *pool.CurrentMachineID)
+		h.db.Get(&fromIP, "SELECT COALESCE(primary_ip, ip_address) FROM machines WHERE id = $1", *pool.CurrentMachineID)
 	}
 
 	// Update wildcard DNS
@@ -1017,7 +1017,7 @@ func (h *PassthroughHandler) rotateWildcardToMachine(poolID, domainID uuid.UUID,
 func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.UUID, trigger string) error {
 	// Get machine IP
 	var machineIP string
-	err := h.db.Get(&machineIP, "SELECT ip_address FROM machines WHERE id = $1", machineID)
+	err := h.db.Get(&machineIP, "SELECT COALESCE(primary_ip, ip_address) FROM machines WHERE id = $1", machineID)
 	if err != nil {
 		return fmt.Errorf("failed to get machine IP: %w", err)
 	}
@@ -1178,7 +1178,7 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 // updateWildcardDNS updates wildcard DNS records
 func (h *PassthroughHandler) updateWildcardDNS(domainID, machineID uuid.UUID, includeRoot bool, trigger string) error {
 	var machineIP string
-	h.db.Get(&machineIP, "SELECT ip_address FROM machines WHERE id = $1", machineID)
+	h.db.Get(&machineIP, "SELECT COALESCE(primary_ip, ip_address) FROM machines WHERE id = $1", machineID)
 
 	var domain struct {
 		Name         string    `db:"name"`

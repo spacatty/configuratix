@@ -31,14 +31,16 @@ func NewMachinesHandler(db *database.DB) *MachinesHandler {
 // Note: Explicitly list all fields instead of embedding to avoid sqlx scanning issues
 type MachineWithDetails struct {
 	// Machine fields
-	ID              uuid.UUID  `db:"id" json:"id"`
-	AgentID         *uuid.UUID `db:"agent_id" json:"agent_id"`
-	OwnerID         *uuid.UUID `db:"owner_id" json:"owner_id"`
-	ProjectID       *uuid.UUID `db:"project_id" json:"project_id"`
-	Title           *string    `db:"title" json:"title"`
-	Hostname        *string    `db:"hostname" json:"hostname"`
-	IPAddress       *string    `db:"ip_address" json:"ip_address"`
-	UbuntuVersion   *string    `db:"ubuntu_version" json:"ubuntu_version"`
+	ID              uuid.UUID       `db:"id" json:"id"`
+	AgentID         *uuid.UUID      `db:"agent_id" json:"agent_id"`
+	OwnerID         *uuid.UUID      `db:"owner_id" json:"owner_id"`
+	ProjectID       *uuid.UUID      `db:"project_id" json:"project_id"`
+	Title           *string         `db:"title" json:"title"`
+	Hostname        *string         `db:"hostname" json:"hostname"`
+	IPAddress       *string         `db:"ip_address" json:"ip_address"`
+	DetectedIPs     json.RawMessage `db:"detected_ips" json:"detected_ips"`
+	PrimaryIP       *string         `db:"primary_ip" json:"primary_ip"`
+	UbuntuVersion   *string         `db:"ubuntu_version" json:"ubuntu_version"`
 	NotesMD         *string    `db:"notes_md" json:"notes_md"`
 	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt       time.Time  `db:"updated_at" json:"updated_at"`
@@ -222,6 +224,7 @@ func (h *MachinesHandler) UpdateMachine(w http.ResponseWriter, r *http.Request) 
 		Title     *string    `json:"title"`
 		ProjectID *uuid.UUID `json:"project_id"`
 		NotesMD   *string    `json:"notes_md"`
+		PrimaryIP *string    `json:"primary_ip"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -241,9 +244,10 @@ func (h *MachinesHandler) UpdateMachine(w http.ResponseWriter, r *http.Request) 
 			title = COALESCE($1, title),
 			project_id = $2,
 			notes_md = COALESCE($3, notes_md),
+			primary_ip = COALESCE($4, primary_ip),
 			updated_at = NOW()
-		WHERE id = $4
-	`, req.Title, req.ProjectID, req.NotesMD, machineID)
+		WHERE id = $5
+	`, req.Title, req.ProjectID, req.NotesMD, req.PrimaryIP, machineID)
 	if err != nil {
 		http.Error(w, "Failed to update machine", http.StatusInternalServerError)
 		return

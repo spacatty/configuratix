@@ -15,6 +15,8 @@ type Machine struct {
 	Title         *string    `db:"title" json:"title"`
 	Hostname      *string    `db:"hostname" json:"hostname"`
 	IPAddress     *string    `db:"ip_address" json:"ip_address"`
+	DetectedIPs   json.RawMessage `db:"detected_ips" json:"detected_ips"` // All IPs from interfaces
+	PrimaryIP     *string    `db:"primary_ip" json:"primary_ip"`          // Selected IP for passthrough
 	UbuntuVersion *string    `db:"ubuntu_version" json:"ubuntu_version"`
 	NotesMD       *string    `db:"notes_md" json:"notes_md"`
 	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
@@ -48,14 +50,16 @@ type Machine struct {
 // Note: Explicitly list all fields instead of embedding to avoid sqlx scanning issues
 type MachineWithDetails struct {
 	// Machine fields
-	ID              uuid.UUID  `db:"id" json:"id"`
-	AgentID         *uuid.UUID `db:"agent_id" json:"agent_id"`
-	OwnerID         *uuid.UUID `db:"owner_id" json:"owner_id"`
-	ProjectID       *uuid.UUID `db:"project_id" json:"project_id"`
-	Title           *string    `db:"title" json:"title"`
-	Hostname        *string    `db:"hostname" json:"hostname"`
-	IPAddress       *string    `db:"ip_address" json:"ip_address"`
-	UbuntuVersion   *string    `db:"ubuntu_version" json:"ubuntu_version"`
+	ID              uuid.UUID       `db:"id" json:"id"`
+	AgentID         *uuid.UUID      `db:"agent_id" json:"agent_id"`
+	OwnerID         *uuid.UUID      `db:"owner_id" json:"owner_id"`
+	ProjectID       *uuid.UUID      `db:"project_id" json:"project_id"`
+	Title           *string         `db:"title" json:"title"`
+	Hostname        *string         `db:"hostname" json:"hostname"`
+	IPAddress       *string         `db:"ip_address" json:"ip_address"`
+	DetectedIPs     json.RawMessage `db:"detected_ips" json:"detected_ips"`
+	PrimaryIP       *string         `db:"primary_ip" json:"primary_ip"`
+	UbuntuVersion   *string         `db:"ubuntu_version" json:"ubuntu_version"`
 	NotesMD         *string    `db:"notes_md" json:"notes_md"`
 	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt       time.Time  `db:"updated_at" json:"updated_at"`

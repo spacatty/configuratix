@@ -238,7 +238,7 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 	// Get current IP for history
 	var fromIP string
 	if pool.CurrentMachineID != nil {
-		s.db.Get(&fromIP, "SELECT ip_address FROM machines WHERE id = $1", *pool.CurrentMachineID)
+		s.db.Get(&fromIP, "SELECT COALESCE(primary_ip, ip_address) FROM machines WHERE id = $1", *pool.CurrentMachineID)
 	}
 
 	// Update DNS record
@@ -356,7 +356,7 @@ func (s *PassthroughScheduler) rotateWildcardPool(pool models.WildcardPool) {
 
 	var fromIP string
 	if pool.CurrentMachineID != nil {
-		s.db.Get(&fromIP, "SELECT ip_address FROM machines WHERE id = $1", *pool.CurrentMachineID)
+		s.db.Get(&fromIP, "SELECT COALESCE(primary_ip, ip_address) FROM machines WHERE id = $1", *pool.CurrentMachineID)
 	}
 
 	// Update wildcard DNS records

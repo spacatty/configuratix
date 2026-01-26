@@ -151,18 +151,27 @@ type UFWRule struct {
 	From     string `json:"from"`
 }
 
+// InterfaceIP represents an IP address on an interface
+type InterfaceIP struct {
+	Interface string `json:"interface"`
+	IP        string `json:"ip"`
+	IsPublic  bool   `json:"is_public"`
+	IsIPv6    bool   `json:"is_ipv6"`
+}
+
 // HeartbeatRequest includes system stats from agent
 type HeartbeatRequest struct {
-	Version     string    `json:"version"`
-	CPUPercent  float64   `json:"cpu_percent"`
-	MemoryUsed  int64     `json:"memory_used"`
-	MemoryTotal int64     `json:"memory_total"`
-	DiskUsed    int64     `json:"disk_used"`
-	DiskTotal   int64     `json:"disk_total"`
-	SSHPort     int       `json:"ssh_port"`
-	UFWEnabled  bool      `json:"ufw_enabled"`
-	UFWRules    []UFWRule `json:"ufw_rules"`
-	Fail2ban    bool      `json:"fail2ban_enabled"`
+	Version     string        `json:"version"`
+	CPUPercent  float64       `json:"cpu_percent"`
+	MemoryUsed  int64         `json:"memory_used"`
+	MemoryTotal int64         `json:"memory_total"`
+	DiskUsed    int64         `json:"disk_used"`
+	DiskTotal   int64         `json:"disk_total"`
+	SSHPort     int           `json:"ssh_port"`
+	UFWEnabled  bool          `json:"ufw_enabled"`
+	UFWRules    []UFWRule     `json:"ufw_rules"`
+	Fail2ban    bool          `json:"fail2ban_enabled"`
+	DetectedIPs []InterfaceIP `json:"detected_ips"`
 }
 
 // Heartbeat handles agent heartbeat
@@ -188,7 +197,29 @@ func (h *AgentHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	// Serialize UFW rules to JSON
 	ufwRulesJSON, _ := json.Marshal(req.UFWRules)
 
-	// Update machine stats
+	// Serialize detected IPs to JSON
+	detectedIPsJSON, _ := json.Marshal(req.DetectedIPs)
+
+	// Auto-select primary IP: prefer first public IPv4, fallback to first IPv4
+	var autoPrimaryIP string
+	for _, ip := range req.DetectedIPs {
+		if !ip.IsIPv6 && ip.IsPublic {
+			autoPrimaryIP = ip.IP
+			break
+		}
+	}
+	if autoPrimaryIP == "" {
+		// Fallback to first non-IPv6 IP
+		for _, ip := range req.DetectedIPs {
+			if !ip.IsIPv6 {
+				autoPrimaryIP = ip.IP
+				break
+			}
+		}
+	}
+
+	// Update machine stats including detected IPs
+	// Only update primary_ip if it's not already set (user hasn't manually selected)
 	_, err = h.db.Exec(`
 		UPDATE machines SET 
 			cpu_percent = $1,
@@ -200,10 +231,13 @@ func (h *AgentHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 			ufw_enabled = $7,
 			fail2ban_enabled = $8,
 			ufw_rules_json = $9,
+			detected_ips = $10,
+			primary_ip = COALESCE(primary_ip, $11),
+			ip_address = COALESCE($11, ip_address),
 			updated_at = NOW()
-		WHERE agent_id = $10
+		WHERE agent_id = $12
 	`, req.CPUPercent, req.MemoryUsed, req.MemoryTotal, req.DiskUsed, req.DiskTotal,
-		req.SSHPort, req.UFWEnabled, req.Fail2ban, ufwRulesJSON, agentID)
+		req.SSHPort, req.UFWEnabled, req.Fail2ban, ufwRulesJSON, detectedIPsJSON, autoPrimaryIP, agentID)
 	if err != nil {
 		log.Printf("Failed to update machine stats: %v", err)
 	}
