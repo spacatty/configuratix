@@ -877,52 +877,60 @@ export default function NginxConfigsPage() {
                 </Card>
               </div>
 
-              {/* Endpoint Rules (full width when editing and blocking enabled) */}
-              {selectedConfig && formEndpointBlocking && (
+              {/* Endpoint Rules (full width when blocking enabled) */}
+              {formEndpointBlocking && (
                 <Card className="border-border/50">
                   <CardHeader className="py-2.5 px-4">
                     <CardTitle className="text-sm font-medium">Allowed Path Patterns</CardTitle>
                     <CardDescription className="text-xs">Requests not matching will trigger IP ban</CardDescription>
                   </CardHeader>
                   <CardContent className="px-4 pb-4 pt-0 space-y-3">
-                    {/* Existing rules */}
-                    <div className="flex flex-wrap gap-2">
-                      {formEndpointRules.map((rule) => (
-                        <div key={rule.id} className="flex items-center gap-1.5 px-2 py-1 rounded border bg-muted/50 group">
-                          <code className="text-xs font-mono">{rule.pattern}</code>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteEndpointRule(rule.id)}
-                            className="text-destructive hover:text-destructive h-4 w-4 p-0 opacity-50 group-hover:opacity-100"
-                          >
-                            <Trash className="h-3 w-3" />
+                    {selectedConfig ? (
+                      <>
+                        {/* Existing rules */}
+                        <div className="flex flex-wrap gap-2">
+                          {formEndpointRules.map((rule) => (
+                            <div key={rule.id} className="flex items-center gap-1.5 px-2 py-1 rounded border bg-muted/50 group">
+                              <code className="text-xs font-mono">{rule.pattern}</code>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteEndpointRule(rule.id)}
+                                className="text-destructive hover:text-destructive h-4 w-4 p-0 opacity-50 group-hover:opacity-100"
+                              >
+                                <Trash className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ))}
+                          {formEndpointRules.length === 0 && (
+                            <span className="text-xs text-muted-foreground">No rules - all paths blocked</span>
+                          )}
+                        </div>
+
+                        {/* Add new rule */}
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="^/api/.*"
+                            value={newEndpointPattern}
+                            onChange={(e) => setNewEndpointPattern(e.target.value)}
+                            className="font-mono text-xs h-8 flex-1"
+                          />
+                          <Input
+                            placeholder="Description"
+                            value={newEndpointDescription}
+                            onChange={(e) => setNewEndpointDescription(e.target.value)}
+                            className="text-xs h-8 w-32"
+                          />
+                          <Button variant="outline" size="sm" onClick={handleAddEndpointRule} disabled={!newEndpointPattern.trim()} className="h-8">
+                            Add
                           </Button>
                         </div>
-                      ))}
-                      {formEndpointRules.length === 0 && (
-                        <span className="text-xs text-muted-foreground">No rules - all paths blocked</span>
-                      )}
-                    </div>
-
-                    {/* Add new rule */}
-                    <div className="flex gap-2">
-                      <Input
-                        placeholder="^/api/.*"
-                        value={newEndpointPattern}
-                        onChange={(e) => setNewEndpointPattern(e.target.value)}
-                        className="font-mono text-xs h-8 flex-1"
-                      />
-                      <Input
-                        placeholder="Description"
-                        value={newEndpointDescription}
-                        onChange={(e) => setNewEndpointDescription(e.target.value)}
-                        className="text-xs h-8 w-32"
-                      />
-                      <Button variant="outline" size="sm" onClick={handleAddEndpointRule} disabled={!newEndpointPattern.trim()} className="h-8">
-                        Add
-                      </Button>
-                    </div>
+                      </>
+                    ) : (
+                      <p className="text-xs text-muted-foreground py-2">
+                        Save the configuration first, then edit it to add allowed path patterns.
+                      </p>
+                    )}
                   </CardContent>
                 </Card>
               )}
