@@ -319,7 +319,7 @@ export default function MachinesPage() {
                     <span className="mx-1">•</span>
                   </>
                 )}
-                <span>{machine.ip_address || "No IP"}</span>
+                <span>{machine.primary_ip || machine.ip_address || "No IP"}</span>
               </div>
             </div>
           </div>
@@ -331,6 +331,7 @@ export default function MachinesPage() {
         return (
           (machine.title?.toLowerCase().includes(search) || false) ||
           (machine.hostname?.toLowerCase().includes(search) || false) ||
+          (machine.primary_ip?.toLowerCase().includes(search) || false) ||
           (machine.ip_address?.toLowerCase().includes(search) || false)
         );
       },
@@ -461,7 +462,7 @@ export default function MachinesPage() {
                 <ExternalLink className="mr-2 h-4 w-4" />
                 View Details
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleCopy(machine.ip_address || "")}>
+              <DropdownMenuItem onClick={() => handleCopy(machine.primary_ip || machine.ip_address || "")}>
                 <Copy className="mr-2 h-4 w-4" />
                 Copy IP
               </DropdownMenuItem>
@@ -804,9 +805,9 @@ export default function MachinesPage() {
                         }}
                       />
                       <span className="text-sm flex-1 truncate">
-                        {machine.title || machine.hostname || machine.ip_address}
+                        {machine.title || machine.hostname || machine.primary_ip || machine.ip_address}
                       </span>
-                      <span className="text-xs text-muted-foreground">{machine.ip_address}</span>
+                      <span className="text-xs text-muted-foreground">{machine.primary_ip || machine.ip_address}</span>
                     </label>
                   ))
                 )}

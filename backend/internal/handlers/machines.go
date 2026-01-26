@@ -1306,7 +1306,7 @@ func (h *MachinesHandler) GetMachinesForSpeedTest(w http.ResponseWriter, r *http
 	var err error
 
 	query := `
-		SELECT m.id, m.title, m.hostname, m.ip_address,
+		SELECT m.id, m.title, m.hostname, COALESCE(m.primary_ip, m.ip_address) as ip_address,
 			(a.last_seen IS NOT NULL AND a.last_seen > NOW() - INTERVAL '5 minutes') as is_online
 		FROM machines m
 		LEFT JOIN agents a ON m.agent_id = a.id

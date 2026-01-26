@@ -449,7 +449,7 @@ function MachineToolsTab({ machineId, machineIp }: { machineId: string; machineI
       try {
         const data = await api.getMachinesForSpeedTest();
         // Exclude current machine and machines without IP addresses
-        setMachines(data.filter(m => m.id !== machineId && m.ip_address));
+        setMachines(data.filter(m => m.id !== machineId && (m.primary_ip || m.ip_address)));
       } catch (err) {
         console.error("Failed to load machines:", err);
       }
@@ -476,21 +476,27 @@ function MachineToolsTab({ machineId, machineIp }: { machineId: string; machineI
           request.port = iperfPort;
           request.duration = serveDuration;
           break;
-        case "iperf_client":
-          request.target_ip = selectedMachine ? machines.find(m => m.id === selectedMachine)?.ip_address || "" : customTargetIp;
+        case "iperf_client": {
+          const targetMachine = machines.find(m => m.id === selectedMachine);
+          request.target_ip = selectedMachine ? (targetMachine?.primary_ip || targetMachine?.ip_address || "") : customTargetIp;
           request.port = iperfPort;
           request.duration = iperfDuration;
           request.reverse = iperfReverse;
           break;
-        case "latency":
-          request.target_ip = selectedMachine ? machines.find(m => m.id === selectedMachine)?.ip_address || "" : customTargetIp;
+        }
+        case "latency": {
+          const targetMachine = machines.find(m => m.id === selectedMachine);
+          request.target_ip = selectedMachine ? (targetMachine?.primary_ip || targetMachine?.ip_address || "") : customTargetIp;
           request.count = pingCount;
           break;
-        case "machine_download":
-          request.target_ip = selectedMachine ? machines.find(m => m.id === selectedMachine)?.ip_address || "" : customTargetIp;
+        }
+        case "machine_download": {
+          const targetMachine = machines.find(m => m.id === selectedMachine);
+          request.target_ip = selectedMachine ? (targetMachine?.primary_ip || targetMachine?.ip_address || "") : customTargetIp;
           request.port = servePort;
           request.size_mb = serveSizeMb;
           break;
+        }
         case "serve":
           request.port = servePort;
           request.size_mb = serveSizeMb;
@@ -694,8 +700,8 @@ function MachineToolsTab({ machineId, machineIp }: { machineId: string; machineI
                       <SelectItem key={m.id} value={m.id}>
                         <div className="flex items-center gap-2">
                           <div className={`h-2 w-2 rounded-full ${m.is_online ? 'bg-green-500' : 'bg-red-500'}`} />
-                          <span>{m.title || m.hostname || m.ip_address || "Unknown"}</span>
-                          {m.ip_address && <span className="text-muted-foreground font-mono text-xs">({m.ip_address})</span>}
+                          <span>{m.title || m.hostname || m.primary_ip || m.ip_address || "Unknown"}</span>
+                          {(m.primary_ip || m.ip_address) && <span className="text-muted-foreground font-mono text-xs">({m.primary_ip || m.ip_address})</span>}
                         </div>
                       </SelectItem>
                     ))}
@@ -2199,7 +2205,7 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
                   <span className="mx-2">•</span>
                 </>
               )}
-              {machine.ip_address || "No IP address"}
+              {machine.primary_ip || machine.ip_address || "No IP address"}
             </p>
           </div>
         </div>
@@ -2740,7 +2746,7 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
 
         {/* Tools Tab */}
         <TabsContent value="tools" className="space-y-4 mt-6">
-          <MachineToolsTab machineId={machine.id} machineIp={machine.ip_address || ""} />
+          <MachineToolsTab machineId={machine.id} machineIp={machine.primary_ip || machine.ip_address || ""} />
         </TabsContent>
 
         {/* Jobs Tab */}

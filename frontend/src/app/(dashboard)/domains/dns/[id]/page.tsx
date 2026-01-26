@@ -1326,7 +1326,7 @@ export default function DomainDNSSettingsPage() {
                           />
                           <div className={`w-2 h-2 rounded-full ${m.last_seen && (Date.now() - new Date(m.last_seen).getTime()) < 120000 ? "bg-green-500" : "bg-red-500"}`} />
                           <span className="text-sm truncate">{m.title || m.hostname}</span>
-                          <span className="text-xs text-muted-foreground">- {m.ip_address}</span>
+                          <span className="text-xs text-muted-foreground">- {m.primary_ip || m.ip_address}</span>
                         </label>
                       ))}
                     </div>
@@ -1523,7 +1523,7 @@ export default function DomainDNSSettingsPage() {
                               />
                               <div className={`w-2 h-2 rounded-full ${m.last_seen && (Date.now() - new Date(m.last_seen).getTime()) < 120000 ? "bg-green-500" : "bg-red-500"}`} />
                               <span className="text-sm truncate">{m.title || m.hostname}</span>
-                              <span className="text-xs text-muted-foreground">- {m.ip_address}</span>
+                              <span className="text-xs text-muted-foreground">- {m.primary_ip || m.ip_address}</span>
                             </label>
                           ))}
                         </div>

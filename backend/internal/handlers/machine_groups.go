@@ -269,7 +269,7 @@ func (h *MachineGroupsHandler) GetGroupMembers(w http.ResponseWriter, r *http.Re
 
 	var machines []MachineWithPosition
 	err = h.db.Select(&machines, `
-		SELECT m.id, m.title, m.hostname, m.ip_address, 
+		SELECT m.id, m.title, m.hostname, COALESCE(m.primary_ip, m.ip_address) as ip_address, 
 			   a.last_seen,
 			   mgm.position
 		FROM machines m

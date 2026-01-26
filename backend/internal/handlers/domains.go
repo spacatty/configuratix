@@ -389,7 +389,7 @@ func (h *DomainsHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 		err = h.db.Select(&domains, `
 			SELECT d.*, 
 				m.hostname as machine_name, 
-				m.ip_address as machine_ip,
+				COALESCE(m.primary_ip, m.ip_address) as machine_ip,
 				dcl.nginx_config_id as config_id,
 				nc.name as config_name
 			FROM domains d
@@ -402,7 +402,7 @@ func (h *DomainsHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 		err = h.db.Select(&domains, `
 			SELECT d.*, 
 				m.hostname as machine_name, 
-				m.ip_address as machine_ip,
+				COALESCE(m.primary_ip, m.ip_address) as machine_ip,
 				dcl.nginx_config_id as config_id,
 				nc.name as config_name
 			FROM domains d
@@ -440,7 +440,7 @@ func (h *DomainsHandler) GetDomain(w http.ResponseWriter, r *http.Request) {
 	err = h.db.Get(&domain, `
 		SELECT d.*, 
 			m.hostname as machine_name, 
-			m.ip_address as machine_ip,
+			COALESCE(m.primary_ip, m.ip_address) as machine_ip,
 			dcl.nginx_config_id as config_id,
 			nc.name as config_name
 		FROM domains d
