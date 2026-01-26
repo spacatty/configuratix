@@ -373,7 +373,7 @@ export default function IPBlacklistPage() {
                   </TableCell>
                   <TableCell>{getReasonBadge(ban.reason)}</TableCell>
                   <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
-                    {ban.details?.user_agent || ban.details?.path || "-"}
+                    {String(ban.details?.user_agent || ban.details?.path || "-")}
                   </TableCell>
                   <TableCell className="text-sm">
                     {ban.source_machine_name || "-"}

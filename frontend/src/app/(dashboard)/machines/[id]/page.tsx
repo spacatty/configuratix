@@ -681,10 +681,7 @@ function ConfigEditorTab({ machineId }: { machineId: string }) {
     }
     setSubmitting(true);
     try {
-      await api.updateConfigCategory(machineId, editingCategoryId, {
-        ...categoryForm,
-        position: 0 // Keep current position
-      });
+      await api.updateConfigCategory(machineId, editingCategoryId, categoryForm);
       toast.success("Category updated");
       setShowAddCategoryDialog(false);
       setCategoryForm({ name: "", emoji: "📁", color: "#6366f1" });
@@ -1392,7 +1389,7 @@ export default function MachineDetailPage({ params }: { params: Promise<{ id: st
     if (!machine) return;
     setSaving(true);
     try {
-      await api.updateMachine(machine.id, { title: editingTitle || null });
+      await api.updateMachine(machine.id, { title: editingTitle || undefined });
       setMachine(prev => prev ? { ...prev, title: editingTitle || null } : null);
       setShowTitleDialog(false);
       toast.success("Machine name updated");

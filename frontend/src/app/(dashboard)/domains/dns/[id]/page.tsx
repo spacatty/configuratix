@@ -1306,7 +1306,7 @@ export default function DomainDNSSettingsPage() {
                               }));
                             }}
                           />
-                          <div className={`w-2 h-2 rounded-full ${m.status === "online" ? "bg-green-500" : "bg-red-500"}`} />
+                          <div className={`w-2 h-2 rounded-full ${m.last_seen && (Date.now() - new Date(m.last_seen).getTime()) < 120000 ? "bg-green-500" : "bg-red-500"}`} />
                           <span className="text-sm truncate">{m.title || m.hostname}</span>
                           <span className="text-xs text-muted-foreground">- {m.ip_address}</span>
                         </label>
@@ -1503,7 +1503,7 @@ export default function DomainDNSSettingsPage() {
                                   }));
                                 }}
                               />
-                              <div className={`w-2 h-2 rounded-full ${m.status === "online" ? "bg-green-500" : "bg-red-500"}`} />
+                              <div className={`w-2 h-2 rounded-full ${m.last_seen && (Date.now() - new Date(m.last_seen).getTime()) < 120000 ? "bg-green-500" : "bg-red-500"}`} />
                               <span className="text-sm truncate">{m.title || m.hostname}</span>
                               <span className="text-xs text-muted-foreground">- {m.ip_address}</span>
                             </label>
@@ -1539,41 +1539,53 @@ export default function DomainDNSSettingsPage() {
 
               {syncResult && (
                 <div className="space-y-4">
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-4 gap-4">
                     <Card>
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-sm text-green-500">Synced</CardTitle>
+                        <CardTitle className="text-sm text-green-500">To Create</CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <p className="text-2xl font-bold">{syncResult.synced?.length || 0}</p>
+                        <p className="text-2xl font-bold">{syncResult.created?.length || 0}</p>
                       </CardContent>
                     </Card>
                     <Card>
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-sm text-yellow-500">Local Only</CardTitle>
+                        <CardTitle className="text-sm text-yellow-500">To Update</CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <p className="text-2xl font-bold">{syncResult.local_only?.length || 0}</p>
+                        <p className="text-2xl font-bold">{syncResult.updated?.length || 0}</p>
                       </CardContent>
                     </Card>
                     <Card>
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-sm text-blue-500">Remote Only</CardTitle>
+                        <CardTitle className="text-sm text-red-500">To Delete</CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <p className="text-2xl font-bold">{syncResult.remote_only?.length || 0}</p>
+                        <p className="text-2xl font-bold">{syncResult.deleted?.length || 0}</p>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-sm text-orange-500">Conflicts</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <p className="text-2xl font-bold">{syncResult.conflicts?.length || 0}</p>
                       </CardContent>
                     </Card>
                   </div>
 
-                  <div className="flex gap-2">
-                    <Button onClick={handleSyncToRemote} disabled={saving} variant="outline">
-                      Push to Provider
-                    </Button>
-                    <Button onClick={handleSyncFromRemote} disabled={saving} variant="outline">
-                      Pull from Provider
-                    </Button>
-                  </div>
+                  {syncResult.in_sync ? (
+                    <p className="text-sm text-green-500">✓ All records are in sync</p>
+                  ) : (
+                    <div className="flex gap-2">
+                      <Button onClick={handleSyncToRemote} disabled={saving} variant="outline">
+                        Push to Provider
+                      </Button>
+                      <Button onClick={handleSyncFromRemote} disabled={saving} variant="outline">
+                        Pull from Provider
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </TabsContent>
