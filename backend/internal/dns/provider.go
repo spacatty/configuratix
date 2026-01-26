@@ -88,6 +88,8 @@ func NewProvider(provider string, apiID, apiToken string) (Provider, error) {
 		return NewCloudflareProvider(apiToken), nil
 	case "desec":
 		return NewDeSECProvider(apiToken), nil
+	case "njalla":
+		return NewNjallaProvider(apiToken), nil
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", provider)
 	}
