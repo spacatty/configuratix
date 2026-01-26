@@ -253,25 +253,32 @@ func isPublicIP(ip net.IP) bool {
 		return false
 	}
 
-	// Check for private IP ranges
+	// Convert to 4-byte representation for IPv4 checks
+	ip4 := ip.To4()
+	if ip4 == nil {
+		// IPv6 - use built-in IsPrivate check
+		return !ip.IsPrivate()
+	}
+
+	// Check for private IP ranges (using ip4 which is guaranteed 4 bytes)
 	// 10.0.0.0/8
-	if ip[0] == 10 {
+	if ip4[0] == 10 {
 		return false
 	}
 	// 172.16.0.0/12
-	if ip[0] == 172 && ip[1] >= 16 && ip[1] <= 31 {
+	if ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31 {
 		return false
 	}
 	// 192.168.0.0/16
-	if ip[0] == 192 && ip[1] == 168 {
+	if ip4[0] == 192 && ip4[1] == 168 {
 		return false
 	}
 	// 100.64.0.0/10 (Carrier-grade NAT)
-	if ip[0] == 100 && ip[1] >= 64 && ip[1] <= 127 {
+	if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
 		return false
 	}
 	// 169.254.0.0/16 (Link-local)
-	if ip[0] == 169 && ip[1] == 254 {
+	if ip4[0] == 169 && ip4[1] == 254 {
 		return false
 	}
 
