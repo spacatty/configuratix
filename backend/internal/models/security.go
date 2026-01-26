@@ -96,14 +96,14 @@ type SecurityMachineSettings struct {
 
 // SecurityStats represents security statistics
 type SecurityStats struct {
-	TotalBans       int            `json:"total_bans"`
-	ActiveBans      int            `json:"active_bans"`
-	BansToday       int            `json:"bans_today"`
-	BansThisWeek    int            `json:"bans_this_week"`
-	TopReasons      []ReasonCount  `json:"top_reasons"`
-	TopMachines     []MachineCount `json:"top_machines"`
-	WhitelistCount  int            `json:"whitelist_count"`
-	UAPatternCount  int            `json:"ua_pattern_count"`
+	TotalBans      int            `json:"total_bans"`
+	ActiveBans     int            `json:"active_bans"`
+	BansToday      int            `json:"bans_today"`
+	BansThisWeek   int            `json:"bans_this_week"`
+	TopReasons     []ReasonCount  `json:"top_reasons"`
+	TopMachines    []MachineCount `json:"top_machines"`
+	WhitelistCount int            `json:"whitelist_count"`
+	UAPatternCount int            `json:"ua_pattern_count"`
 }
 
 // ReasonCount for stats
@@ -121,10 +121,10 @@ type MachineCount struct {
 
 // UAPatternsByCategory groups patterns by category
 type UAPatternsByCategory struct {
-	Category    string              `json:"category"`
-	IsEnabled   bool                `json:"is_enabled"`
-	PatternCount int                `json:"pattern_count"`
-	Patterns    []SecurityUAPattern `json:"patterns"`
+	Category     string              `json:"category"`
+	IsEnabled    bool                `json:"is_enabled"`
+	PatternCount int                 `json:"pattern_count"`
+	Patterns     []SecurityUAPattern `json:"patterns"`
 }
 
 // ============================================================
@@ -133,10 +133,10 @@ type UAPatternsByCategory struct {
 
 // CreateBanRequest for manual IP ban
 type CreateBanRequest struct {
-	IPAddress   string          `json:"ip_address"`
-	Reason      string          `json:"reason"`
-	Details     json.RawMessage `json:"details,omitempty"`
-	ExpiresInDays int           `json:"expires_in_days,omitempty"` // 0 = default 30 days
+	IPAddress     string          `json:"ip_address"`
+	Reason        string          `json:"reason"`
+	Details       json.RawMessage `json:"details,omitempty"`
+	ExpiresInDays int             `json:"expires_in_days,omitempty"` // 0 = default 30 days
 }
 
 // ImportBansRequest for bulk import
@@ -210,10 +210,10 @@ type UpdateMachineSecurityRequest struct {
 
 // AgentSecuritySyncRequest from agent to backend
 type AgentSecuritySyncRequest struct {
-	MachineID  uuid.UUID           `json:"machine_id"`
-	NewBans    []AgentBanReport    `json:"new_bans"`
-	LastSyncAt *time.Time          `json:"last_sync_at,omitempty"`
-	BanCount   int                 `json:"ban_count"` // Current nftables ban count
+	MachineID  uuid.UUID        `json:"machine_id"`
+	NewBans    []AgentBanReport `json:"new_bans"`
+	LastSyncAt *time.Time       `json:"last_sync_at,omitempty"`
+	BanCount   int              `json:"ban_count"` // Current nftables ban count
 }
 
 // AgentBanReport represents a ban detected by agent
@@ -227,12 +227,12 @@ type AgentBanReport struct {
 
 // AgentSecuritySyncResponse from backend to agent
 type AgentSecuritySyncResponse struct {
-	MissingBans      []AgentBanEntry     `json:"missing_bans"`
-	BansToRemove     []string            `json:"bans_to_remove"` // IPs to unban (whitelisted or expired)
-	WhitelistUpdated bool                `json:"whitelist_updated"`
-	Whitelist        []string            `json:"whitelist,omitempty"` // Full whitelist if updated
-	PatternsUpdated  bool                `json:"patterns_updated"`
-	NextSyncAt       time.Time           `json:"next_sync_at"`
+	MissingBans      []AgentBanEntry `json:"missing_bans"`
+	BansToRemove     []string        `json:"bans_to_remove"` // IPs to unban (whitelisted or expired)
+	WhitelistUpdated bool            `json:"whitelist_updated"`
+	Whitelist        []string        `json:"whitelist,omitempty"` // Full whitelist if updated
+	PatternsUpdated  bool            `json:"patterns_updated"`
+	NextSyncAt       time.Time       `json:"next_sync_at"`
 }
 
 // AgentBanEntry represents a ban for agent to apply
@@ -243,15 +243,15 @@ type AgentBanEntry struct {
 
 // AgentUAPatternsResponse for agent to get UA patterns
 type AgentUAPatternsResponse struct {
-	Patterns    []string  `json:"patterns"` // Just the pattern strings for nginx map
-	UpdatedAt   time.Time `json:"updated_at"`
+	Patterns  []string  `json:"patterns"` // Just the pattern strings for nginx map
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // AgentEndpointRulesResponse for agent to get endpoint rules
 type AgentEndpointRulesResponse struct {
-	ConfigID    uuid.UUID `json:"config_id"`
-	Patterns    []string  `json:"patterns"` // Allowed path patterns
-	Enabled     bool      `json:"enabled"`
+	ConfigID uuid.UUID `json:"config_id"`
+	Patterns []string  `json:"patterns"` // Allowed path patterns
+	Enabled  bool      `json:"enabled"`
 }
 
 // NftablesState represents the current state of nftables on a machine
@@ -276,11 +276,10 @@ type BanListPage struct {
 
 // BanListFilters for filtering ban list
 type BanListFilters struct {
-	Search       string     `json:"search"`        // IP search
-	Reason       string     `json:"reason"`        // Filter by reason
-	MachineID    *uuid.UUID `json:"machine_id"`    // Filter by source machine
-	IsActive     *bool      `json:"is_active"`     // Filter by active status
-	DateFrom     *time.Time `json:"date_from"`
-	DateTo       *time.Time `json:"date_to"`
+	Search    string     `json:"search"`     // IP search
+	Reason    string     `json:"reason"`     // Filter by reason
+	MachineID *uuid.UUID `json:"machine_id"` // Filter by source machine
+	IsActive  *bool      `json:"is_active"`  // Filter by active status
+	DateFrom  *time.Time `json:"date_from"`
+	DateTo    *time.Time `json:"date_to"`
 }
-

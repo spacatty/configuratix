@@ -581,11 +581,11 @@ export default function NginxConfigsPage() {
               {loc.static_type === "landing" && (
                 <div className="space-y-1">
                   <Label className="text-xs text-muted-foreground">Content</Label>
-                  <Select value={loc.landing_id || ""} onValueChange={(value) => updateLocation(index, { landing_id: value })}>
+                  <Select value={loc.landing_id || "none"} onValueChange={(value) => updateLocation(index, { landing_id: value === "none" ? "" : value })}>
                     <SelectTrigger className="h-9"><SelectValue placeholder="Select..." /></SelectTrigger>
                     <SelectContent>
                       {landings.length === 0 ? (
-                        <SelectItem value="" disabled>No content</SelectItem>
+                        <SelectItem value="none" disabled>No content available</SelectItem>
                       ) : landings.map((l) => (
                         <SelectItem key={l.id} value={l.id}>{l.name} ({l.type.toUpperCase()})</SelectItem>
                       ))}

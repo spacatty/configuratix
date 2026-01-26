@@ -334,12 +334,12 @@ export default function DNSManagementPage() {
             </div>
             <div className="space-y-2">
               <Label>DNS Account (optional)</Label>
-              <Select value={newDnsAccountId} onValueChange={setNewDnsAccountId}>
+              <Select value={newDnsAccountId || "none"} onValueChange={(v) => setNewDnsAccountId(v === "none" ? "" : v)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select account" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None</SelectItem>
+                  <SelectItem value="none">None (manual)</SelectItem>
                   {dnsAccounts.map((acc) => (
                     <SelectItem key={acc.id} value={acc.id}>
                       {acc.provider === "cloudflare" ? "☁️" : "🌐"} {acc.name}
