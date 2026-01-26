@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
-	_ "github.com/lib/pq"
 	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
 )
 
 type DB struct {
@@ -53,32 +54,9 @@ func New() (*DB, error) {
 }
 
 func (db *DB) RunMigrations() error {
-	// Migration files to run in order
-	migrations := []string{
-		"001_initial_schema.sql",
-		"002_add_notes_and_token_name.sql",
-		"003_machine_settings.sql",
-		"004_users_projects_roles.sql",
-		"005_landings.sql",
-		"006_ufw_rules.sql",
-		"012_php_runtimes.sql",
-		"013_seed_php_templates.sql",
-		"014_dns_providers.sql",
-		"015_separate_dns_domains.sql",
-		"016_machine_groups.sql",
-		"017_config_categories.sql",
-		"018_fix_landing_preview_paths.sql",
-		"019_dns_passthrough.sql",
-		"020_passthrough_groups.sql",
-		"021_passthrough_http_port.sql",
-		"022_security_module.sql",
-		"023_fix_ua_patterns_duplicates.sql",
-		"024_security_ip_bans_unique.sql",
-	}
-
 	// Get current working directory for debugging
 	cwd, _ := os.Getwd()
-	
+
 	// Base paths to try - include absolute paths
 	basePaths := []string{
 		"migrations/",
@@ -90,26 +68,49 @@ func (db *DB) RunMigrations() error {
 		filepath.Join(cwd, "backend/migrations/"),
 	}
 
+	// Find migrations directory
+	var migrationsDir string
+	for _, basePath := range basePaths {
+		if info, err := os.Stat(basePath); err == nil && info.IsDir() {
+			migrationsDir = basePath
+			break
+		}
+	}
+
+	if migrationsDir == "" {
+		fmt.Printf("Warning: Migrations directory not found (cwd: %s)\n", cwd)
+		return nil
+	}
+
+	// Read all .sql files from the migrations directory
+	entries, err := os.ReadDir(migrationsDir)
+	if err != nil {
+		return fmt.Errorf("failed to read migrations directory: %w", err)
+	}
+
+	// Filter and sort migration files
+	var migrations []string
+	for _, entry := range entries {
+		name := entry.Name()
+		// Skip directories, non-SQL files, and files starting with "_"
+		if entry.IsDir() || !strings.HasSuffix(name, ".sql") || strings.HasPrefix(name, "_") {
+			continue
+		}
+		migrations = append(migrations, name)
+	}
+
+	// Sort migrations alphabetically (they should be numbered like 001_, 002_, etc.)
+	sort.Strings(migrations)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	appliedCount := 0
 	for _, migration := range migrations {
-		var migrationSQL []byte
-		var err error
-		var foundPath string
-
-		for _, basePath := range basePaths {
-			fullPath := basePath + migration
-			migrationSQL, err = os.ReadFile(fullPath)
-			if err == nil {
-				foundPath = fullPath
-				break
-			}
-		}
+		fullPath := filepath.Join(migrationsDir, migration)
+		migrationSQL, err := os.ReadFile(fullPath)
 		if err != nil {
-			// Log warning but continue - might be deployed without migration files
-			fmt.Printf("Warning: Migration file not found: %s (cwd: %s)\n", migration, cwd)
+			fmt.Printf("Warning: Failed to read migration file: %s: %v\n", fullPath, err)
 			continue
 		}
 
@@ -121,7 +122,7 @@ func (db *DB) RunMigrations() error {
 				return fmt.Errorf("failed to run migration %s: %w", migration, err)
 			}
 		} else {
-			fmt.Printf("Applied migration: %s (from %s)\n", migration, foundPath)
+			fmt.Printf("Applied migration: %s (from %s)\n", migration, fullPath)
 			appliedCount++
 		}
 	}
