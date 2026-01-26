@@ -731,7 +731,7 @@ export default function DomainDNSSettingsPage() {
     if (!domain) return;
     setSaving(true);
     try {
-      await api.syncDNSRecords(domain.id, { direction: "push" });
+      await api.applyDNSToRemote(domain.id);
       toast.success("Records synced to provider");
       loadRecords();
       setSyncResult(null);
@@ -746,7 +746,7 @@ export default function DomainDNSSettingsPage() {
     if (!domain) return;
     setSaving(true);
     try {
-      await api.syncDNSRecords(domain.id, { direction: "pull" });
+      await api.importDNSFromRemote(domain.id);
       toast.success("Records imported from provider");
       loadRecords();
       setSyncResult(null);
