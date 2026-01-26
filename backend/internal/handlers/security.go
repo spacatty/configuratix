@@ -204,7 +204,7 @@ func (h *SecurityHandler) CreateBan(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(ban)
 }
 
-// ImportBans imports multiple IPs from text list
+// ImportBans imports multiple IPs from text list or CSV
 func (h *SecurityHandler) ImportBans(w http.ResponseWriter, r *http.Request) {
 	claims := r.Context().Value("claims").(*auth.Claims)
 	userID, _ := uuid.Parse(claims.UserID)
@@ -215,7 +215,7 @@ func (h *SecurityHandler) ImportBans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.IPs) == 0 {
+	if len(req.IPs) == 0 && len(req.CSV) == 0 {
 		http.Error(w, "No IPs provided", http.StatusBadRequest)
 		return
 	}
@@ -229,6 +229,21 @@ func (h *SecurityHandler) ImportBans(w http.ResponseWriter, r *http.Request) {
 	var whitelist []string
 	h.db.Select(&whitelist, `SELECT ip_cidr::text FROM security_ip_whitelist WHERE owner_id = $1`, userID)
 
+	// Helper to check if IP is whitelisted
+	isWhitelisted := func(ipStr string, ip net.IP) bool {
+		for _, wl := range whitelist {
+			_, cidr, err := net.ParseCIDR(wl)
+			if err != nil {
+				if wl == ipStr {
+					return true
+				}
+			} else if cidr.Contains(ip) {
+				return true
+			}
+		}
+		return false
+	}
+
 	// Get already banned IPs
 	var existingBans []string
 	h.db.Select(&existingBans, `SELECT ip_address::text FROM security_ip_bans WHERE is_active = true`)
@@ -238,8 +253,86 @@ func (h *SecurityHandler) ImportBans(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := models.ImportBansResponse{}
-	var toInsert []string
 
+	// Handle CSV import (full data with reason, UA, dates)
+	if len(req.CSV) > 0 {
+		for _, entry := range req.CSV {
+			ipStr := strings.TrimSpace(entry.IPAddress)
+			if ipStr == "" {
+				continue
+			}
+
+			// Validate IP
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				result.Invalid++
+				continue
+			}
+
+			// Check whitelist
+			if isWhitelisted(ipStr, ip) {
+				result.SkippedWhitelist++
+				result.SkippedIPs = append(result.SkippedIPs, ipStr)
+				continue
+			}
+
+			// Check already banned
+			if existingMap[ipStr] {
+				result.AlreadyBanned++
+				continue
+			}
+
+			// Parse dates
+			expiresAt := time.Now().AddDate(0, 1, 0) // Default 1 month
+			if entry.ExpiresAt != "" {
+				if t, err := time.Parse(time.RFC3339, entry.ExpiresAt); err == nil {
+					expiresAt = t
+				}
+			}
+
+			bannedAt := time.Now()
+			if entry.BannedAt != "" {
+				if t, err := time.Parse(time.RFC3339, entry.BannedAt); err == nil {
+					bannedAt = t
+				}
+			}
+
+			// Build details JSON
+			details := map[string]interface{}{}
+			if entry.UserAgent != "" {
+				details["user_agent"] = entry.UserAgent
+			}
+			if entry.Path != "" {
+				details["path"] = entry.Path
+			}
+			detailsJSON, _ := json.Marshal(details)
+
+			entryReason := entry.Reason
+			if entryReason == "" {
+				entryReason = "imported"
+			}
+
+			_, err := h.db.Exec(`
+				INSERT INTO security_ip_bans (ip_address, reason, details, created_by, banned_at, expires_at)
+				VALUES ($1, $2, $3, $4, $5, $6)
+				ON CONFLICT (ip_address) DO UPDATE SET
+					reason = EXCLUDED.reason,
+					details = EXCLUDED.details,
+					banned_at = EXCLUDED.banned_at,
+					expires_at = EXCLUDED.expires_at,
+					is_active = true,
+					unbanned_at = NULL
+			`, ipStr, entryReason, string(detailsJSON), userID, bannedAt, expiresAt)
+			if err != nil {
+				log.Printf("Failed to insert CSV ban for %s: %v", ipStr, err)
+				continue
+			}
+			result.Imported++
+			existingMap[ipStr] = true // Prevent duplicates within same import
+		}
+	}
+
+	// Handle simple IP list import
 	for _, ipStr := range req.IPs {
 		ipStr = strings.TrimSpace(ipStr)
 		if ipStr == "" {
@@ -254,23 +347,7 @@ func (h *SecurityHandler) ImportBans(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Check whitelist
-		isWhitelisted := false
-		for _, wl := range whitelist {
-			_, cidr, err := net.ParseCIDR(wl)
-			if err != nil {
-				// It's a single IP
-				if wl == ipStr {
-					isWhitelisted = true
-					break
-				}
-			} else {
-				if cidr.Contains(ip) {
-					isWhitelisted = true
-					break
-				}
-			}
-		}
-		if isWhitelisted {
+		if isWhitelisted(ipStr, ip) {
 			result.SkippedWhitelist++
 			result.SkippedIPs = append(result.SkippedIPs, ipStr)
 			continue
@@ -282,11 +359,6 @@ func (h *SecurityHandler) ImportBans(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		toInsert = append(toInsert, ipStr)
-	}
-
-	// Bulk insert
-	for _, ipStr := range toInsert {
 		_, err := h.db.Exec(`
 			INSERT INTO security_ip_bans (ip_address, reason, details, created_by)
 			VALUES ($1, $2, '{}', $3)
@@ -297,6 +369,7 @@ func (h *SecurityHandler) ImportBans(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		result.Imported++
+		existingMap[ipStr] = true
 	}
 
 	w.Header().Set("Content-Type", "application/json")

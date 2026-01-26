@@ -141,8 +141,19 @@ type CreateBanRequest struct {
 
 // ImportBansRequest for bulk import
 type ImportBansRequest struct {
-	IPs    []string `json:"ips"`
-	Reason string   `json:"reason"`
+	IPs    []string         `json:"ips"`    // Simple IP list
+	Reason string           `json:"reason"` // Default reason for simple list
+	CSV    []ImportBanEntry `json:"csv"`    // CSV rows with full data
+}
+
+// ImportBanEntry for CSV import with full data
+type ImportBanEntry struct {
+	IPAddress string `json:"ip_address"`
+	Reason    string `json:"reason"`
+	UserAgent string `json:"user_agent"`
+	Path      string `json:"path"`
+	ExpiresAt string `json:"expires_at"` // ISO8601 timestamp
+	BannedAt  string `json:"banned_at"`  // ISO8601 timestamp
 }
 
 // ImportBansResponse for bulk import result

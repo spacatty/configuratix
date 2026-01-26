@@ -1548,7 +1548,18 @@ class ApiClient {
     });
   }
 
-  async importSecurityBans(data: { ips: string[]; reason?: string }): Promise<ImportBansResponse> {
+  async importSecurityBans(data: { 
+    ips?: string[]; 
+    reason?: string;
+    csv?: Array<{
+      ip_address: string;
+      reason: string;
+      user_agent: string;
+      path: string;
+      expires_at: string;
+      banned_at: string;
+    }>;
+  }): Promise<ImportBansResponse> {
     return this.request("/api/security/bans/import", {
       method: "POST",
       body: JSON.stringify(data),

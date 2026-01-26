@@ -65,6 +65,8 @@ export default function IPBlacklistPage() {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [showClearAllDialog, setShowClearAllDialog] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // Form state
   const [newBanIP, setNewBanIP] = useState("");
@@ -135,22 +137,86 @@ export default function IPBlacklistPage() {
   };
 
   const handleImport = async () => {
-    const ips = importText
+    const lines = importText
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line && !line.startsWith("#"));
 
-    if (ips.length === 0) {
-      toast.error("No valid IPs found");
+    if (lines.length === 0) {
+      toast.error("No valid data found");
       return;
     }
 
     setSubmitting(true);
     try {
-      const result: ImportBansResponse = await api.importSecurityBans({
-        ips,
-        reason: importReason,
-      });
+      // Detect CSV format (check if first line is header)
+      const isCSV = lines[0].toLowerCase().startsWith("ip_address,");
+      
+      let result: ImportBansResponse;
+      
+      if (isCSV) {
+        // Parse CSV with full data
+        const csvEntries: Array<{
+          ip_address: string;
+          reason: string;
+          user_agent: string;
+          path: string;
+          expires_at: string;
+          banned_at: string;
+        }> = [];
+        
+        // Skip header line
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line) continue;
+          
+          // Parse CSV line (handle quoted fields)
+          const fields: string[] = [];
+          let current = "";
+          let inQuotes = false;
+          for (let j = 0; j < line.length; j++) {
+            const char = line[j];
+            if (char === '"') {
+              if (inQuotes && line[j + 1] === '"') {
+                current += '"';
+                j++; // Skip escaped quote
+              } else {
+                inQuotes = !inQuotes;
+              }
+            } else if (char === ',' && !inQuotes) {
+              fields.push(current);
+              current = "";
+            } else {
+              current += char;
+            }
+          }
+          fields.push(current);
+          
+          if (fields.length >= 1 && fields[0]) {
+            csvEntries.push({
+              ip_address: fields[0] || "",
+              reason: fields[1] || "",
+              user_agent: fields[2] || "",
+              path: fields[3] || "",
+              expires_at: fields[4] || "",
+              banned_at: fields[5] || "",
+            });
+          }
+        }
+        
+        result = await api.importSecurityBans({
+          ips: [],
+          reason: importReason,
+          csv: csvEntries,
+        });
+      } else {
+        // Simple IP list
+        result = await api.importSecurityBans({
+          ips: lines,
+          reason: importReason,
+        });
+      }
+      
       toast.success(
         `Imported ${result.imported} IPs. Skipped: ${result.skipped_whitelist} (whitelisted), ${result.already_banned} (already banned), ${result.invalid} (invalid)`
       );
@@ -204,6 +270,69 @@ export default function IPBlacklistPage() {
     }
   };
 
+  const handleExportCSV = async () => {
+    setExporting(true);
+    try {
+      // Fetch all bans (use large page size)
+      const allBans = await api.listSecurityBans({ page_size: 100000, active_only: activeOnly });
+      
+      // CSV header
+      const header = "ip_address,reason,user_agent,path,expires_at,banned_at";
+      
+      // CSV rows
+      const rows = allBans.bans.map(ban => {
+        const userAgent = String(ban.details?.user_agent || "").replace(/"/g, '""');
+        const path = String(ban.details?.path || "").replace(/"/g, '""');
+        return `${ban.ip_address},"${ban.reason}","${userAgent}","${path}",${ban.expires_at},${ban.banned_at}`;
+      });
+      
+      const csv = [header, ...rows].join("\n");
+      
+      // Download
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ip-bans-${new Date().toISOString().split("T")[0]}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      
+      toast.success(`Exported ${allBans.bans.length} bans as CSV`);
+      setShowExportDialog(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to export");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportList = async () => {
+    setExporting(true);
+    try {
+      // Fetch all bans
+      const allBans = await api.listSecurityBans({ page_size: 100000, active_only: activeOnly });
+      
+      // Just IP list, one per line
+      const list = allBans.bans.map(ban => ban.ip_address).join("\n");
+      
+      // Download
+      const blob = new Blob([list], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ip-bans-${new Date().toISOString().split("T")[0]}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      
+      toast.success(`Exported ${allBans.bans.length} IPs`);
+      setShowExportDialog(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to export");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const getReasonBadge = (reason: string) => {
     switch (reason) {
       case "blocked_ua":
@@ -250,6 +379,10 @@ export default function IPBlacklistPage() {
           <Button variant="outline" onClick={handleRefresh} disabled={syncing}>
             <RefreshCw className={`h-4 w-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
             {syncing ? "Syncing..." : "Sync & Refresh"}
+          </Button>
+          <Button variant="outline" onClick={() => setShowExportDialog(true)}>
+            <Download className="h-4 w-4 mr-2" />
+            Export
           </Button>
           <Button variant="outline" onClick={() => setShowImportDialog(true)}>
             <Upload className="h-4 w-4 mr-2" />
@@ -497,17 +630,20 @@ export default function IPBlacklistPage() {
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>IPs (one per line)</Label>
+              <Label>IPs or CSV (paste data below)</Label>
               <Textarea
-                placeholder={"192.168.1.100\n10.0.0.1\n# Comments are ignored"}
+                placeholder={"Simple list (one IP per line):\n192.168.1.100\n10.0.0.1\n\nOr CSV from export:\nip_address,reason,user_agent,path,expires_at,banned_at\n192.168.1.100,\"blocked_ua\",\"python-httpx/0.12\",..."}
                 value={importText}
                 onChange={(e) => setImportText(e.target.value)}
                 rows={10}
                 className="font-mono text-sm"
               />
+              <p className="text-xs text-muted-foreground mt-1">
+                CSV format auto-detected. For simple list, select reason below.
+              </p>
             </div>
             <div>
-              <Label>Reason</Label>
+              <Label>Default Reason (for simple list)</Label>
               <Select value={importReason} onValueChange={setImportReason}>
                 <SelectTrigger>
                   <SelectValue />
@@ -549,6 +685,58 @@ export default function IPBlacklistPage() {
             </Button>
             <Button variant="destructive" onClick={handleClearAll} disabled={submitting}>
               {submitting ? "Clearing..." : "Unban All"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Export Dialog */}
+      <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Download className="h-5 w-5" />
+              Export IP Blacklist
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Choose export format. {activeOnly ? "Only active bans" : "All bans (including expired)"} will be exported.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <Button
+                variant="outline"
+                onClick={handleExportCSV}
+                disabled={exporting}
+                className="h-24 flex-col gap-2"
+              >
+                <Download className="h-6 w-6" />
+                <div className="text-center">
+                  <p className="font-medium">CSV (Full)</p>
+                  <p className="text-xs text-muted-foreground">IP, reason, UA, path, dates</p>
+                </div>
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleExportList}
+                disabled={exporting}
+                className="h-24 flex-col gap-2"
+              >
+                <Download className="h-6 w-6" />
+                <div className="text-center">
+                  <p className="font-medium">Text (IPs only)</p>
+                  <p className="text-xs text-muted-foreground">One IP per line</p>
+                </div>
+              </Button>
+            </div>
+            <div className="text-xs text-muted-foreground space-y-1">
+              <p><strong>CSV:</strong> Re-importable with full data (reason, UA, expiry dates)</p>
+              <p><strong>Text:</strong> Simple list, imports with &quot;imported&quot; reason</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowExportDialog(false)}>
+              Cancel
             </Button>
           </DialogFooter>
         </DialogContent>
