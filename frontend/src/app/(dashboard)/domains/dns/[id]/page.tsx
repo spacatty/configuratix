@@ -548,10 +548,10 @@ export default function DomainDNSSettingsPage() {
             ttl: 60,
             priority: 0,
             proxied: false,
-            httpInPort: 80,
-            httpOutPort: 80,
-            httpsInPort: 443,
-            httpsOutPort: 443,
+            http_incoming_port: 80,
+            http_outgoing_port: 80,
+            https_incoming_port: 443,
+            https_outgoing_port: 443,
           });
           recordId = newRec.id;
         }
