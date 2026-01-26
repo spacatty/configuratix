@@ -36,6 +36,11 @@ func NewPassthroughHandler(db *database.DB, dnsHandler *DNSHandler) *Passthrough
 	}
 }
 
+// NginxGenerator returns the nginx generator for use by other handlers
+func (h *PassthroughHandler) NginxGenerator() *PassthroughNginxGenerator {
+	return h.nginx
+}
+
 // =============== Record Pool Handlers ===============
 
 // GetRecordPool gets the passthrough pool for a specific DNS record
@@ -133,6 +138,7 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 		IntervalMinutes    int      `json:"interval_minutes"`
 		ScheduledTimes     []string `json:"scheduled_times"`
 		HealthCheckEnabled bool     `json:"health_check_enabled"`
+		ProxyProtocol      *bool    `json:"proxy_protocol"`       // Send PROXY protocol to backend
 		MachineIDs         []string `json:"machine_ids"`
 		GroupIDs           []string `json:"group_ids"` // Machine groups for dynamic membership
 	}
@@ -160,6 +166,11 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 	if req.IntervalMinutes == 0 {
 		req.IntervalMinutes = 60
 	}
+	// Default proxy_protocol to true if not specified
+	proxyProtocol := true
+	if req.ProxyProtocol != nil {
+		proxyProtocol = *req.ProxyProtocol
+	}
 
 	scheduledTimesJSON, _ := json.Marshal(req.ScheduledTimes)
 	groupIDsArray := pq.StringArray(req.GroupIDs)
@@ -172,8 +183,8 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 	err = h.db.Get(&pool, `
 		INSERT INTO dns_passthrough_pools 
 			(dns_record_id, target_ip, target_port, target_port_http, rotation_strategy, rotation_mode, 
-			 interval_minutes, scheduled_times, health_check_enabled, group_ids)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			 interval_minutes, scheduled_times, health_check_enabled, proxy_protocol, group_ids)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (dns_record_id) DO UPDATE SET
 			target_ip = EXCLUDED.target_ip,
 			target_port = EXCLUDED.target_port,
@@ -183,11 +194,12 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 			interval_minutes = EXCLUDED.interval_minutes,
 			scheduled_times = EXCLUDED.scheduled_times,
 			health_check_enabled = EXCLUDED.health_check_enabled,
+			proxy_protocol = EXCLUDED.proxy_protocol,
 			group_ids = EXCLUDED.group_ids,
 			updated_at = NOW()
 		RETURNING *
 	`, recordID, req.TargetIP, req.TargetPort, req.TargetPortHTTP, req.RotationStrategy, req.RotationMode,
-		req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, groupIDsArray)
+		req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, proxyProtocol, groupIDsArray)
 	if err != nil {
 		log.Printf("Failed to upsert pool: %v", err)
 		http.Error(w, "Failed to save pool", http.StatusInternalServerError)
@@ -281,11 +293,31 @@ func (h *PassthroughHandler) DeleteRecordPool(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Get pool and members before deletion for nginx cleanup
+	// Get pool and members before deletion for nginx cleanup (direct + group members)
 	var pool models.PassthroughPool
 	var machineIDs []uuid.UUID
 	if err := h.db.Get(&pool, "SELECT * FROM dns_passthrough_pools WHERE dns_record_id = $1", recordID); err == nil {
+		// Get direct members
 		h.db.Select(&machineIDs, "SELECT machine_id FROM dns_passthrough_members WHERE pool_id = $1", pool.ID)
+		
+		// Also get group members
+		var groupMachineIDs []uuid.UUID
+		h.db.Select(&groupMachineIDs, `
+			SELECT DISTINCT gm.machine_id
+			FROM machine_group_members gm
+			WHERE gm.group_id = ANY($1::uuid[])
+		`, pq.Array(pool.GroupIDs))
+		
+		// Merge and dedupe
+		seen := make(map[uuid.UUID]bool)
+		for _, id := range machineIDs {
+			seen[id] = true
+		}
+		for _, id := range groupMachineIDs {
+			if !seen[id] {
+				machineIDs = append(machineIDs, id)
+			}
+		}
 	}
 
 	// Delete pool (cascade deletes members)
@@ -511,6 +543,7 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 		IntervalMinutes    int      `json:"interval_minutes"`
 		ScheduledTimes     []string `json:"scheduled_times"`
 		HealthCheckEnabled bool     `json:"health_check_enabled"`
+		ProxyProtocol      *bool    `json:"proxy_protocol"`       // Send PROXY protocol to backend
 		MachineIDs         []string `json:"machine_ids"`
 		GroupIDs           []string `json:"group_ids"` // Machine groups for dynamic membership
 	}
@@ -538,6 +571,11 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 	if req.IntervalMinutes == 0 {
 		req.IntervalMinutes = 60
 	}
+	// Default proxy_protocol to true if not specified
+	proxyProtocolWild := true
+	if req.ProxyProtocol != nil {
+		proxyProtocolWild = *req.ProxyProtocol
+	}
 
 	scheduledTimesJSON, _ := json.Marshal(req.ScheduledTimes)
 	groupIDsArray := pq.StringArray(req.GroupIDs)
@@ -546,8 +584,8 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 	err = h.db.Get(&pool, `
 		INSERT INTO dns_wildcard_pools 
 			(dns_domain_id, include_root, target_ip, target_port, target_port_http, rotation_strategy, 
-			 rotation_mode, interval_minutes, scheduled_times, health_check_enabled, group_ids)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			 rotation_mode, interval_minutes, scheduled_times, health_check_enabled, proxy_protocol, group_ids)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (dns_domain_id) DO UPDATE SET
 			include_root = EXCLUDED.include_root,
 			target_ip = EXCLUDED.target_ip,
@@ -558,11 +596,12 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 			interval_minutes = EXCLUDED.interval_minutes,
 			scheduled_times = EXCLUDED.scheduled_times,
 			health_check_enabled = EXCLUDED.health_check_enabled,
+			proxy_protocol = EXCLUDED.proxy_protocol,
 			group_ids = EXCLUDED.group_ids,
 			updated_at = NOW()
 		RETURNING *
 	`, domainID, req.IncludeRoot, req.TargetIP, req.TargetPort, req.TargetPortHTTP, req.RotationStrategy,
-		req.RotationMode, req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, groupIDsArray)
+		req.RotationMode, req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, proxyProtocolWild, groupIDsArray)
 	if err != nil {
 		log.Printf("Failed to upsert wildcard pool: %v", err)
 		http.Error(w, "Failed to save pool", http.StatusInternalServerError)
@@ -648,11 +687,31 @@ func (h *PassthroughHandler) DeleteWildcardPool(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Get pool and members before deletion for nginx cleanup
+	// Get pool and members before deletion for nginx cleanup (direct + group members)
 	var pool models.WildcardPool
 	var machineIDs []uuid.UUID
 	if err := h.db.Get(&pool, "SELECT * FROM dns_wildcard_pools WHERE dns_domain_id = $1", domainID); err == nil {
+		// Get direct members
 		h.db.Select(&machineIDs, "SELECT machine_id FROM dns_wildcard_pool_members WHERE pool_id = $1", pool.ID)
+		
+		// Also get group members
+		var groupMachineIDs []uuid.UUID
+		h.db.Select(&groupMachineIDs, `
+			SELECT DISTINCT gm.machine_id
+			FROM machine_group_members gm
+			WHERE gm.group_id = ANY($1::uuid[])
+		`, pq.Array(pool.GroupIDs))
+		
+		// Merge and dedupe
+		seen := make(map[uuid.UUID]bool)
+		for _, id := range machineIDs {
+			seen[id] = true
+		}
+		for _, id := range groupMachineIDs {
+			if !seen[id] {
+				machineIDs = append(machineIDs, id)
+			}
+		}
 	}
 
 	h.db.Exec("DELETE FROM dns_wildcard_pools WHERE dns_domain_id = $1", domainID)
@@ -1205,9 +1264,63 @@ func (h *PassthroughHandler) updateWildcardDNS(domainID, machineID uuid.UUID, in
 		`, domainID, machineIP)
 	}
 
-	// TODO: Call DNS provider
-	h.db.Exec("UPDATE dns_records SET sync_status = 'synced' WHERE dns_domain_id = $1 AND mode = 'dynamic'", domainID)
+	// Sync wildcard records to DNS provider
+	var domainInfo struct {
+		FQDN         string     `db:"fqdn"`
+		DNSAccountID *uuid.UUID `db:"dns_account_id"`
+	}
+	h.db.Get(&domainInfo, "SELECT fqdn, dns_account_id FROM dns_managed_domains WHERE id = $1", domainID)
 
+	if domainInfo.DNSAccountID == nil {
+		// No DNS account, just mark as synced
+		h.db.Exec("UPDATE dns_records SET sync_status = 'synced' WHERE dns_domain_id = $1 AND mode = 'dynamic'", domainID)
+		return nil
+	}
+
+	// Get DNS account and create provider
+	var account models.DNSAccount
+	if err := h.db.Get(&account, "SELECT * FROM dns_accounts WHERE id = $1", *domainInfo.DNSAccountID); err != nil {
+		log.Printf("Failed to get DNS account for wildcard sync: %v", err)
+		h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE dns_domain_id = $2 AND mode = 'dynamic'",
+			"DNS account not found", domainID)
+		return nil
+	}
+
+	// Build apiID (DNSPod needs it, others don't)
+	apiID := ""
+	if account.ApiID != nil {
+		apiID = *account.ApiID
+	}
+	provider, err := dns.NewProvider(account.Provider, apiID, account.ApiToken)
+	if err != nil {
+		log.Printf("Failed to create DNS provider for wildcard sync: %v", err)
+		h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE dns_domain_id = $2 AND mode = 'dynamic'",
+			err.Error(), domainID)
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Sync wildcard record
+	wildcardRecord := dns.Record{Name: "*", Type: "A", Value: machineIP, TTL: 60}
+	if _, createErr := provider.CreateRecord(ctx, domainInfo.FQDN, wildcardRecord); createErr != nil {
+		// Try update if create fails
+		if _, updateErr := provider.UpdateRecord(ctx, domainInfo.FQDN, "", wildcardRecord); updateErr != nil {
+			log.Printf("Failed to sync wildcard record: %v", updateErr)
+		}
+	}
+
+	// Sync root record if included
+	if includeRoot {
+		rootRecord := dns.Record{Name: "@", Type: "A", Value: machineIP, TTL: 60}
+		if _, createErr := provider.CreateRecord(ctx, domainInfo.FQDN, rootRecord); createErr != nil {
+			if _, updateErr := provider.UpdateRecord(ctx, domainInfo.FQDN, "", rootRecord); updateErr != nil {
+				log.Printf("Failed to sync root record: %v", updateErr)
+			}
+		}
+	}
+
+	h.db.Exec("UPDATE dns_records SET sync_status = 'synced', sync_error = NULL WHERE dns_domain_id = $1 AND mode = 'dynamic'", domainID)
 	return nil
 }
 

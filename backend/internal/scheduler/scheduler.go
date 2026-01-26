@@ -57,7 +57,7 @@ func (s *Scheduler) checkDomains() {
 
 	var domains []DomainCheck
 	err := s.db.Select(&domains, `
-		SELECT d.id, d.fqdn, d.assigned_machine_id, m.ip_address as machine_ip, d.status
+		SELECT d.id, d.fqdn, d.assigned_machine_id, COALESCE(m.primary_ip, m.ip_address) as machine_ip, d.status
 		FROM domains d
 		LEFT JOIN machines m ON d.assigned_machine_id = m.id
 	`)

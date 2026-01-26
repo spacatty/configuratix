@@ -304,6 +304,7 @@ export interface PassthroughPool {
   interval_minutes: number;
   scheduled_times: string[];
   health_check_enabled: boolean;
+  proxy_protocol: boolean;   // Send PROXY protocol to backend
   current_machine_id: string | null;
   current_index: number;
   is_paused: boolean;
@@ -343,6 +344,7 @@ export interface PassthroughPoolRequest {
   interval_minutes?: number;
   scheduled_times?: string[];
   health_check_enabled?: boolean;
+  proxy_protocol?: boolean;   // Send PROXY protocol to backend
   machine_ids: string[];
   group_ids?: string[]; // Machine groups for dynamic membership
 }
@@ -359,6 +361,7 @@ export interface WildcardPool {
   interval_minutes: number;
   scheduled_times: string[];
   health_check_enabled: boolean;
+  proxy_protocol: boolean;   // Send PROXY protocol to backend
   current_machine_id: string | null;
   current_index: number;
   is_paused: boolean;
@@ -398,6 +401,7 @@ export interface WildcardPoolRequest {
   interval_minutes?: number;
   scheduled_times?: string[];
   health_check_enabled?: boolean;
+  proxy_protocol?: boolean;   // Send PROXY protocol to backend
   machine_ids: string[];
   group_ids?: string[]; // Machine groups for dynamic membership
 }
@@ -1272,6 +1276,11 @@ class ApiClient {
 
   async getWildcardPoolHistory(poolId: string): Promise<RotationHistory[]> {
     return this.request(`/api/dns/wildcard/${poolId}/history`);
+  }
+
+  // Regenerate nginx passthrough configs for all pool members
+  async regeneratePoolConfigs(poolId: string, isWildcard: boolean): Promise<void> {
+    return this.request(`/api/dns/passthrough/${poolId}/apply-nginx?wildcard=${isWildcard}`, { method: "POST" });
   }
 
   // Nginx Configs

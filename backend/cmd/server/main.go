@@ -236,6 +236,9 @@ func main() {
 	apiRouter.HandleFunc("/dns/passthrough/nginx/{machineId}", passthroughHandler.GetNginxConfig).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/dns/passthrough/nginx/{machineId}/apply", passthroughHandler.ApplyNginxConfig).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/dns/passthrough/{poolId}/apply-nginx", passthroughHandler.ApplyPoolNginxConfigs).Methods("POST", "OPTIONS")
+	
+	// Wire up nginx generator to machine groups handler for automatic config regeneration
+	machineGroupsHandler.SetNginxGenerator(passthroughHandler.NginxGenerator())
 
 	// Security Module
 	securityHandler := handlers.NewSecurityHandler(db)

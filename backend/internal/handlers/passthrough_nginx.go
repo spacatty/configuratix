@@ -177,6 +177,34 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 		return "", nil // No passthrough config needed
 	}
 
+	// Check if any pool has proxy_protocol enabled (direct members + group members)
+	var proxyProtocolEnabled bool
+	var proxyProtocolCount int
+	g.db.Get(&proxyProtocolCount, `
+		SELECT COUNT(*) FROM (
+			-- Direct record pool members
+			SELECT 1 FROM dns_passthrough_pools pp
+			JOIN dns_passthrough_members pm ON pm.pool_id = pp.id
+			WHERE pm.machine_id = $1 AND pm.is_enabled = true AND COALESCE(pp.proxy_protocol, true) = true
+			UNION ALL
+			-- Record pool members via groups
+			SELECT 1 FROM dns_passthrough_pools pp
+			JOIN machine_group_members gm ON gm.group_id = ANY(pp.group_ids)
+			WHERE gm.machine_id = $1 AND COALESCE(pp.proxy_protocol, true) = true
+			UNION ALL
+			-- Direct wildcard pool members
+			SELECT 1 FROM dns_wildcard_pools wp
+			JOIN dns_wildcard_pool_members wm ON wm.pool_id = wp.id
+			WHERE wm.machine_id = $1 AND wm.is_enabled = true AND COALESCE(wp.proxy_protocol, true) = true
+			UNION ALL
+			-- Wildcard pool members via groups
+			SELECT 1 FROM dns_wildcard_pools wp
+			JOIN machine_group_members gm ON gm.group_id = ANY(wp.group_ids)
+			WHERE gm.machine_id = $1 AND COALESCE(wp.proxy_protocol, true) = true
+		) t
+	`, machineID)
+	proxyProtocolEnabled = proxyProtocolCount > 0
+
 	// Generate config
 	// NOTE: This file is included FROM WITHIN a stream{} block in nginx.conf
 	// So we do NOT wrap with stream{} here - only the inner directives
@@ -222,6 +250,9 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 	config.WriteString("    listen 443;\n")
 	config.WriteString("    ssl_preread on;\n")
 	config.WriteString("    proxy_pass $backend_https;\n")
+	if proxyProtocolEnabled {
+		config.WriteString("    proxy_protocol on;\n") // Send PROXY protocol to backend for real client IP
+	}
 	config.WriteString("    proxy_connect_timeout 10s;\n")
 	config.WriteString("    proxy_timeout 30m;\n")
 	config.WriteString("}\n\n")
@@ -573,20 +604,64 @@ echo "Passthrough cleanup complete"
 	return nil
 }
 
-// ApplyToAllPoolMembers applies config to all members of a pool
+// ApplyToAllPoolMembers applies config to all members of a pool (direct + group members)
 func (g *PassthroughNginxGenerator) ApplyToAllPoolMembers(poolID uuid.UUID, isWildcard bool) error {
 	var machineIDs []uuid.UUID
 
 	if isWildcard {
+		// Get direct members
 		g.db.Select(&machineIDs, `
 			SELECT machine_id FROM dns_wildcard_pool_members 
 			WHERE pool_id = $1 AND is_enabled = true
 		`, poolID)
+		
+		// Also get machines from groups
+		var groupMachineIDs []uuid.UUID
+		g.db.Select(&groupMachineIDs, `
+			SELECT DISTINCT gm.machine_id
+			FROM dns_wildcard_pools wp
+			JOIN machine_group_members gm ON gm.group_id = ANY(wp.group_ids)
+			WHERE wp.id = $1
+		`, poolID)
+		
+		// Merge and dedupe
+		seen := make(map[uuid.UUID]bool)
+		for _, id := range machineIDs {
+			seen[id] = true
+		}
+		for _, id := range groupMachineIDs {
+			if !seen[id] {
+				machineIDs = append(machineIDs, id)
+				seen[id] = true
+			}
+		}
 	} else {
+		// Get direct members
 		g.db.Select(&machineIDs, `
 			SELECT machine_id FROM dns_passthrough_members 
 			WHERE pool_id = $1 AND is_enabled = true
 		`, poolID)
+		
+		// Also get machines from groups
+		var groupMachineIDs []uuid.UUID
+		g.db.Select(&groupMachineIDs, `
+			SELECT DISTINCT gm.machine_id
+			FROM dns_passthrough_pools pp
+			JOIN machine_group_members gm ON gm.group_id = ANY(pp.group_ids)
+			WHERE pp.id = $1
+		`, poolID)
+		
+		// Merge and dedupe
+		seen := make(map[uuid.UUID]bool)
+		for _, id := range machineIDs {
+			seen[id] = true
+		}
+		for _, id := range groupMachineIDs {
+			if !seen[id] {
+				machineIDs = append(machineIDs, id)
+				seen[id] = true
+			}
+		}
 	}
 
 	for _, machineID := range machineIDs {

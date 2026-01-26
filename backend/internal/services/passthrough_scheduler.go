@@ -146,7 +146,7 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 	
 	// Get direct members
 	err := s.db.Select(&members, `
-		SELECT pm.machine_id, m.ip_address as machine_ip, a.last_seen, pm.priority
+		SELECT pm.machine_id, COALESCE(m.primary_ip, m.ip_address) as machine_ip, a.last_seen, pm.priority
 		FROM dns_passthrough_members pm
 		JOIN machines m ON pm.machine_id = m.id
 		LEFT JOIN agents a ON m.agent_id = a.id
@@ -162,7 +162,7 @@ func (s *PassthroughScheduler) rotateRecordPool(pool models.PassthroughPool) {
 	if len(pool.GroupIDs) > 0 {
 		var groupMembers []MemberInfo
 		err := s.db.Select(&groupMembers, `
-			SELECT gm.machine_id, m.ip_address as machine_ip, a.last_seen, 100 as priority
+			SELECT gm.machine_id, COALESCE(m.primary_ip, m.ip_address) as machine_ip, a.last_seen, 100 as priority
 			FROM machine_group_members gm
 			JOIN machines m ON gm.machine_id = m.id
 			LEFT JOIN agents a ON m.agent_id = a.id
@@ -282,7 +282,7 @@ func (s *PassthroughScheduler) rotateWildcardPool(pool models.WildcardPool) {
 	
 	// Get direct members
 	s.db.Select(&members, `
-		SELECT wm.machine_id, m.ip_address as machine_ip, a.last_seen, wm.priority
+		SELECT wm.machine_id, COALESCE(m.primary_ip, m.ip_address) as machine_ip, a.last_seen, wm.priority
 		FROM dns_wildcard_pool_members wm
 		JOIN machines m ON wm.machine_id = m.id
 		LEFT JOIN agents a ON m.agent_id = a.id
@@ -294,7 +294,7 @@ func (s *PassthroughScheduler) rotateWildcardPool(pool models.WildcardPool) {
 	if len(pool.GroupIDs) > 0 {
 		var groupMembers []WMemberInfo
 		s.db.Select(&groupMembers, `
-			SELECT gm.machine_id, m.ip_address as machine_ip, a.last_seen, 100 as priority
+			SELECT gm.machine_id, COALESCE(m.primary_ip, m.ip_address) as machine_ip, a.last_seen, 100 as priority
 			FROM machine_group_members gm
 			JOIN machines m ON gm.machine_id = m.id
 			LEFT JOIN agents a ON m.agent_id = a.id
@@ -514,7 +514,65 @@ func (s *PassthroughScheduler) updateWildcardDNS(domainID uuid.UUID, newIP strin
 		`, newIP, domainID)
 	}
 
-	// TODO: Call DNS provider
-	s.db.Exec("UPDATE dns_records SET sync_status = 'synced' WHERE dns_domain_id = $1 AND mode = 'dynamic'", domainID)
+	// Sync to DNS provider
+	var domainInfo struct {
+		FQDN         string     `db:"fqdn"`
+		DNSAccountID *uuid.UUID `db:"dns_account_id"`
+	}
+	s.db.Get(&domainInfo, "SELECT fqdn, dns_account_id FROM dns_managed_domains WHERE id = $1", domainID)
+
+	if domainInfo.DNSAccountID == nil {
+		// No DNS account, just mark as synced
+		s.db.Exec("UPDATE dns_records SET sync_status = 'synced' WHERE dns_domain_id = $1 AND mode = 'dynamic'", domainID)
+		return
+	}
+
+	// Get DNS account and create provider
+	var account struct {
+		Provider string  `db:"provider"`
+		ApiID    *string `db:"api_id"`
+		ApiToken string  `db:"api_token"`
+	}
+	if err := s.db.Get(&account, "SELECT provider, api_id, api_token FROM dns_accounts WHERE id = $1", *domainInfo.DNSAccountID); err != nil {
+		log.Printf("Scheduler: failed to get DNS account for wildcard sync: %v", err)
+		s.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE dns_domain_id = $2 AND mode = 'dynamic'",
+			"DNS account not found", domainID)
+		return
+	}
+
+	apiID := ""
+	if account.ApiID != nil {
+		apiID = *account.ApiID
+	}
+	provider, err := dns.NewProvider(account.Provider, apiID, account.ApiToken)
+	if err != nil {
+		log.Printf("Scheduler: failed to create DNS provider for wildcard sync: %v", err)
+		s.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE dns_domain_id = $2 AND mode = 'dynamic'",
+			err.Error(), domainID)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Sync wildcard record
+	wildcardRecord := dns.Record{Name: "*", Type: "A", Value: newIP, TTL: 60}
+	if _, createErr := provider.CreateRecord(ctx, domainInfo.FQDN, wildcardRecord); createErr != nil {
+		if _, updateErr := provider.UpdateRecord(ctx, domainInfo.FQDN, "", wildcardRecord); updateErr != nil {
+			log.Printf("Scheduler: failed to sync wildcard record: %v", updateErr)
+		}
+	}
+
+	// Sync root record if included
+	if includeRoot {
+		rootRecord := dns.Record{Name: "@", Type: "A", Value: newIP, TTL: 60}
+		if _, createErr := provider.CreateRecord(ctx, domainInfo.FQDN, rootRecord); createErr != nil {
+			if _, updateErr := provider.UpdateRecord(ctx, domainInfo.FQDN, "", rootRecord); updateErr != nil {
+				log.Printf("Scheduler: failed to sync root record: %v", updateErr)
+			}
+		}
+	}
+
+	s.db.Exec("UPDATE dns_records SET sync_status = 'synced', sync_error = NULL WHERE dns_domain_id = $1 AND mode = 'dynamic'", domainID)
 }
 

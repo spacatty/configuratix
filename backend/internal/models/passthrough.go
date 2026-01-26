@@ -49,6 +49,7 @@ type PassthroughPool struct {
 	IntervalMinutes    int             `db:"interval_minutes" json:"interval_minutes"`
 	ScheduledTimes     JSONStringArray `db:"scheduled_times" json:"scheduled_times"`         // JSON array
 	HealthCheckEnabled bool            `db:"health_check_enabled" json:"health_check_enabled"`
+	ProxyProtocol      bool            `db:"proxy_protocol" json:"proxy_protocol"`           // Send PROXY protocol to backend
 	CurrentMachineID   *uuid.UUID      `db:"current_machine_id" json:"current_machine_id"`
 	CurrentIndex       int             `db:"current_index" json:"current_index"`
 	IsPaused           bool            `db:"is_paused" json:"is_paused"`
@@ -91,6 +92,7 @@ type WildcardPool struct {
 	IntervalMinutes    int             `db:"interval_minutes" json:"interval_minutes"`
 	ScheduledTimes     JSONStringArray `db:"scheduled_times" json:"scheduled_times"`
 	HealthCheckEnabled bool            `db:"health_check_enabled" json:"health_check_enabled"`
+	ProxyProtocol      bool            `db:"proxy_protocol" json:"proxy_protocol"`       // Send PROXY protocol to backend
 	CurrentMachineID   *uuid.UUID      `db:"current_machine_id" json:"current_machine_id"`
 	CurrentIndex       int             `db:"current_index" json:"current_index"`
 	IsPaused           bool            `db:"is_paused" json:"is_paused"`

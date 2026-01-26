@@ -180,6 +180,10 @@ function PassthroughRecordRow({
                   <History className="h-4 w-4 mr-2" />
                   View History
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => api.regeneratePoolConfigs(poolData.pool.id, false).then(() => toast.success("Config regeneration triggered")).catch(() => toast.error("Failed"))}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Regenerate Configs
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
               </>
             )}
@@ -260,6 +264,7 @@ export default function DomainDNSSettingsPage() {
     interval_minutes: 60,
     scheduled_times: [] as string[],
     health_check_enabled: true,
+    proxy_protocol: true,
     include_root: true,
     machine_ids: [] as string[],
     group_ids: [] as string[],
@@ -276,6 +281,7 @@ export default function DomainDNSSettingsPage() {
     rotation_strategy: "round_robin",
     interval_minutes: 60,
     health_check_enabled: true,
+    proxy_protocol: true,
     machine_ids: [] as string[],
     group_ids: [] as string[],
   });
@@ -385,6 +391,7 @@ export default function DomainDNSSettingsPage() {
         interval_minutes: data.pool.interval_minutes,
         scheduled_times: data.pool.scheduled_times || [],
         health_check_enabled: data.pool.health_check_enabled,
+        proxy_protocol: data.pool.proxy_protocol ?? true,
         include_root: data.pool.include_root,
         machine_ids: data.members.map(m => m.machine_id),
         group_ids: data.pool.group_ids || [],
@@ -407,6 +414,7 @@ export default function DomainDNSSettingsPage() {
         interval_minutes: data.pool.interval_minutes,
         scheduled_times: data.pool.scheduled_times || [],
         health_check_enabled: data.pool.health_check_enabled,
+        proxy_protocol: data.pool.proxy_protocol ?? true,
         include_root: true,
         machine_ids: data.members.map(m => m.machine_id),
         group_ids: data.pool.group_ids || [],
@@ -424,6 +432,7 @@ export default function DomainDNSSettingsPage() {
         interval_minutes: 60,
         scheduled_times: [],
         health_check_enabled: true,
+        proxy_protocol: true,
         include_root: true,
         machine_ids: [],
         group_ids: [],
@@ -509,6 +518,7 @@ export default function DomainDNSSettingsPage() {
         interval_minutes: poolForm.interval_minutes,
         scheduled_times: poolForm.scheduled_times,
         health_check_enabled: poolForm.health_check_enabled,
+        proxy_protocol: poolForm.proxy_protocol,
         machine_ids: poolForm.machine_ids,
         group_ids: poolForm.group_ids,
       });
@@ -518,6 +528,15 @@ export default function DomainDNSSettingsPage() {
       toast.error(err instanceof Error ? err.message : "Failed to save pool");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleRegenerateConfigs = async (poolId: string, isWildcard: boolean) => {
+    try {
+      await api.regeneratePoolConfigs(poolId, isWildcard);
+      toast.success("Config regeneration triggered for all pool machines");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to regenerate configs");
     }
   };
 
@@ -568,6 +587,7 @@ export default function DomainDNSSettingsPage() {
         rotation_mode: "interval",
         interval_minutes: passthroughForm.interval_minutes,
         health_check_enabled: passthroughForm.health_check_enabled,
+        proxy_protocol: passthroughForm.proxy_protocol,
         machine_ids: passthroughForm.machine_ids,
         group_ids: passthroughForm.group_ids,
       });
@@ -609,11 +629,12 @@ export default function DomainDNSSettingsPage() {
         rotation_strategy: poolData.pool.rotation_strategy,
         interval_minutes: poolData.pool.interval_minutes,
         health_check_enabled: poolData.pool.health_check_enabled,
+        proxy_protocol: poolData.pool.proxy_protocol ?? true,
         machine_ids: poolData.members.map(m => m.machine_id),
         group_ids: poolData.pool.group_ids || [],
       });
     } catch {
-      setPassthroughForm(f => ({ ...f, name: record.name, group_ids: [], target_port_http: 80 }));
+      setPassthroughForm(f => ({ ...f, name: record.name, group_ids: [], target_port_http: 80, proxy_protocol: true }));
     }
   };
 
@@ -626,6 +647,7 @@ export default function DomainDNSSettingsPage() {
       rotation_strategy: "round_robin",
       interval_minutes: 60,
       health_check_enabled: true,
+      proxy_protocol: true,
       machine_ids: [],
       group_ids: [],
     });
@@ -1249,7 +1271,7 @@ export default function DomainDNSSettingsPage() {
                         onChange={(e) => setPoolForm(f => ({ ...f, interval_minutes: parseInt(e.target.value) || 60 }))}
                       />
                     </div>
-                    <div className="flex items-end gap-4">
+                    <div className="flex items-end gap-4 flex-wrap">
                       <div className="flex items-center gap-2">
                         <Checkbox
                           id="health_wild"
@@ -1265,6 +1287,14 @@ export default function DomainDNSSettingsPage() {
                           onCheckedChange={(c) => setPoolForm(f => ({ ...f, include_root: !!c }))}
                         />
                         <Label htmlFor="include_root">Include @</Label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          id="proxy_protocol_wild"
+                          checked={poolForm.proxy_protocol}
+                          onCheckedChange={(c) => setPoolForm(f => ({ ...f, proxy_protocol: !!c }))}
+                        />
+                        <Label htmlFor="proxy_protocol_wild" className="cursor-pointer" title="Send PROXY protocol headers to backend for real client IP">PROXY protocol</Label>
                       </div>
                     </div>
                   </div>
@@ -1335,9 +1365,20 @@ export default function DomainDNSSettingsPage() {
                     </p>
                   </div>
 
-                  <Button onClick={handleSaveWildcardPool} disabled={saving} className="w-full">
-                    {saving ? "Saving..." : "Save Wildcard Pool"}
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button onClick={handleSaveWildcardPool} disabled={saving} className="flex-1">
+                      {saving ? "Saving..." : "Save Wildcard Pool"}
+                    </Button>
+                    {wildcardPool && (
+                      <Button 
+                        variant="outline" 
+                        onClick={() => handleRegenerateConfigs(wildcardPool.pool.id, true)}
+                        title="Regenerate nginx configs on all pool machines"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
               ) : (
                 /* Separate Mode - Per-Record Configuration */
@@ -1467,6 +1508,14 @@ export default function DomainDNSSettingsPage() {
                               onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, health_check_enabled: !!c }))}
                             />
                             <Label htmlFor="health_sep">Skip offline</Label>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Checkbox
+                              id="proxy_protocol_sep"
+                              checked={passthroughForm.proxy_protocol}
+                              onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, proxy_protocol: !!c }))}
+                            />
+                            <Label htmlFor="proxy_protocol_sep" className="cursor-pointer" title="Send PROXY protocol to backend">PROXY protocol</Label>
                           </div>
                         </div>
                       </div>

@@ -14,7 +14,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { DataTable } from "@/components/ui/data-table";
 import { api, DNSManagedDomain, DNSAccount } from "@/lib/api";
-import { Globe, CheckCircle, Plus, RefreshCw, Trash, Settings2 } from "lucide-react";
+import { Globe, CheckCircle, Plus, RefreshCw, Trash, Settings2, MoreHorizontal, ExternalLink } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 
 export default function DNSManagementPage() {
@@ -178,30 +185,43 @@ export default function DNSManagementPage() {
             <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-blue-500/20 to-blue-500/5 flex items-center justify-center">
               <Globe className="h-5 w-5 text-blue-500" />
             </div>
-            <div className="flex flex-col gap-1">
-              <span className="font-medium">{domain.fqdn}</span>
-              {getNSStatusBadge(domain.ns_status)}
+            <div>
+              <a 
+                href={`/domains/dns/${domain.id}`}
+                className="font-medium hover:text-primary transition-colors cursor-pointer"
+              >
+                {domain.fqdn}
+              </a>
+              <div className="flex items-center gap-2 mt-0.5">
+                {getNSStatusBadge(domain.ns_status)}
+              </div>
             </div>
           </div>
         );
       },
+      filterFn: (row, id, filterValue) => {
+        return row.original.fqdn.toLowerCase().includes(filterValue.toLowerCase());
+      },
     },
     {
       accessorKey: "dns_account_name",
-      header: "DNS Account",
+      header: "Provider",
       cell: ({ row }) => {
         const domain = row.original;
         if (domain.dns_account_name) {
+          const providerIcon = domain.dns_account_provider === "cloudflare" ? "☁️" 
+            : domain.dns_account_provider === "desec" ? "🔒" 
+            : domain.dns_account_provider === "njalla" ? "🛡️" 
+            : domain.dns_account_provider === "cloudns" ? "🌍" 
+            : "🌐";
           return (
             <div className="flex items-center gap-2">
-              <Badge variant="outline" className="text-xs">
-                {domain.dns_account_provider === "cloudflare" ? "☁️ CF" : domain.dns_account_provider === "desec" ? "🔒 deSEC" : domain.dns_account_provider === "njalla" ? "🛡️ Njalla" : domain.dns_account_provider === "cloudns" ? "🌍 ClouDNS" : "🌐 DNSPod"}
-              </Badge>
-              <span className="text-sm">{domain.dns_account_name}</span>
+              <span className="text-lg">{providerIcon}</span>
+              <span className="text-sm text-muted-foreground">{domain.dns_account_name}</span>
             </div>
           );
         }
-        return <span className="text-muted-foreground text-sm">Not configured</span>;
+        return <span className="text-muted-foreground text-xs">—</span>;
       },
     },
     {
@@ -210,36 +230,44 @@ export default function DNSManagementPage() {
       cell: ({ row }) => {
         const mode = row.original.proxy_mode;
         if (mode === "wildcard") {
-          return <Badge className="bg-purple-500/20 text-purple-400">Wildcard</Badge>;
+          return <Badge variant="outline" className="text-xs bg-purple-500/10 text-purple-500 border-purple-500/30">Wildcard</Badge>;
         } else if (mode === "separate") {
-          return <Badge className="bg-purple-500/20 text-purple-400">Passthrough</Badge>;
+          return <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-500 border-blue-500/30">Passthrough</Badge>;
         }
-        return <Badge variant="secondary">Static</Badge>;
+        return <Badge variant="secondary" className="text-xs">Static</Badge>;
       },
     },
     {
       id: "actions",
+      header: "",
       cell: ({ row }) => {
         const domain = row.original;
         return (
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => openDNSSettings(domain)}
-            >
-              <Settings2 className="h-4 w-4 mr-2" />
-              Configure
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => openDeleteDialog(domain)}
-              className="text-destructive hover:text-destructive"
-            >
-              <Trash className="h-4 w-4" />
-            </Button>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => openDNSSettings(domain)}>
+                <Settings2 className="h-4 w-4 mr-2" />
+                Configure DNS
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => window.open(`https://${domain.fqdn}`, '_blank')}>
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Open Domain
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem 
+                onClick={() => openDeleteDialog(domain)}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash className="h-4 w-4 mr-2" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         );
       },
     },
@@ -304,13 +332,14 @@ export default function DNSManagementPage() {
       )}
 
       {/* Domains Table */}
-      <Card className="border-border/50">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-medium">Managed Domains</CardTitle>
-          <CardDescription>Domains with DNS management enabled</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <DataTable columns={columns} data={domains} />
+      <Card className="border-border/50 bg-card/50">
+        <CardContent className="p-6">
+          <DataTable 
+            columns={columns} 
+            data={domains} 
+            searchKey="fqdn"
+            searchPlaceholder="Search domains..."
+          />
         </CardContent>
       </Card>
 

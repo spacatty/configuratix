@@ -16,11 +16,48 @@ import (
 )
 
 type MachineGroupsHandler struct {
-	db *database.DB
+	db    *database.DB
+	nginx *PassthroughNginxGenerator
 }
 
 func NewMachineGroupsHandler(db *database.DB) *MachineGroupsHandler {
 	return &MachineGroupsHandler{db: db}
+}
+
+// SetNginxGenerator sets the nginx generator (called after PassthroughHandler is created)
+func (h *MachineGroupsHandler) SetNginxGenerator(nginx *PassthroughNginxGenerator) {
+	h.nginx = nginx
+}
+
+// regenerateConfigsForGroupPools regenerates nginx configs for all machines in pools that use a group
+func (h *MachineGroupsHandler) regenerateConfigsForGroupPools(groupID uuid.UUID) {
+	if h.nginx == nil {
+		return
+	}
+
+	// Find all record pools using this group
+	var recordPoolIDs []uuid.UUID
+	h.db.Select(&recordPoolIDs, `SELECT id FROM dns_passthrough_pools WHERE $1 = ANY(group_ids)`, groupID)
+	
+	// Find all wildcard pools using this group
+	var wildcardPoolIDs []uuid.UUID
+	h.db.Select(&wildcardPoolIDs, `SELECT id FROM dns_wildcard_pools WHERE $1 = ANY(group_ids)`, groupID)
+
+	// Regenerate configs for each pool
+	for _, poolID := range recordPoolIDs {
+		go func(pid uuid.UUID) {
+			if err := h.nginx.ApplyToAllPoolMembers(pid, false); err != nil {
+				log.Printf("Failed to regenerate configs for pool %s after group change: %v", pid, err)
+			}
+		}(poolID)
+	}
+	for _, poolID := range wildcardPoolIDs {
+		go func(pid uuid.UUID) {
+			if err := h.nginx.ApplyToAllPoolMembers(pid, true); err != nil {
+				log.Printf("Failed to regenerate configs for wildcard pool %s after group change: %v", pid, err)
+			}
+		}(poolID)
+	}
 }
 
 // ListMachineGroups returns all groups for the current user with machine counts
@@ -365,6 +402,9 @@ func (h *MachineGroupsHandler) SetGroupMembers(w http.ResponseWriter, r *http.Re
 		}
 	}
 
+	// Regenerate nginx configs for pools using this group
+	go h.regenerateConfigsForGroupPools(groupID)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"count":   added,
@@ -440,6 +480,9 @@ func (h *MachineGroupsHandler) AddGroupMembers(w http.ResponseWriter, r *http.Re
 		}
 	}
 
+	// Regenerate nginx configs for pools using this group
+	go h.regenerateConfigsForGroupPools(groupID)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"added":   added,
@@ -477,6 +520,9 @@ func (h *MachineGroupsHandler) RemoveGroupMember(w http.ResponseWriter, r *http.
 		http.Error(w, "Failed to remove machine from group", http.StatusInternalServerError)
 		return
 	}
+
+	// Regenerate nginx configs for pools using this group
+	go h.regenerateConfigsForGroupPools(groupID)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -605,6 +651,14 @@ func (h *MachineGroupsHandler) SetMachineGroups(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Get current groups before removal (for nginx config regeneration)
+	var oldGroupIDs []uuid.UUID
+	h.db.Select(&oldGroupIDs, `
+		SELECT group_id FROM machine_group_members 
+		WHERE machine_id = $1 
+		AND group_id IN (SELECT id FROM machine_groups WHERE owner_id = $2)
+	`, machineID, userID)
+
 	// Remove from all groups owned by this user
 	_, err = h.db.Exec(`
 		DELETE FROM machine_group_members 
@@ -616,6 +670,7 @@ func (h *MachineGroupsHandler) SetMachineGroups(w http.ResponseWriter, r *http.R
 	}
 
 	// Add to new groups
+	var newGroupIDs []uuid.UUID
 	for _, groupIDStr := range req.GroupIDs {
 		groupID, err := uuid.Parse(groupIDStr)
 		if err != nil {
@@ -640,7 +695,21 @@ func (h *MachineGroupsHandler) SetMachineGroups(w http.ResponseWriter, r *http.R
 		`, groupID, machineID, maxPos+1)
 		if err != nil {
 			log.Printf("Failed to add to group %s: %v", groupID, err)
+		} else {
+			newGroupIDs = append(newGroupIDs, groupID)
 		}
+	}
+
+	// Regenerate nginx configs for all affected groups (old + new)
+	allGroups := make(map[uuid.UUID]bool)
+	for _, id := range oldGroupIDs {
+		allGroups[id] = true
+	}
+	for _, id := range newGroupIDs {
+		allGroups[id] = true
+	}
+	for groupID := range allGroups {
+		go h.regenerateConfigsForGroupPools(groupID)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
