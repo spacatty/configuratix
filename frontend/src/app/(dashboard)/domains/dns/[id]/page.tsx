@@ -13,7 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, DNSManagedDomain, DNSAccount, DNSRecord, NSStatus, DNSSyncResult, Machine, PassthroughPoolResponse, WildcardPoolResponse, RotationHistory, MachineGroupWithCount } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
-import { Globe, CheckCircle, XCircle, AlertTriangle, RefreshCw, Copy, Trash, Settings2, Play, Pause, RotateCcw, Server, History, Zap, Users, MoreHorizontal, ArrowLeft, X, Plus } from "lucide-react";
+import { Globe, CheckCircle, XCircle, AlertTriangle, RefreshCw, Copy, Trash, Settings2, Play, Pause, RotateCcw, Server, History, Zap, MoreHorizontal, ArrowLeft, X, Plus } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
@@ -179,10 +179,6 @@ function PassthroughRecordRow({
                 <DropdownMenuItem onClick={() => onShowHistory(poolData.pool.id, false)}>
                   <History className="h-4 w-4 mr-2" />
                   View History
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => api.regeneratePoolConfigs(poolData.pool.id, false).then(() => toast.success("Config regeneration triggered")).catch(() => toast.error("Failed"))}>
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                  Regenerate Configs
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
               </>
@@ -1271,30 +1267,33 @@ export default function DomainDNSSettingsPage() {
                         onChange={(e) => setPoolForm(f => ({ ...f, interval_minutes: parseInt(e.target.value) || 60 }))}
                       />
                     </div>
-                    <div className="flex items-end gap-4 flex-wrap">
-                      <div className="flex items-center gap-2">
-                        <Checkbox
-                          id="health_wild"
-                          checked={poolForm.health_check_enabled}
-                          onCheckedChange={(c) => setPoolForm(f => ({ ...f, health_check_enabled: !!c }))}
-                        />
-                        <Label htmlFor="health_wild">Skip offline servers</Label>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Checkbox
-                          id="include_root"
-                          checked={poolForm.include_root}
-                          onCheckedChange={(c) => setPoolForm(f => ({ ...f, include_root: !!c }))}
-                        />
-                        <Label htmlFor="include_root">Include @</Label>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Checkbox
-                          id="proxy_protocol_wild"
-                          checked={poolForm.proxy_protocol}
-                          onCheckedChange={(c) => setPoolForm(f => ({ ...f, proxy_protocol: !!c }))}
-                        />
-                        <Label htmlFor="proxy_protocol_wild" className="cursor-pointer" title="Send PROXY protocol headers to backend for real client IP">PROXY protocol</Label>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">Options</Label>
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="health_wild"
+                            checked={poolForm.health_check_enabled}
+                            onCheckedChange={(c) => setPoolForm(f => ({ ...f, health_check_enabled: !!c }))}
+                          />
+                          <Label htmlFor="health_wild" className="cursor-pointer text-sm">Skip offline servers</Label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="include_root"
+                            checked={poolForm.include_root}
+                            onCheckedChange={(c) => setPoolForm(f => ({ ...f, include_root: !!c }))}
+                          />
+                          <Label htmlFor="include_root" className="cursor-pointer text-sm">Include @ (root domain)</Label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="proxy_protocol_wild"
+                            checked={poolForm.proxy_protocol}
+                            onCheckedChange={(c) => setPoolForm(f => ({ ...f, proxy_protocol: !!c }))}
+                          />
+                          <Label htmlFor="proxy_protocol_wild" className="cursor-pointer text-sm" title="Send PROXY protocol headers to backend for real client IP">PROXY protocol</Label>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1388,10 +1387,30 @@ export default function DomainDNSSettingsPage() {
                       <h3 className="font-medium">Passthrough Records</h3>
                       <p className="text-sm text-muted-foreground">Configure individual A record pools</p>
                     </div>
-                    <Button onClick={() => { resetPassthroughForm(); setEditingPassthrough(null); setShowAddPassthrough(true); }}>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Add Record
-                    </Button>
+                    <div className="flex gap-2">
+                      {passthroughRecords.length > 0 && (
+                        <Button 
+                          variant="outline" 
+                          onClick={async () => {
+                            try {
+                              // Regenerate configs for all passthrough records
+                              await Promise.all(passthroughRecords.map(r => api.regeneratePoolConfigs(r.id, false)));
+                              toast.success("Config regeneration triggered for all records");
+                            } catch {
+                              toast.error("Failed to regenerate configs");
+                            }
+                          }}
+                          title="Regenerate nginx configs on all pool machines"
+                        >
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Regenerate
+                        </Button>
+                      )}
+                      <Button onClick={() => { resetPassthroughForm(); setEditingPassthrough(null); setShowAddPassthrough(true); }}>
+                        <Plus className="h-4 w-4 mr-2" />
+                        Add Record
+                      </Button>
+                    </div>
                   </div>
 
                   {/* Records Table */}
@@ -1500,22 +1519,25 @@ export default function DomainDNSSettingsPage() {
                             onChange={(e) => setPassthroughForm(f => ({ ...f, interval_minutes: parseInt(e.target.value) || 60 }))}
                           />
                         </div>
-                        <div className="flex items-end pb-2">
-                          <div className="flex items-center gap-2">
-                            <Checkbox
-                              id="health_sep"
-                              checked={passthroughForm.health_check_enabled}
-                              onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, health_check_enabled: !!c }))}
-                            />
-                            <Label htmlFor="health_sep">Skip offline</Label>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Checkbox
-                              id="proxy_protocol_sep"
-                              checked={passthroughForm.proxy_protocol}
-                              onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, proxy_protocol: !!c }))}
-                            />
-                            <Label htmlFor="proxy_protocol_sep" className="cursor-pointer" title="Send PROXY protocol to backend">PROXY protocol</Label>
+                        <div className="space-y-2 pb-2">
+                          <Label className="text-xs text-muted-foreground">Options</Label>
+                          <div className="flex flex-col gap-2">
+                            <div className="flex items-center gap-2">
+                              <Checkbox
+                                id="health_sep"
+                                checked={passthroughForm.health_check_enabled}
+                                onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, health_check_enabled: !!c }))}
+                              />
+                              <Label htmlFor="health_sep" className="cursor-pointer text-sm">Skip offline</Label>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Checkbox
+                                id="proxy_protocol_sep"
+                                checked={passthroughForm.proxy_protocol}
+                                onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, proxy_protocol: !!c }))}
+                              />
+                              <Label htmlFor="proxy_protocol_sep" className="cursor-pointer text-sm" title="Send PROXY protocol to backend">PROXY protocol</Label>
+                            </div>
                           </div>
                         </div>
                       </div>

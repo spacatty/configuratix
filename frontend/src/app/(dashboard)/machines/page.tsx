@@ -20,18 +20,12 @@ import {
   Copy, 
   Plus, 
   Server, 
-  Activity, 
   Trash2, 
   ExternalLink,
   Shield,
-  HardDrive,
-  Cpu,
   MoreHorizontal,
   FolderOpen,
   Pencil,
-  GripVertical,
-  ChevronUp,
-  ChevronDown,
   Users
 } from "lucide-react";
 import {
@@ -299,28 +293,24 @@ export default function MachinesPage() {
       cell: ({ row }) => {
         const machine = row.original;
         const displayName = machine.title || machine.hostname || "Unknown";
-        const showHostname = machine.title && machine.hostname && machine.title !== machine.hostname;
+        const isOnline = machine.last_seen && (new Date().getTime() - new Date(machine.last_seen).getTime()) / 1000 / 60 < 5;
+        const isIdle = machine.last_seen && (new Date().getTime() - new Date(machine.last_seen).getTime()) / 1000 / 60 < 60;
         return (
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center">
-              <Server className="h-5 w-5 text-primary" />
+          <div className="flex items-center gap-2.5">
+            <div className="relative">
+              <div className="h-8 w-8 rounded-md bg-muted/50 flex items-center justify-center">
+                <Server className="h-4 w-4 text-muted-foreground" />
+              </div>
+              <div className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background ${isOnline ? 'bg-green-500' : isIdle ? 'bg-yellow-500' : 'bg-muted-foreground'}`} />
             </div>
-            <div>
+            <div className="min-w-0">
               <a 
                 href={`/machines/${machine.id}`}
-                className="font-medium hover:text-primary transition-colors cursor-pointer"
+                className="font-medium text-sm hover:text-primary transition-colors cursor-pointer block truncate"
               >
                 {displayName}
               </a>
-              <div className="text-xs text-muted-foreground">
-                {showHostname && (
-                  <>
-                    <span>{machine.hostname}</span>
-                    <span className="mx-1">•</span>
-                  </>
-                )}
-                <span>{machine.primary_ip || machine.ip_address || "No IP"}</span>
-              </div>
+              <span className="text-xs text-muted-foreground font-mono">{machine.primary_ip || machine.ip_address || "—"}</span>
             </div>
           </div>
         );
@@ -337,108 +327,76 @@ export default function MachinesPage() {
       },
     },
     {
-      accessorKey: "status",
-      header: "Status",
-      cell: ({ row }) => getStatusBadge(row.original),
-    },
-    {
       accessorKey: "project_name",
       header: "Project",
       cell: ({ row }) => {
         const project = row.original.project_name;
         return project ? (
-          <Badge variant="outline" className="text-xs">
-            <FolderOpen className="h-3 w-3 mr-1" />
-            {project}
-          </Badge>
+          <span className="text-xs text-muted-foreground">{project}</span>
         ) : (
-          <span className="text-muted-foreground text-xs">—</span>
+          <span className="text-muted-foreground/50 text-xs">—</span>
         );
       },
     },
     {
-      accessorKey: "cpu_percent",
-      header: "CPU",
+      accessorKey: "resources",
+      header: "Resources",
       cell: ({ row }) => {
-        const cpu = row.original.cpu_percent || 0;
+        const machine = row.original;
+        const cpu = machine.cpu_percent || 0;
+        const memUsed = machine.memory_used || 0;
+        const memTotal = machine.memory_total || 0;
+        const memPercent = memTotal > 0 ? (memUsed / memTotal) * 100 : 0;
+        const diskUsed = machine.disk_used || 0;
+        const diskTotal = machine.disk_total || 0;
+        const diskPercent = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
+        
+        const getBarColor = (pct: number) => pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-yellow-500' : 'bg-green-500';
+        
         return (
-          <div className="flex items-center gap-2">
-            <Cpu className="h-4 w-4 text-muted-foreground" />
-            <div className="w-16 h-2 bg-muted rounded-full overflow-hidden">
-              <div 
-                className={`h-full ${cpu > 80 ? 'bg-red-500' : cpu > 50 ? 'bg-yellow-500' : 'bg-green-500'}`}
-                style={{ width: `${Math.min(cpu, 100)}%` }}
-              />
+          <div className="flex items-center gap-3 text-xs">
+            <div className="flex items-center gap-1.5" title={`CPU: ${cpu.toFixed(0)}%`}>
+              <span className="text-muted-foreground w-6">CPU</span>
+              <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className={`h-full ${getBarColor(cpu)}`} style={{ width: `${Math.min(cpu, 100)}%` }} />
+              </div>
+              <span className="text-muted-foreground w-7 text-right">{cpu.toFixed(0)}%</span>
             </div>
-            <span className="text-xs text-muted-foreground w-10">{cpu.toFixed(0)}%</span>
-          </div>
-        );
-      },
-    },
-    {
-      accessorKey: "memory_used",
-      header: "Memory",
-      cell: ({ row }) => {
-        const used = row.original.memory_used || 0;
-        const total = row.original.memory_total || 0;
-        const percent = total > 0 ? (used / total) * 100 : 0;
-        return (
-          <div className="flex items-center gap-2">
-            <Activity className="h-4 w-4 text-muted-foreground" />
-            <div className="w-16 h-2 bg-muted rounded-full overflow-hidden">
-              <div 
-                className={`h-full ${percent > 80 ? 'bg-red-500' : percent > 50 ? 'bg-yellow-500' : 'bg-green-500'}`}
-                style={{ width: `${Math.min(percent, 100)}%` }}
-              />
+            <div className="flex items-center gap-1.5" title={`RAM: ${formatBytes(memUsed)} / ${formatBytes(memTotal)}`}>
+              <span className="text-muted-foreground w-6">RAM</span>
+              <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className={`h-full ${getBarColor(memPercent)}`} style={{ width: `${Math.min(memPercent, 100)}%` }} />
+              </div>
+              <span className="text-muted-foreground w-7 text-right">{memPercent.toFixed(0)}%</span>
             </div>
-            <span className="text-xs text-muted-foreground w-20">{formatBytes(used)}</span>
-          </div>
-        );
-      },
-    },
-    {
-      accessorKey: "disk_used",
-      header: "Disk",
-      cell: ({ row }) => {
-        const used = row.original.disk_used || 0;
-        const total = row.original.disk_total || 0;
-        const percent = total > 0 ? (used / total) * 100 : 0;
-        return (
-          <div className="flex items-center gap-2">
-            <HardDrive className="h-4 w-4 text-muted-foreground" />
-            <div className="w-16 h-2 bg-muted rounded-full overflow-hidden">
-              <div 
-                className={`h-full ${percent > 80 ? 'bg-red-500' : percent > 50 ? 'bg-yellow-500' : 'bg-green-500'}`}
-                style={{ width: `${Math.min(percent, 100)}%` }}
-              />
+            <div className="flex items-center gap-1.5" title={`Disk: ${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`}>
+              <span className="text-muted-foreground w-6">Disk</span>
+              <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className={`h-full ${getBarColor(diskPercent)}`} style={{ width: `${Math.min(diskPercent, 100)}%` }} />
+              </div>
+              <span className="text-muted-foreground w-7 text-right">{diskPercent.toFixed(0)}%</span>
             </div>
-            <span className="text-xs text-muted-foreground w-20">{formatBytes(used)}</span>
           </div>
         );
       },
     },
     {
       accessorKey: "security",
-      header: "Security",
+      header: "",
       cell: ({ row }) => {
         const machine = row.original;
+        const hasAny = machine.ufw_enabled || machine.fail2ban_enabled || machine.access_token_set;
+        if (!hasAny) return null;
         return (
           <div className="flex items-center gap-1">
             {machine.ufw_enabled && (
-              <Badge variant="outline" className="text-xs bg-green-500/10 text-green-500 border-green-500/30">
-                <Shield className="h-3 w-3 mr-1" />
-                UFW
-              </Badge>
+              <span className="text-green-500" title="UFW Enabled"><Shield className="h-3.5 w-3.5" /></span>
             )}
             {machine.fail2ban_enabled && (
-              <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-500 border-blue-500/30">
-                F2B
-              </Badge>
+              <span className="text-blue-500 text-xs font-medium" title="Fail2Ban Enabled">F2B</span>
             )}
             {machine.access_token_set && (
-              <Badge variant="outline" className="text-xs bg-purple-500/10 text-purple-500 border-purple-500/30">
-                🔒
-              </Badge>
+              <span title="Access Token Set">🔒</span>
             )}
           </div>
         );

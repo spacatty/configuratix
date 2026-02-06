@@ -579,19 +579,143 @@ nginx -t
 	"remove_domain": {
 		ID:          "remove_domain",
 		Name:        "Remove Domain Configuration",
-		Description: "Remove nginx configuration for a domain (both HTTP and passthrough)",
+		Description: "Remove nginx configuration for a domain (both HTTP and passthrough) and regenerate consolidated config",
 		Category:    "domains",
 		Variables: []VariableDef{
 			{Name: "domain", Type: "string", Required: true, Description: "Domain name to remove"},
 		},
 		OnError: "continue",
 		Steps: []Step{
-			// Remove HTTP config
+			// Remove marker file and old HTTP config
+			{Action: "exec", Command: "rm -f /etc/nginx/stream.d/passthrough-{{domain}}.conf", Timeout: 10},
 			{Action: "exec", Command: "rm -f /etc/nginx/conf.d/configuratix/{{domain}}.conf", Timeout: 10},
-			// Remove passthrough/stream config
-			{Action: "exec", Command: "rm -f /etc/nginx/stream.d/{{domain}}.conf", Timeout: 10},
-			{Action: "exec", Command: "nginx -t 2>&1 || true", Timeout: 30},
-			{Action: "service", Name: "nginx", Op: "reload"},
+			// Regenerate consolidated config from remaining markers
+			{Action: "exec", Command: `
+#!/bin/bash
+set -e
+
+STREAM_DIR="/etc/nginx/stream.d"
+CONFIG_FILE="$STREAM_DIR/configuratix-passthrough-manual.conf"
+
+echo "=== Regenerating passthrough config ==="
+
+# Collect all domains from marker files
+declare -A HTTPS_TARGETS
+declare -A HTTP_TARGETS
+
+for marker in "$STREAM_DIR"/passthrough-*.conf; do
+    [ -f "$marker" ] || continue
+    
+    # Extract domain from filename (passthrough-domain.com.conf -> domain.com)
+    filename=$(basename "$marker")
+    domain="${filename#passthrough-}"
+    domain="${domain%.conf}"
+    
+    # Extract target from marker file
+    target_https=$(grep "^# Target HTTPS:" "$marker" 2>/dev/null | cut -d: -f2- | tr -d ' ')
+    target_http=$(grep "^# Target HTTP:" "$marker" 2>/dev/null | cut -d: -f2- | tr -d ' ')
+    
+    if [ -n "$target_https" ]; then
+        HTTPS_TARGETS["$domain"]="$target_https"
+        echo "Found: $domain -> HTTPS: $target_https, HTTP: $target_http"
+    fi
+    if [ -n "$target_http" ]; then
+        HTTP_TARGETS["$domain"]="$target_http"
+    fi
+done
+
+# If no domains left, remove config file and re-enable disabled sites
+if [ ${#HTTPS_TARGETS[@]} -eq 0 ]; then
+    echo "No passthrough domains remaining, cleaning up..."
+    rm -f "$CONFIG_FILE"
+    
+    # Re-enable sites that were disabled by passthrough
+    SITES_ENABLED="/etc/nginx/sites-enabled"
+    SITES_DISABLED="/etc/nginx/sites-disabled-by-passthrough"
+    if [ -d "$SITES_DISABLED" ]; then
+        echo "Re-enabling disabled sites..."
+        for conf in "$SITES_DISABLED"/*; do
+            [ -f "$conf" ] || continue
+            confname=$(basename "$conf")
+            echo "  Re-enabling $confname"
+            mv "$conf" "$SITES_ENABLED/$confname"
+        done
+        rmdir "$SITES_DISABLED" 2>/dev/null || true
+    fi
+    
+    nginx -t && (systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || true)
+    echo "Passthrough removed, original sites restored"
+    exit 0
+fi
+
+# Generate consolidated config
+cat > "$CONFIG_FILE" << 'HEADER'
+# Configuratix Manual Passthrough Configuration
+# Auto-generated - DO NOT EDIT MANUALLY
+# Domains are tracked via passthrough-*.conf marker files
+
+HEADER
+
+# SNI map for HTTPS
+echo "# SNI-based backend routing for HTTPS" >> "$CONFIG_FILE"
+echo "map \$ssl_preread_server_name \$backend_https {" >> "$CONFIG_FILE"
+echo "    default reject;" >> "$CONFIG_FILE"
+for domain in "${!HTTPS_TARGETS[@]}"; do
+    echo "    $domain ${HTTPS_TARGETS[$domain]};" >> "$CONFIG_FILE"
+done
+echo "}" >> "$CONFIG_FILE"
+echo "" >> "$CONFIG_FILE"
+
+# Reject upstream
+cat >> "$CONFIG_FILE" << 'REJECT'
+# Reject upstream (closed connection)
+upstream reject {
+    server 127.0.0.1:1 down;
+}
+
+REJECT
+
+# HTTPS server block
+cat >> "$CONFIG_FILE" << 'HTTPS'
+# HTTPS Passthrough (TLS SNI-based routing)
+server {
+    listen 443;
+    ssl_preread on;
+    proxy_pass $backend_https;
+    proxy_protocol on;
+    proxy_connect_timeout 10s;
+    proxy_timeout 30m;
+}
+
+HTTPS
+
+# HTTP server block - use first target as default (stream can't route by Host header)
+first_http_target=""
+for domain in "${!HTTP_TARGETS[@]}"; do
+    first_http_target="${HTTP_TARGETS[$domain]}"
+    break
+done
+
+if [ -n "$first_http_target" ]; then
+    cat >> "$CONFIG_FILE" << EOF
+# HTTP Passthrough (Layer 4 - all traffic to backend)
+server {
+    listen 80;
+    proxy_pass $first_http_target;
+    proxy_protocol on;
+    proxy_connect_timeout 10s;
+    proxy_timeout 30m;
+}
+EOF
+fi
+
+echo "Regenerated config with ${#HTTPS_TARGETS[@]} domain(s)"
+cat "$CONFIG_FILE"
+
+# Test and reload
+nginx -t
+systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || systemctl start nginx
+`, Timeout: 60},
 		},
 	},
 
@@ -602,203 +726,250 @@ nginx -t
 		Category:    "domains",
 		Variables: []VariableDef{
 			{Name: "domain", Type: "string", Required: true, Description: "Domain name"},
-			{Name: "target", Type: "string", Required: true, Description: "Backend target (host:port)"},
+			{Name: "target", Type: "string", Required: true, Description: "Backend target IP address"},
+			{Name: "https_port", Type: "string", Required: false, Default: "443", Description: "Backend HTTPS port"},
+			{Name: "http_port", Type: "string", Required: false, Default: "80", Description: "Backend HTTP port"},
 		},
 		OnError: "stop",
 		Steps: []Step{
-			// Create directories
-			{Action: "exec", Command: "mkdir -p /etc/nginx/stream.d /etc/nginx/conf.d/configuratix", Timeout: 10},
-			// Remove any existing HTTP config for this domain (switching from HTTP to passthrough)
-			{Action: "exec", Command: "rm -f /etc/nginx/conf.d/configuratix/{{domain}}.conf", Timeout: 10},
-			// Ensure nginx stream module is available and working
+			// Single atomic setup and config script
 			{Action: "exec", Command: `
-NGINX_CONF="/etc/nginx/nginx.conf"
+#!/bin/bash
+set -e
 
+DOMAIN="{{domain}}"
+TARGET="{{target}}"
+HTTPS_PORT="{{https_port}}"
+HTTP_PORT="{{http_port}}"
+
+# Default ports if not specified
+[ -z "$HTTPS_PORT" ] && HTTPS_PORT="443"
+[ -z "$HTTP_PORT" ] && HTTP_PORT="80"
+
+NGINX_CONF="/etc/nginx/nginx.conf"
+STREAM_DIR="/etc/nginx/stream.d"
+CONFIG_FILE="$STREAM_DIR/configuratix-passthrough-manual.conf"
+MARKER_FILE="$STREAM_DIR/passthrough-${DOMAIN}.conf"
+
+echo "=== Configuratix Passthrough Setup for $DOMAIN ==="
+echo "Target: $TARGET (HTTPS: $HTTPS_PORT, HTTP: $HTTP_PORT)"
+
+# 1. Create directories
+mkdir -p "$STREAM_DIR" /etc/nginx/conf.d/configuratix
+
+# 2. Remove any old HTTP-block config for this domain
+rm -f "/etc/nginx/conf.d/configuratix/${DOMAIN}.conf"
+
+# 3. Disable sites-enabled configs that listen on ports 80/443
+# (Stream passthrough needs exclusive access to these ports)
+echo "=== Checking for conflicting site configs ==="
+SITES_ENABLED="/etc/nginx/sites-enabled"
+SITES_DISABLED="/etc/nginx/sites-disabled-by-passthrough"
+mkdir -p "$SITES_DISABLED"
+
+if [ -d "$SITES_ENABLED" ]; then
+    for conf in "$SITES_ENABLED"/*; do
+        [ -f "$conf" ] || [ -L "$conf" ] || continue
+        confname=$(basename "$conf")
+        
+        # Check if this config listens on 80 or 443
+        if grep -qE 'listen\s+(80|443)' "$conf" 2>/dev/null; then
+            echo "Disabling $confname (listens on 80/443)..."
+            mv "$conf" "$SITES_DISABLED/$confname"
+        fi
+    done
+fi
+
+# Also remove any leftover .disabled-by-passthrough files from previous runs
+rm -f "$SITES_ENABLED"/*.disabled-by-passthrough 2>/dev/null || true
+
+# 4. Check and install stream module if needed
 echo "=== Checking nginx stream module ==="
 
-# Check if module is already loaded via modules-enabled (Ubuntu/Debian style)
-MODULE_ALREADY_LOADED=false
+STREAM_AVAILABLE=false
+
+# Check if already loaded via modules-enabled
 if [ -f /etc/nginx/modules-enabled/50-mod-stream.conf ] || \
    ls /etc/nginx/modules-enabled/*stream* 2>/dev/null | grep -q .; then
     echo "Stream module is auto-loaded via modules-enabled"
-    MODULE_ALREADY_LOADED=true
+    STREAM_AVAILABLE=true
 fi
 
-# Remove any duplicate load_module directives we may have added previously
-if grep -q "^load_module.*ngx_stream_module" "$NGINX_CONF"; then
-    if [ "$MODULE_ALREADY_LOADED" = true ]; then
-        echo "Removing duplicate load_module directive (module already loaded via modules-enabled)..."
-        sed -i '/^load_module.*ngx_stream_module/d' "$NGINX_CONF"
+# Remove duplicate load_module if auto-loaded
+if [ "$STREAM_AVAILABLE" = true ]; then
+    sed -i '/^load_module.*ngx_stream_module/d' "$NGINX_CONF" 2>/dev/null || true
+fi
+
+# If not auto-loaded, check if dynamic module exists
+if [ "$STREAM_AVAILABLE" = false ] && [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
+    if ! grep -q "load_module.*ngx_stream_module" "$NGINX_CONF"; then
+        echo "Adding stream module load directive..."
+        sed -i '1i load_module /usr/lib/nginx/modules/ngx_stream_module.so;' "$NGINX_CONF"
     fi
+    STREAM_AVAILABLE=true
 fi
 
-# Test if stream works
-TEST_RESULT=$(nginx -t 2>&1)
-if echo "$TEST_RESULT" | grep -q "unknown directive.*stream"; then
-    echo "Stream module not available, need to install..."
-    
-    # Check if dynamic module exists but not loaded
-    if [ -f /usr/lib/nginx/modules/ngx_stream_module.so ] && [ "$MODULE_ALREADY_LOADED" = false ]; then
-        if ! grep -q "load_module.*ngx_stream_module" "$NGINX_CONF"; then
-            echo "Adding stream module load directive..."
-            sed -i '1i load_module /usr/lib/nginx/modules/ngx_stream_module.so;' "$NGINX_CONF"
-        fi
+# If still not available, install it
+if [ "$STREAM_AVAILABLE" = false ]; then
+    echo "Installing nginx stream module..."
+    apt-get update -qq
+    if apt-cache show libnginx-mod-stream >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y libnginx-mod-stream
+    elif apt-cache show nginx-extras >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y nginx-extras
+    elif apt-cache show nginx-full >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y nginx-full
     else
-        echo "Installing nginx with stream support..."
-        apt-get update
-        
-        # Try libnginx-mod-stream first (smallest)
-        if apt-cache show libnginx-mod-stream >/dev/null 2>&1; then
-            echo "Installing libnginx-mod-stream..."
-            DEBIAN_FRONTEND=noninteractive apt-get install -y libnginx-mod-stream
-        elif apt-cache show nginx-extras >/dev/null 2>&1; then
-            echo "Installing nginx-extras..."
-            DEBIAN_FRONTEND=noninteractive apt-get install -y nginx-extras
-        elif apt-cache show nginx-full >/dev/null 2>&1; then
-            echo "Installing nginx-full..."
-            DEBIAN_FRONTEND=noninteractive apt-get install -y nginx-full
-        else
-            echo "ERROR: Cannot find nginx stream module package"
-            exit 1
-        fi
+        echo "ERROR: Cannot install stream module"
+        exit 1
     fi
-elif echo "$TEST_RESULT" | grep -q "already loaded"; then
-    echo "Duplicate module load detected, cleaning up..."
-    # Remove manual load_module if modules-enabled handles it
-    sed -i '/^load_module.*ngx_stream_module/d' "$NGINX_CONF"
 fi
 
-# Final verification
-if nginx -t 2>&1 | grep -q "unknown directive.*stream"; then
-    echo "ERROR: Stream module still not working"
-    exit 1
-fi
-
-echo "Nginx stream module is ready"
-`, Timeout: 300},
-			// Ensure nginx.conf includes stream.d directory
-			{Action: "exec", Command: `
-NGINX_CONF="/etc/nginx/nginx.conf"
-STREAM_INCLUDE="include /etc/nginx/stream.d/*.conf;"
-
-# Check if stream block exists (handle various formats)
-if grep -qE "^stream\s*\{" "$NGINX_CONF"; then
-    # Stream block exists, ensure it has the include
-    if ! grep -q "include /etc/nginx/stream.d" "$NGINX_CONF"; then
-        sed -i '/^stream\s*{/a\    '"$STREAM_INCLUDE"'' "$NGINX_CONF"
-        echo "Added stream.d include to existing stream block"
-    else
-        echo "Stream block with include already exists"
-    fi
-else
-    # Add stream block at the end of the file
+# 5. Add stream block to nginx.conf if missing
+if ! grep -qE "^stream\s*\{" "$NGINX_CONF"; then
     echo "" >> "$NGINX_CONF"
     echo "# SSL Passthrough configuration (Configuratix)" >> "$NGINX_CONF"
     echo "stream {" >> "$NGINX_CONF"
-    echo "    $STREAM_INCLUDE" >> "$NGINX_CONF"
+    echo "    include /etc/nginx/stream.d/*.conf;" >> "$NGINX_CONF"
     echo "}" >> "$NGINX_CONF"
     echo "Added stream block to nginx.conf"
-fi
-`, Timeout: 30},
-			// Write stream config for this domain (just a marker file)
-			{Action: "file", Op: "write", Path: "/etc/nginx/stream.d/{{domain}}.conf", Mode: "0644", Content: `# SSL Passthrough marker for {{domain}}
-# Actual routing is in 00-sni-map.conf
-# Target: {{target}}
-# PROXY Protocol: enabled (backend must listen with proxy_protocol)
-`},
-			// Create/update the SNI map configuration for HTTPS (SSL passthrough)
-			{Action: "exec", Command: `
-STREAM_MAP="/etc/nginx/stream.d/00-sni-map.conf"
-DOMAIN="{{domain}}"
-TARGET="{{target}}"
-
-# Extract host and port from target
-TARGET_HOST=$(echo "$TARGET" | cut -d: -f1)
-TARGET_PORT=$(echo "$TARGET" | cut -d: -f2)
-# Default to 443 if no port specified
-if [ "$TARGET_PORT" = "$TARGET_HOST" ]; then
-    TARGET_PORT="443"
+elif ! grep -q "include /etc/nginx/stream.d" "$NGINX_CONF"; then
+    sed -i '/^stream\s*{/a\    include /etc/nginx/stream.d/*.conf;' "$NGINX_CONF"
+    echo "Added stream.d include to existing stream block"
 fi
 
-# Create or update SNI map file with PROXY Protocol support (HTTPS only)
-if [ ! -f "$STREAM_MAP" ]; then
-    cat > "$STREAM_MAP" << 'MAPEOF'
-# SNI-based routing for SSL passthrough with PROXY Protocol
-# Auto-generated by Configuratix
-#
-# NOTE: HTTP (port 80) is handled via regular nginx http block (conf.d)
-# This only handles HTTPS (port 443) via stream/SNI routing
+# 6. Verify stream module works
+if nginx -t 2>&1 | grep -q "unknown directive.*stream"; then
+    echo "ERROR: Stream module still not working after setup"
+    exit 1
+fi
+echo "Stream module verified OK"
 
-map $ssl_preread_server_name $passthrough_backend {
-    default "";
+# 7. Write marker file for this domain
+cat > "$MARKER_FILE" << EOF
+# Configuratix Passthrough Marker
+# Domain: $DOMAIN
+# Target HTTPS: ${TARGET}:${HTTPS_PORT}
+# Target HTTP: ${TARGET}:${HTTP_PORT}
+# PROXY Protocol: enabled
+# Created: $(date -Iseconds)
+EOF
+echo "Created marker: $MARKER_FILE"
+
+# 8. Regenerate consolidated config from all markers
+echo "=== Regenerating consolidated config ==="
+
+declare -A HTTPS_TARGETS
+declare -A HTTP_TARGETS
+
+for marker in "$STREAM_DIR"/passthrough-*.conf; do
+    [ -f "$marker" ] || continue
+    
+    # Extract domain from filename
+    filename=$(basename "$marker")
+    dom="${filename#passthrough-}"
+    dom="${dom%.conf}"
+    
+    # Extract targets from marker
+    target_https=$(grep "^# Target HTTPS:" "$marker" 2>/dev/null | sed 's/^# Target HTTPS: *//')
+    target_http=$(grep "^# Target HTTP:" "$marker" 2>/dev/null | sed 's/^# Target HTTP: *//')
+    
+    if [ -n "$target_https" ]; then
+        HTTPS_TARGETS["$dom"]="$target_https"
+    fi
+    if [ -n "$target_http" ]; then
+        HTTP_TARGETS["$dom"]="$target_http"
+    fi
+    echo "  - $dom -> HTTPS: $target_https, HTTP: $target_http"
+done
+
+# Generate config
+cat > "$CONFIG_FILE" << 'HEADER'
+# Configuratix Manual Passthrough Configuration
+# Auto-generated - DO NOT EDIT MANUALLY
+# Domains are tracked via passthrough-*.conf marker files
+
+HEADER
+
+# SNI map
+echo "# SNI-based backend routing for HTTPS" >> "$CONFIG_FILE"
+echo "map \$ssl_preread_server_name \$backend_https {" >> "$CONFIG_FILE"
+echo "    default reject;" >> "$CONFIG_FILE"
+for dom in "${!HTTPS_TARGETS[@]}"; do
+    echo "    $dom ${HTTPS_TARGETS[$dom]};" >> "$CONFIG_FILE"
+done
+echo "}" >> "$CONFIG_FILE"
+echo "" >> "$CONFIG_FILE"
+
+# Reject upstream
+cat >> "$CONFIG_FILE" << 'REJECT'
+# Reject upstream (closed connection)
+upstream reject {
+    server 127.0.0.1:1 down;
 }
 
+REJECT
+
+# HTTPS server
+cat >> "$CONFIG_FILE" << 'HTTPS'
+# HTTPS Passthrough (TLS SNI-based routing)
 server {
     listen 443;
     ssl_preread on;
-    
-    proxy_pass $passthrough_backend;
+    proxy_pass $backend_https;
     proxy_protocol on;
-    proxy_connect_timeout 5s;
-    proxy_timeout 300s;
+    proxy_connect_timeout 10s;
+    proxy_timeout 30m;
 }
-MAPEOF
-fi
 
-# Add/update this domain in the map
-sed -i "/^    \"*$DOMAIN\"* /d" "$STREAM_MAP"
-sed -i "/^    $DOMAIN /d" "$STREAM_MAP"
-sed -i "/default \"\";/i\\    $DOMAIN $TARGET_HOST:$TARGET_PORT;" "$STREAM_MAP"
+HTTPS
 
-echo "Updated stream SNI map for $DOMAIN -> $TARGET_HOST:$TARGET_PORT"
-`, Timeout: 30, Log: "cat /etc/nginx/stream.d/00-sni-map.conf"},
-			// Create HTTP proxy config (for certbot and redirects) - uses regular nginx http block
-			{Action: "exec", Command: `
-DOMAIN="{{domain}}"
-TARGET="{{target}}"
-HTTP_CONF="/etc/nginx/conf.d/configuratix/${DOMAIN}.conf"
+# HTTP server - get first target for default routing
+first_http=""
+for dom in "${!HTTP_TARGETS[@]}"; do
+    first_http="${HTTP_TARGETS[$dom]}"
+    break
+done
 
-# Extract host from target
-TARGET_HOST=$(echo "$TARGET" | cut -d: -f1)
-
-# Create HTTP proxy config (Layer 7 - can read Host header)
-cat > "$HTTP_CONF" << EOF
-# HTTP Proxy for passthrough domain: $DOMAIN
-# Auto-generated by Configuratix
-#
-# This proxies HTTP traffic (port 80) to the backend for:
-# - Certbot HTTP-01 challenges
-# - HTTP to HTTPS redirects (handled by backend)
-#
-# IMPORTANT: Backend must accept PROXY Protocol on port 80:
-#   listen 80 proxy_protocol;
-#   set_real_ip_from 0.0.0.0/0;
-#   real_ip_header proxy_protocol;
-
+if [ -n "$first_http" ]; then
+    cat >> "$CONFIG_FILE" << EOF
+# HTTP Passthrough (Layer 4 - all traffic to backend)
 server {
     listen 80;
-    server_name $DOMAIN;
-
-    location / {
-        proxy_pass http://$TARGET_HOST:80;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        
-        # For PROXY Protocol support (optional, requires nginx compiled with realip)
-        # proxy_protocol on;
-    }
+    proxy_pass $first_http;
+    proxy_protocol on;
+    proxy_connect_timeout 10s;
+    proxy_timeout 30m;
 }
 EOF
+fi
 
-echo "Created HTTP proxy config: $HTTP_CONF"
-`, Timeout: 30, Log: "cat /etc/nginx/conf.d/configuratix/{{domain}}.conf"},
-			// Test nginx config
-			{Action: "exec", Command: "nginx -t", Timeout: 30},
-			// Reload nginx
-			{Action: "exec", Command: "systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || systemctl start nginx", Timeout: 30, Log: "systemctl status nginx --no-pager | head -5"},
+echo ""
+echo "=== Generated Config ==="
+cat "$CONFIG_FILE"
+
+# 9. Test and reload nginx
+echo ""
+echo "=== Testing nginx config ==="
+nginx -t
+
+echo "=== Reloading nginx ==="
+if systemctl is-active nginx >/dev/null 2>&1; then
+    systemctl reload nginx
+else
+    systemctl start nginx
+fi
+
+# Verify
+sleep 1
+if systemctl is-active nginx >/dev/null 2>&1; then
+    echo "SUCCESS: Nginx is running with passthrough for $DOMAIN"
+else
+    echo "ERROR: Nginx failed to start"
+    journalctl -u nginx --no-pager -n 10
+    exit 1
+fi
+`, Timeout: 300},
 		},
 	},
 
