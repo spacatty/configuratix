@@ -742,9 +742,13 @@ TARGET="{{target}}"
 HTTPS_PORT="{{https_port}}"
 HTTP_PORT="{{http_port}}"
 
-# Default ports if not specified
-[ -z "$HTTPS_PORT" ] && HTTPS_PORT="443"
-[ -z "$HTTP_PORT" ] && HTTP_PORT="80"
+# Default ports if not specified or template not substituted
+if [ -z "$HTTPS_PORT" ] || [[ "$HTTPS_PORT" == *"{{"* ]]; then
+    HTTPS_PORT="443"
+fi
+if [ -z "$HTTP_PORT" ] || [[ "$HTTP_PORT" == *"{{"* ]]; then
+    HTTP_PORT="80"
+fi
 
 NGINX_CONF="/etc/nginx/nginx.conf"
 STREAM_DIR="/etc/nginx/stream.d"
