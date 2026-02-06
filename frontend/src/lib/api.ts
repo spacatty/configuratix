@@ -1938,6 +1938,7 @@ export interface SpeedTestMachine {
   title: string | null;
   hostname: string | null;
   ip_address: string | null;
+  primary_ip: string | null;
   is_online: boolean;
 }
 

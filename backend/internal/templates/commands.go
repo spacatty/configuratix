@@ -643,6 +643,13 @@ if [ ${#HTTPS_TARGETS[@]} -eq 0 ]; then
         rmdir "$SITES_DISABLED" 2>/dev/null || true
     fi
     
+    # Re-enable DNS Management config if it was disabled
+    DNS_MGMT_CONFIG="$STREAM_DIR/configuratix-passthrough.conf"
+    if [ -f "${DNS_MGMT_CONFIG}.disabled-by-manual" ]; then
+        echo "Re-enabling DNS Management passthrough config..."
+        mv "${DNS_MGMT_CONFIG}.disabled-by-manual" "$DNS_MGMT_CONFIG"
+    fi
+    
     nginx -t && (systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || true)
     echo "Passthrough removed, original sites restored"
     exit 0
@@ -754,12 +761,24 @@ NGINX_CONF="/etc/nginx/nginx.conf"
 STREAM_DIR="/etc/nginx/stream.d"
 CONFIG_FILE="$STREAM_DIR/configuratix-passthrough-manual.conf"
 MARKER_FILE="$STREAM_DIR/passthrough-${DOMAIN}.conf"
+DNS_MGMT_CONFIG="$STREAM_DIR/configuratix-passthrough.conf"
 
 echo "=== Configuratix Passthrough Setup for $DOMAIN ==="
 echo "Target: $TARGET (HTTPS: $HTTPS_PORT, HTTP: $HTTP_PORT)"
 
 # 1. Create directories
 mkdir -p "$STREAM_DIR" /etc/nginx/conf.d/configuratix
+
+# 1.5. Check for DNS Management config conflict
+# If configuratix-passthrough.conf exists (DNS Management), we need to disable it
+# as manual passthrough will take over these ports
+if [ -f "$DNS_MGMT_CONFIG" ]; then
+    echo "=== Detected DNS Management passthrough config ==="
+    echo "Disabling DNS Management config to avoid port conflict..."
+    mv "$DNS_MGMT_CONFIG" "$DNS_MGMT_CONFIG.disabled-by-manual"
+    echo "NOTE: DNS Management passthrough has been disabled."
+    echo "      To re-enable, remove this domain from manual passthrough first."
+fi
 
 # 2. Remove any old HTTP-block config for this domain
 rm -f "/etc/nginx/conf.d/configuratix/${DOMAIN}.conf"
@@ -829,7 +848,38 @@ if [ "$STREAM_AVAILABLE" = false ]; then
     fi
 fi
 
-# 5. Add stream block to nginx.conf if missing
+# 5. Verify stream module is available BEFORE adding stream block
+echo "=== Verifying stream module availability ==="
+MODULE_OK=false
+
+# Check if auto-loaded via modules-enabled
+if [ -f /etc/nginx/modules-enabled/50-mod-stream.conf ] || \
+   ls /etc/nginx/modules-enabled/*stream* 2>/dev/null | grep -q .; then
+    echo "Stream module auto-loaded via modules-enabled"
+    MODULE_OK=true
+fi
+
+# Check if module file exists (for manual load_module)
+if [ "$MODULE_OK" = false ] && [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
+    echo "Stream module available at /usr/lib/nginx/modules/"
+    MODULE_OK=true
+fi
+
+# Check if compiled in (nginx-full or similar)
+if [ "$MODULE_OK" = false ]; then
+    if nginx -V 2>&1 | grep -q "with-stream"; then
+        echo "Stream module compiled into nginx"
+        MODULE_OK=true
+    fi
+fi
+
+if [ "$MODULE_OK" = false ]; then
+    echo "ERROR: Stream module is not available after installation attempt"
+    exit 1
+fi
+echo "Stream module verified OK"
+
+# 6. Add stream block to nginx.conf if missing
 if ! grep -qE "^stream\s*\{" "$NGINX_CONF"; then
     echo "" >> "$NGINX_CONF"
     echo "# SSL Passthrough configuration (Configuratix)" >> "$NGINX_CONF"
@@ -841,13 +891,6 @@ elif ! grep -q "include /etc/nginx/stream.d" "$NGINX_CONF"; then
     sed -i '/^stream\s*{/a\    include /etc/nginx/stream.d/*.conf;' "$NGINX_CONF"
     echo "Added stream.d include to existing stream block"
 fi
-
-# 6. Verify stream module works
-if nginx -t 2>&1 | grep -q "unknown directive.*stream"; then
-    echo "ERROR: Stream module still not working after setup"
-    exit 1
-fi
-echo "Stream module verified OK"
 
 # 7. Write marker file for this domain
 cat > "$MARKER_FILE" << EOF

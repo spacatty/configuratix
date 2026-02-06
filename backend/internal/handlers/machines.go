@@ -1299,6 +1299,7 @@ func (h *MachinesHandler) GetMachinesForSpeedTest(w http.ResponseWriter, r *http
 		Title     *string   `db:"title" json:"title"`
 		Hostname  *string   `db:"hostname" json:"hostname"`
 		IPAddress *string   `db:"ip_address" json:"ip_address"`
+		PrimaryIP *string   `db:"primary_ip" json:"primary_ip"`
 		IsOnline  bool      `db:"is_online" json:"is_online"`
 	}
 
@@ -1307,6 +1308,7 @@ func (h *MachinesHandler) GetMachinesForSpeedTest(w http.ResponseWriter, r *http
 
 	query := `
 		SELECT m.id, m.title, m.hostname, COALESCE(m.primary_ip, m.ip_address) as ip_address,
+			m.primary_ip,
 			(a.last_seen IS NOT NULL AND a.last_seen > NOW() - INTERVAL '5 minutes') as is_online
 		FROM machines m
 		LEFT JOIN agents a ON m.agent_id = a.id
