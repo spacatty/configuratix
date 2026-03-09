@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
 import { ColumnDef } from "@tanstack/react-table";
@@ -26,7 +26,12 @@ import {
   MoreHorizontal,
   FolderOpen,
   Pencil,
-  Users
+  Users,
+  Globe,
+  Network,
+  Cpu,
+  Lock,
+  Activity
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -78,6 +83,61 @@ export default function MachinesPage() {
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string | null>(null); // Filter by group
+  const [quickFilter, setQuickFilter] = useState<string | null>(null); // Online | High Load | Has Domains | Used By DNS | No Project | Security Issues
+
+  // Helpers for status and pressure (used by summary, filters, and cells)
+  const getMinutesSinceSeen = (m: Machine) => 
+    m.last_seen ? (Date.now() - new Date(m.last_seen).getTime()) / 1000 / 60 : Infinity;
+  const isOnline = (m: Machine) => getMinutesSinceSeen(m) < 5;
+  const isIdle = (m: Machine) => getMinutesSinceSeen(m) < 60 && getMinutesSinceSeen(m) >= 5;
+  const isOffline = (m: Machine) => !m.last_seen || getMinutesSinceSeen(m) >= 60;
+
+  const getResourcePressure = (m: Machine) => {
+    const cpu = m.cpu_percent ?? 0;
+    const memPct = (m.memory_total ?? 0) > 0 ? ((m.memory_used ?? 0) / m.memory_total!) * 100 : 0;
+    const diskPct = (m.disk_total ?? 0) > 0 ? ((m.disk_used ?? 0) / m.disk_total!) * 100 : 0;
+    const max = Math.max(cpu, memPct, diskPct);
+    if (max >= 90) return "critical";
+    if (max >= 75) return "high";
+    if (max >= 50) return "medium";
+    return "low";
+  };
+  const isHighLoad = (m: Machine) => getResourcePressure(m) === "high" || getResourcePressure(m) === "critical";
+  const hasDomains = (m: Machine) => (m.assigned_domains_count ?? 0) > 0;
+  const usedByDNS = (m: Machine) => (m.passthrough_pool_count ?? 0) + (m.wildcard_pool_count ?? 0) > 0;
+  const hasNoProject = (m: Machine) => !m.project_id && !m.project_name;
+  const hasSecurityGaps = (m: Machine) => !m.ufw_enabled || !m.fail2ban_enabled;
+
+  // Filtered list: project + group + quick filter
+  const filteredMachines = useMemo(() => {
+    let list = machines;
+    if (selectedGroupFilter) {
+      const members = groupMembers[selectedGroupFilter] ?? [];
+      const ids = new Set(members.map((x) => x.id));
+      list = list.filter((m) => ids.has(m.id));
+    }
+    if (quickFilter === "Online") list = list.filter(isOnline);
+    else if (quickFilter === "High Load") list = list.filter(isHighLoad);
+    else if (quickFilter === "Has Domains") list = list.filter(hasDomains);
+    else if (quickFilter === "Used By DNS") list = list.filter(usedByDNS);
+    else if (quickFilter === "No Project") list = list.filter(hasNoProject);
+    else if (quickFilter === "Security Issues") list = list.filter(hasSecurityGaps);
+    return list;
+  }, [machines, selectedGroupFilter, groupMembers, quickFilter]);
+
+  // Summary counts (over filtered-by-project list for display)
+  const summaryCounts = useMemo(() => {
+    const list = machines;
+    return {
+      total: list.length,
+      online: list.filter(isOnline).length,
+      overloaded: list.filter(isHighLoad).length,
+      withDomains: list.filter(hasDomains).length,
+      usedByDNS: list.filter(usedByDNS).length,
+      noProject: list.filter(hasNoProject).length,
+      securityIssues: list.filter(hasSecurityGaps).length,
+    };
+  }, [machines]);
 
   useEffect(() => {
     loadData();
@@ -269,7 +329,7 @@ export default function MachinesPage() {
     const lastSeen = new Date(machine.last_seen);
     const now = new Date();
     const diffMinutes = (now.getTime() - lastSeen.getTime()) / 1000 / 60;
-    
+
     if (diffMinutes < 5) {
       return <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">Online</Badge>;
     } else if (diffMinutes < 60) {
@@ -293,110 +353,209 @@ export default function MachinesPage() {
       cell: ({ row }) => {
         const machine = row.original;
         const displayName = machine.title || machine.hostname || "Unknown";
-        const isOnline = machine.last_seen && (new Date().getTime() - new Date(machine.last_seen).getTime()) / 1000 / 60 < 5;
-        const isIdle = machine.last_seen && (new Date().getTime() - new Date(machine.last_seen).getTime()) / 1000 / 60 < 60;
+        const online = isOnline(machine);
+        const idle = isIdle(machine);
         return (
           <div className="flex items-center gap-2.5">
             <div className="relative">
               <div className="h-8 w-8 rounded-md bg-muted/50 flex items-center justify-center">
                 <Server className="h-4 w-4 text-muted-foreground" />
               </div>
-              <div className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background ${isOnline ? 'bg-green-500' : isIdle ? 'bg-yellow-500' : 'bg-muted-foreground'}`} />
+              <div
+                className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background ${
+                  online ? "bg-green-500" : idle ? "bg-yellow-500" : "bg-muted-foreground"
+                }`}
+              />
             </div>
             <div className="min-w-0">
-              <a 
+              <a
                 href={`/machines/${machine.id}`}
                 className="font-medium text-sm hover:text-primary transition-colors cursor-pointer block truncate"
               >
                 {displayName}
               </a>
-              <span className="text-xs text-muted-foreground font-mono">{machine.primary_ip || machine.ip_address || "—"}</span>
+              <span className="text-xs text-muted-foreground font-mono">
+                {machine.primary_ip || machine.ip_address || "—"}
+              </span>
             </div>
           </div>
         );
       },
       filterFn: (row, id, filterValue) => {
         const machine = row.original;
-        const search = filterValue.toLowerCase();
+        const search = (filterValue as string)?.toLowerCase() ?? "";
+        if (!search) return true;
         return (
-          (machine.title?.toLowerCase().includes(search) || false) ||
-          (machine.hostname?.toLowerCase().includes(search) || false) ||
-          (machine.primary_ip?.toLowerCase().includes(search) || false) ||
-          (machine.ip_address?.toLowerCase().includes(search) || false)
+          (machine.title?.toLowerCase().includes(search) ?? false) ||
+          (machine.hostname?.toLowerCase().includes(search) ?? false) ||
+          (machine.primary_ip?.toLowerCase().includes(search) ?? false) ||
+          (machine.ip_address?.toLowerCase().includes(search) ?? false)
         );
       },
     },
     {
-      accessorKey: "project_name",
-      header: "Project",
+      id: "workload",
+      header: "Workload",
+      accessorFn: (row) => row.assigned_domains_count ?? 0,
       cell: ({ row }) => {
-        const project = row.original.project_name;
-        return project ? (
-          <span className="text-xs text-muted-foreground">{project}</span>
-        ) : (
-          <span className="text-muted-foreground/50 text-xs">—</span>
-        );
-      },
-    },
-    {
-      accessorKey: "resources",
-      header: "Resources",
-      cell: ({ row }) => {
-        const machine = row.original;
-        const cpu = machine.cpu_percent || 0;
-        const memUsed = machine.memory_used || 0;
-        const memTotal = machine.memory_total || 0;
-        const memPercent = memTotal > 0 ? (memUsed / memTotal) * 100 : 0;
-        const diskUsed = machine.disk_used || 0;
-        const diskTotal = machine.disk_total || 0;
-        const diskPercent = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
-        
-        const getBarColor = (pct: number) => pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-yellow-500' : 'bg-green-500';
-        
+        const m = row.original;
+        const total = m.assigned_domains_count ?? 0;
+        const healthy = m.healthy_domains_count ?? 0;
+        const unhealthy = m.unhealthy_domains_count ?? 0;
+        const proxied = m.proxied_domains_count ?? 0;
+        if (total === 0) return <span className="text-muted-foreground text-xs">—</span>;
+        const rest = total - healthy - unhealthy - proxied;
         return (
-          <div className="flex items-center gap-3 text-xs">
-            <div className="flex items-center gap-1.5" title={`CPU: ${cpu.toFixed(0)}%`}>
-              <span className="text-muted-foreground w-6">CPU</span>
-              <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
-                <div className={`h-full ${getBarColor(cpu)}`} style={{ width: `${Math.min(cpu, 100)}%` }} />
-              </div>
-              <span className="text-muted-foreground w-7 text-right">{cpu.toFixed(0)}%</span>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1" title={`${total} domains (${healthy} healthy, ${unhealthy} unhealthy, ${proxied} proxied)`}>
+              <Globe className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-sm font-medium">{total}</span>
+              <span className="text-xs text-muted-foreground">domains</span>
             </div>
-            <div className="flex items-center gap-1.5" title={`RAM: ${formatBytes(memUsed)} / ${formatBytes(memTotal)}`}>
-              <span className="text-muted-foreground w-6">RAM</span>
-              <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
-                <div className={`h-full ${getBarColor(memPercent)}`} style={{ width: `${Math.min(memPercent, 100)}%` }} />
+            {total > 0 && (
+              <div className="flex h-1.5 w-16 rounded-full overflow-hidden bg-muted" title="Healthy / Unhealthy / Proxied">
+                <div className="bg-green-500/80" style={{ width: `${(healthy / total) * 100}%` }} />
+                <div className="bg-red-500/80" style={{ width: `${(unhealthy / total) * 100}%` }} />
+                <div className="bg-blue-500/80" style={{ width: `${(proxied / total) * 100}%` }} />
+                {rest > 0 && <div className="bg-muted-foreground/50" style={{ width: `${(rest / total) * 100}%` }} />}
               </div>
-              <span className="text-muted-foreground w-7 text-right">{memPercent.toFixed(0)}%</span>
-            </div>
-            <div className="flex items-center gap-1.5" title={`Disk: ${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`}>
-              <span className="text-muted-foreground w-6">Disk</span>
-              <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
-                <div className={`h-full ${getBarColor(diskPercent)}`} style={{ width: `${Math.min(diskPercent, 100)}%` }} />
-              </div>
-              <span className="text-muted-foreground w-7 text-right">{diskPercent.toFixed(0)}%</span>
-            </div>
+            )}
           </div>
         );
       },
     },
     {
-      accessorKey: "security",
-      header: "",
+      id: "dns_role",
+      header: "DNS role",
+      accessorFn: (row) => (row.passthrough_pool_count ?? 0) + (row.wildcard_pool_count ?? 0) + (row.active_dns_target_count ?? 0),
+      cell: ({ row }) => {
+        const m = row.original;
+        const passthrough = m.passthrough_pool_count ?? 0;
+        const wildcard = m.wildcard_pool_count ?? 0;
+        const active = m.active_dns_target_count ?? 0;
+        if (passthrough === 0 && wildcard === 0) return <span className="text-muted-foreground text-xs">—</span>;
+        return (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {passthrough > 0 && (
+              <Badge variant="secondary" className="text-xs font-normal">
+                {passthrough} pass
+              </Badge>
+            )}
+            {wildcard > 0 && (
+              <Badge variant="secondary" className="text-xs font-normal">
+                {wildcard} wild
+              </Badge>
+            )}
+            {active > 0 && (
+              <Badge className="bg-primary/20 text-primary border-primary/30 text-xs">
+                <Activity className="h-3 w-3 mr-0.5" />
+                {active} active
+              </Badge>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      id: "resources",
+      header: "Resources",
+      accessorFn: (row) => {
+        const cpu = row.cpu_percent ?? 0;
+        const mem = (row.memory_total ?? 0) > 0 ? ((row.memory_used ?? 0) / row.memory_total!) * 100 : 0;
+        const disk = (row.disk_total ?? 0) > 0 ? ((row.disk_used ?? 0) / row.disk_total!) * 100 : 0;
+        return Math.max(cpu, mem, disk);
+      },
       cell: ({ row }) => {
         const machine = row.original;
-        const hasAny = machine.ufw_enabled || machine.fail2ban_enabled || machine.access_token_set;
-        if (!hasAny) return null;
+        const cpu = machine.cpu_percent ?? 0;
+        const memUsed = machine.memory_used ?? 0;
+        const memTotal = machine.memory_total ?? 0;
+        const memPercent = memTotal > 0 ? (memUsed / memTotal) * 100 : 0;
+        const diskUsed = machine.disk_used ?? 0;
+        const diskTotal = machine.disk_total ?? 0;
+        const diskPercent = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
+        const pressure = getResourcePressure(machine);
+        const getBarColor = (pct: number) => (pct > 80 ? "bg-red-500" : pct > 50 ? "bg-yellow-500" : "bg-green-500");
         return (
-          <div className="flex items-center gap-1">
-            {machine.ufw_enabled && (
-              <span className="text-green-500" title="UFW Enabled"><Shield className="h-3.5 w-3.5" /></span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5" title={`CPU ${cpu.toFixed(0)}%`}>
+              <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
+              <div className="w-10 h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className={`h-full ${getBarColor(cpu)}`} style={{ width: `${Math.min(cpu, 100)}%` }} />
+              </div>
+              <span className="text-xs text-muted-foreground w-6 text-right">{cpu.toFixed(0)}%</span>
+            </div>
+            <div className="flex items-center gap-1.5" title={`RAM ${formatBytes(memUsed)} / ${formatBytes(memTotal)}`}>
+              <div className="w-10 h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className={`h-full ${getBarColor(memPercent)}`} style={{ width: `${Math.min(memPercent, 100)}%` }} />
+              </div>
+              <span className="text-xs text-muted-foreground w-6 text-right">{memPercent.toFixed(0)}%</span>
+            </div>
+            <div className="flex items-center gap-1.5" title={`Disk ${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`}>
+              <div className="w-10 h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className={`h-full ${getBarColor(diskPercent)}`} style={{ width: `${Math.min(diskPercent, 100)}%` }} />
+              </div>
+              <span className="text-xs text-muted-foreground w-6 text-right">{diskPercent.toFixed(0)}%</span>
+            </div>
+            <Badge
+              variant="outline"
+              className={
+                pressure === "critical"
+                  ? "border-red-500/50 text-red-600 text-xs"
+                  : pressure === "high"
+                    ? "border-yellow-500/50 text-yellow-600 text-xs"
+                    : "text-muted-foreground text-xs"
+              }
+            >
+              {pressure === "critical" ? "High" : pressure === "high" ? "Load" : "OK"}
+            </Badge>
+          </div>
+        );
+      },
+    },
+    {
+      id: "security_runtime",
+      header: "Security & runtime",
+      cell: ({ row }) => {
+        const m = row.original;
+        const parts: string[] = [];
+        if (m.ufw_enabled) parts.push("UFW");
+        if (m.fail2ban_enabled) parts.push("F2B");
+        if (m.access_token_set) parts.push("Token");
+        return (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {m.ufw_enabled && <span title="UFW"><Shield className="h-3.5 w-3.5 text-green-600" /></span>}
+            {m.fail2ban_enabled && <span title="Fail2Ban"><Lock className="h-3.5 w-3.5 text-blue-600" /></span>}
+            {m.access_token_set && <span title="Access token">🔒</span>}
+            {parts.length === 0 && <span className="text-muted-foreground text-xs">—</span>}
+            {(m.ubuntu_version || m.agent_version) && (
+              <span className="text-xs text-muted-foreground truncate max-w-[80px]" title={`Ubuntu ${m.ubuntu_version ?? ""} · Agent ${m.agent_version ?? ""}`}>
+                {m.ubuntu_version ?? ""} {m.agent_version ? `· v${m.agent_version}` : ""}
+              </span>
             )}
-            {machine.fail2ban_enabled && (
-              <span className="text-blue-500 text-xs font-medium" title="Fail2Ban Enabled">F2B</span>
+          </div>
+        );
+      },
+    },
+    {
+      id: "placement",
+      header: "Placement",
+      cell: ({ row }) => {
+        const m = row.original;
+        const project = m.project_name;
+        const groupCount = m.group_count ?? 0;
+        return (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {project ? (
+              <span className="text-xs text-muted-foreground">{project}</span>
+            ) : (
+              <span className="text-muted-foreground/50 text-xs">No project</span>
             )}
-            {machine.access_token_set && (
-              <span title="Access Token Set">🔒</span>
+            {groupCount > 0 && (
+              <Badge variant="outline" className="text-xs font-normal">
+                <Network className="h-3 w-3 mr-0.5" />
+                {groupCount} group{groupCount !== 1 ? "s" : ""}
+              </Badge>
             )}
           </div>
         );
@@ -429,7 +588,7 @@ export default function MachinesPage() {
                 Assign to Groups
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem 
+              <DropdownMenuItem
                 className="text-destructive"
                 onClick={async () => {
                   if (confirm("Delete this machine?")) {
@@ -468,7 +627,7 @@ export default function MachinesPage() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Machines</h1>
           <p className="text-muted-foreground mt-1">
-            Manage your server fleet. {machines.length} machine(s) registered.
+            Manage your server fleet. {summaryCounts.total} machine(s) registered.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -494,6 +653,62 @@ export default function MachinesPage() {
             Add Machine
           </Button>
         </div>
+      </div>
+
+      {/* Summary strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+        <Card className="bg-card/60 border-border/50">
+          <CardContent className="p-3">
+            <div className="text-xs text-muted-foreground">Online</div>
+            <div className="text-lg font-semibold">{summaryCounts.online}</div>
+          </CardContent>
+        </Card>
+        <Card className="bg-card/60 border-border/50">
+          <CardContent className="p-3">
+            <div className="text-xs text-muted-foreground">High load</div>
+            <div className="text-lg font-semibold">{summaryCounts.overloaded}</div>
+          </CardContent>
+        </Card>
+        <Card className="bg-card/60 border-border/50">
+          <CardContent className="p-3">
+            <div className="text-xs text-muted-foreground">With domains</div>
+            <div className="text-lg font-semibold">{summaryCounts.withDomains}</div>
+          </CardContent>
+        </Card>
+        <Card className="bg-card/60 border-border/50">
+          <CardContent className="p-3">
+            <div className="text-xs text-muted-foreground">Used by DNS</div>
+            <div className="text-lg font-semibold">{summaryCounts.usedByDNS}</div>
+          </CardContent>
+        </Card>
+        <Card className="bg-card/60 border-border/50">
+          <CardContent className="p-3">
+            <div className="text-xs text-muted-foreground">No project</div>
+            <div className="text-lg font-semibold">{summaryCounts.noProject}</div>
+          </CardContent>
+        </Card>
+        <Card className="bg-card/60 border-border/50">
+          <CardContent className="p-3">
+            <div className="text-xs text-muted-foreground">Security issues</div>
+            <div className="text-lg font-semibold">{summaryCounts.securityIssues}</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Quick filter chips */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm text-muted-foreground mr-1">Quick filters:</span>
+        {(["Online", "High Load", "Has Domains", "Used By DNS", "No Project", "Security Issues"] as const).map((filter) => (
+          <button
+            key={filter}
+            onClick={() => setQuickFilter(quickFilter === filter ? null : filter)}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              quickFilter === filter ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80 text-muted-foreground"
+            }`}
+          >
+            {filter}
+          </button>
+        ))}
       </div>
 
       {/* Group Filter Badges */}
@@ -522,13 +737,9 @@ export default function MachinesPage() {
               if (isSelected) {
                 setSelectedGroupFilter(null);
               } else {
-                // Load members and set filter
                 try {
                   const members = await api.getGroupMembers(group.id);
                   const membersList = members || [];
-                  console.log(`Loaded ${membersList.length} members for group ${group.id}`, membersList.map(m => m.id));
-                  
-                  // Use flushSync to ensure both updates happen synchronously
                   flushSync(() => {
                     setGroupMembers(prev => ({ ...prev, [group.id]: membersList }));
                   });
@@ -581,18 +792,24 @@ export default function MachinesPage() {
       {/* Machines Table */}
       <Card className="border-border/50 bg-card/50 flex-1 flex flex-col overflow-hidden">
         <CardContent className="flex-1 overflow-auto p-6">
-          <DataTable 
-            columns={columns} 
-            data={(() => {
-              if (!selectedGroupFilter) return machines;
-              const members = groupMembers[selectedGroupFilter] || [];
-              const memberIds = new Set(members.map(m => m.id));
-              const filtered = machines.filter(m => memberIds.has(m.id));
-              console.log(`Filter: group=${selectedGroupFilter}, members=${members.length}, memberIds=`, [...memberIds], `filtered=${filtered.length}`);
-              return filtered;
-            })()}
+          <DataTable
+            columns={columns}
+            data={filteredMachines}
             searchKey="title"
             searchPlaceholder="Search machines by name, hostname, or IP..."
+            initialState={{ sorting: [{ id: "resources", desc: true }, { id: "title", desc: false }] }}
+            emptyMessage={
+              filteredMachines.length === 0 && machines.length > 0
+                ? "No machines match the current filters."
+                : "No machines yet. Add a machine to get started."
+            }
+            getRowClassName={(machine) => {
+              const pressure = getResourcePressure(machine);
+              const offlineWithWork = isOffline(machine) && (hasDomains(machine) || usedByDNS(machine));
+              if (pressure === "critical" || pressure === "high") return "bg-red-500/5";
+              if (offlineWithWork) return "bg-yellow-500/5";
+              return undefined;
+            }}
           />
         </CardContent>
       </Card>

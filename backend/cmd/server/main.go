@@ -183,6 +183,21 @@ func main() {
 	apiRouter.HandleFunc("/domains/{id}/notes", domainsHandler.UpdateDomainNotes).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}", domainsHandler.DeleteDomain).Methods("DELETE", "OPTIONS")
 
+	// Domain Groups
+	domainGroupsHandler := handlers.NewDomainGroupsHandler(db)
+	apiRouter.HandleFunc("/domain-groups", domainGroupsHandler.ListDomainGroups).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/domain-groups", domainGroupsHandler.CreateDomainGroup).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/domain-groups/reorder", domainGroupsHandler.ReorderDomainGroups).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/domain-groups/{id}", domainGroupsHandler.UpdateDomainGroup).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/domain-groups/{id}", domainGroupsHandler.DeleteDomainGroup).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/domain-groups/{id}/members", domainGroupsHandler.GetGroupMembers).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/domain-groups/{id}/members", domainGroupsHandler.SetGroupMembers).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/domain-groups/{id}/members", domainGroupsHandler.AddGroupMembers).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/domain-groups/{id}/members/reorder", domainGroupsHandler.ReorderGroupMembers).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/domain-groups/{id}/members/{domainId}", domainGroupsHandler.RemoveGroupMember).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/domains/{domainId}/groups", domainGroupsHandler.GetDomainGroups).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/domains/{domainId}/groups", domainGroupsHandler.SetDomainGroups).Methods("PUT", "OPTIONS")
+
 	// DNS Management (completely separate module from main domains)
 	dnsHandler := handlers.NewDNSHandler(db)
 	// DNS Accounts

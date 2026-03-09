@@ -100,6 +100,15 @@ export interface Machine {
   memory_total: number;
   disk_used: number;
   disk_total: number;
+  // Machine summary (utilization) - from list/detail when available
+  assigned_domains_count?: number;
+  healthy_domains_count?: number;
+  unhealthy_domains_count?: number;
+  proxied_domains_count?: number;
+  passthrough_pool_count?: number;
+  wildcard_pool_count?: number;
+  active_dns_target_count?: number;
+  group_count?: number;
 }
 
 export interface MachineGroup {
@@ -242,7 +251,29 @@ export interface Domain {
   config_name: string | null;
 }
 
-// DNS Managed Domain - completely separate from main domains
+export interface DomainGroup {
+  id: string;
+  owner_id: string;
+  name: string;
+  emoji: string;
+  color: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+  domain_count?: number;
+}
+
+export interface DomainGroupWithCount extends DomainGroup {
+  domain_count: number;
+}
+
+export interface DomainGroupMember {
+  id: string;
+  fqdn: string;
+  status: string;
+  position: number;
+}
+
 export interface DNSManagedDomain {
   id: string;
   owner_id: string;
@@ -973,6 +1004,76 @@ class ApiClient {
 
   async setMachineGroups(machineId: string, groupIds: string[]): Promise<void> {
     await this.request(`/api/machines/${machineId}/groups`, {
+      method: "PUT",
+      body: JSON.stringify({ group_ids: groupIds }),
+    });
+  }
+
+  // Domain Groups
+  async listDomainGroups(): Promise<DomainGroupWithCount[]> {
+    return this.request<DomainGroupWithCount[]>("/api/domain-groups");
+  }
+
+  async createDomainGroup(data: { name: string; emoji?: string; color?: string }): Promise<DomainGroup> {
+    return this.request<DomainGroup>("/api/domain-groups", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDomainGroup(id: string, data: { name?: string; emoji?: string; color?: string; position?: number }): Promise<void> {
+    await this.request(`/api/domain-groups/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteDomainGroup(id: string): Promise<void> {
+    await this.request(`/api/domain-groups/${id}`, { method: "DELETE" });
+  }
+
+  async reorderDomainGroups(groupIds: string[]): Promise<void> {
+    await this.request("/api/domain-groups/reorder", {
+      method: "PUT",
+      body: JSON.stringify({ group_ids: groupIds }),
+    });
+  }
+
+  async getDomainGroupMembers(groupId: string): Promise<DomainGroupMember[]> {
+    return this.request<DomainGroupMember[]>(`/api/domain-groups/${groupId}/members`);
+  }
+
+  async setDomainGroupMembers(groupId: string, domainIds: string[]): Promise<{ count: number }> {
+    return this.request<{ count: number }>(`/api/domain-groups/${groupId}/members`, {
+      method: "PUT",
+      body: JSON.stringify({ domain_ids: domainIds }),
+    });
+  }
+
+  async addDomainGroupMembers(groupId: string, domainIds: string[]): Promise<{ added: number }> {
+    return this.request<{ added: number }>(`/api/domain-groups/${groupId}/members`, {
+      method: "POST",
+      body: JSON.stringify({ domain_ids: domainIds }),
+    });
+  }
+
+  async removeDomainGroupMember(groupId: string, domainId: string): Promise<void> {
+    await this.request(`/api/domain-groups/${groupId}/members/${domainId}`, { method: "DELETE" });
+  }
+
+  async reorderDomainGroupMembers(groupId: string, domainIds: string[]): Promise<void> {
+    await this.request(`/api/domain-groups/${groupId}/members/reorder`, {
+      method: "PUT",
+      body: JSON.stringify({ domain_ids: domainIds }),
+    });
+  }
+
+  async getDomainGroups(domainId: string): Promise<DomainGroup[]> {
+    return this.request<DomainGroup[]>(`/api/domains/${domainId}/groups`);
+  }
+
+  async setDomainGroups(domainId: string, groupIds: string[]): Promise<void> {
+    await this.request(`/api/domains/${domainId}/groups`, {
       method: "PUT",
       body: JSON.stringify({ group_ids: groupIds }),
     });

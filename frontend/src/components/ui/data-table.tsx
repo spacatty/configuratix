@@ -32,6 +32,11 @@ interface DataTableProps<TData, TValue> {
   showColumnToggle?: boolean;
   showPagination?: boolean;
   pageSize?: number;
+  initialState?: {
+    sorting?: SortingState;
+  };
+  emptyMessage?: string;
+  getRowClassName?: (row: TData) => string | undefined;
 }
 
 export function DataTable<TData, TValue>({
@@ -42,8 +47,11 @@ export function DataTable<TData, TValue>({
   showColumnToggle = true,
   showPagination = true,
   pageSize = 10,
+  initialState: initialStateProp,
+  emptyMessage = "No results.",
+  getRowClassName,
 }: DataTableProps<TData, TValue>) {
-  const [sorting, setSorting] = React.useState<SortingState>([]);
+  const [sorting, setSorting] = React.useState<SortingState>(initialStateProp?.sorting ?? []);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
   const [rowSelection, setRowSelection] = React.useState({});
@@ -179,7 +187,7 @@ export function DataTable<TData, TValue>({
                 <tr
                   key={row.id}
                   data-state={row.getIsSelected() && "selected"}
-                  className="border-b border-border/30 hover:bg-muted/30 transition-colors"
+                  className={`border-b border-border/30 hover:bg-muted/30 transition-colors ${getRowClassName?.(row.original) ?? ""}`}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <td key={cell.id} className="p-4 align-middle">
@@ -197,7 +205,7 @@ export function DataTable<TData, TValue>({
                   colSpan={columns.length}
                   className="h-24 text-center text-muted-foreground"
                 >
-                  No results.
+                  {emptyMessage}
                 </td>
               </tr>
             )}

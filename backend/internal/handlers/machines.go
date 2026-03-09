@@ -66,6 +66,15 @@ type MachineWithDetails struct {
 	OwnerEmail   *string    `db:"owner_email" json:"owner_email"`
 	OwnerName    *string    `db:"owner_name" json:"owner_name"`
 	ProjectName  *string    `db:"project_name" json:"project_name"`
+	// Machine summary (utilization) fields
+	AssignedDomainsCount  int `db:"assigned_domains_count" json:"assigned_domains_count"`
+	HealthyDomainsCount   int `db:"healthy_domains_count" json:"healthy_domains_count"`
+	UnhealthyDomainsCount int `db:"unhealthy_domains_count" json:"unhealthy_domains_count"`
+	ProxiedDomainsCount   int `db:"proxied_domains_count" json:"proxied_domains_count"`
+	PassthroughPoolCount  int `db:"passthrough_pool_count" json:"passthrough_pool_count"`
+	WildcardPoolCount     int `db:"wildcard_pool_count" json:"wildcard_pool_count"`
+	ActiveDNSTargetCount  int `db:"active_dns_target_count" json:"active_dns_target_count"`
+	GroupCount            int `db:"group_count" json:"group_count"`
 }
 
 // ListMachines returns machines the user can access
@@ -81,13 +90,32 @@ func (h *MachinesHandler) ListMachines(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	baseQuery := `
-		SELECT m.*, 
-			a.name as agent_name, 
-			a.version as agent_version, 
+		SELECT m.*,
+			a.name as agent_name,
+			a.version as agent_version,
 			a.last_seen,
 			u.email as owner_email,
 			COALESCE(u.name, u.email) as owner_name,
-			p.name as project_name
+			p.name as project_name,
+			(SELECT COUNT(*)::int FROM domains WHERE assigned_machine_id = m.id) as assigned_domains_count,
+			(SELECT COUNT(*)::int FROM domains WHERE assigned_machine_id = m.id AND status = 'healthy') as healthy_domains_count,
+			(SELECT COUNT(*)::int FROM domains WHERE assigned_machine_id = m.id AND status = 'unhealthy') as unhealthy_domains_count,
+			(SELECT COUNT(*)::int FROM domains WHERE assigned_machine_id = m.id AND status = 'proxied') as proxied_domains_count,
+			(SELECT COUNT(*)::int FROM (
+				SELECT pool_id FROM dns_passthrough_members WHERE machine_id = m.id AND is_enabled = true
+				UNION
+				SELECT pp.id as pool_id FROM dns_passthrough_pools pp
+				INNER JOIN machine_group_members gm ON gm.group_id = ANY(pp.group_ids) AND gm.machine_id = m.id
+			) t) as passthrough_pool_count,
+			(SELECT COUNT(*)::int FROM (
+				SELECT pool_id FROM dns_wildcard_pool_members WHERE machine_id = m.id AND is_enabled = true
+				UNION
+				SELECT wp.id as pool_id FROM dns_wildcard_pools wp
+				INNER JOIN machine_group_members gm ON gm.group_id = ANY(wp.group_ids) AND gm.machine_id = m.id
+			) t) as wildcard_pool_count,
+			(SELECT COUNT(*)::int FROM dns_passthrough_pools WHERE current_machine_id = m.id)
+			+ (SELECT COUNT(*)::int FROM dns_wildcard_pools WHERE current_machine_id = m.id) as active_dns_target_count,
+			(SELECT COUNT(*)::int FROM machine_group_members WHERE machine_id = m.id) as group_count
 		FROM machines m
 		LEFT JOIN agents a ON m.agent_id = a.id
 		LEFT JOIN users u ON m.owner_id = u.id
@@ -183,13 +211,32 @@ func (h *MachinesHandler) GetMachine(w http.ResponseWriter, r *http.Request) {
 
 	var machine MachineWithDetails
 	err = h.db.Get(&machine, `
-		SELECT m.*, 
-			a.name as agent_name, 
-			a.version as agent_version, 
+		SELECT m.*,
+			a.name as agent_name,
+			a.version as agent_version,
 			a.last_seen,
 			u.email as owner_email,
 			COALESCE(u.name, u.email) as owner_name,
-			p.name as project_name
+			p.name as project_name,
+			(SELECT COUNT(*)::int FROM domains WHERE assigned_machine_id = m.id) as assigned_domains_count,
+			(SELECT COUNT(*)::int FROM domains WHERE assigned_machine_id = m.id AND status = 'healthy') as healthy_domains_count,
+			(SELECT COUNT(*)::int FROM domains WHERE assigned_machine_id = m.id AND status = 'unhealthy') as unhealthy_domains_count,
+			(SELECT COUNT(*)::int FROM domains WHERE assigned_machine_id = m.id AND status = 'proxied') as proxied_domains_count,
+			(SELECT COUNT(*)::int FROM (
+				SELECT pool_id FROM dns_passthrough_members WHERE machine_id = m.id AND is_enabled = true
+				UNION
+				SELECT pp.id as pool_id FROM dns_passthrough_pools pp
+				INNER JOIN machine_group_members gm ON gm.group_id = ANY(pp.group_ids) AND gm.machine_id = m.id
+			) t) as passthrough_pool_count,
+			(SELECT COUNT(*)::int FROM (
+				SELECT pool_id FROM dns_wildcard_pool_members WHERE machine_id = m.id AND is_enabled = true
+				UNION
+				SELECT wp.id as pool_id FROM dns_wildcard_pools wp
+				INNER JOIN machine_group_members gm ON gm.group_id = ANY(wp.group_ids) AND gm.machine_id = m.id
+			) t) as wildcard_pool_count,
+			(SELECT COUNT(*)::int FROM dns_passthrough_pools WHERE current_machine_id = m.id)
+			+ (SELECT COUNT(*)::int FROM dns_wildcard_pools WHERE current_machine_id = m.id) as active_dns_target_count,
+			(SELECT COUNT(*)::int FROM machine_group_members WHERE machine_id = m.id) as group_count
 		FROM machines m
 		LEFT JOIN agents a ON m.agent_id = a.id
 		LEFT JOIN users u ON m.owner_id = u.id

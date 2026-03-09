@@ -388,7 +388,7 @@ func (h *DomainsHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 	if claims.IsSuperAdmin() {
 		err = h.db.Select(&domains, `
 			SELECT d.*, 
-				m.hostname as machine_name, 
+				COALESCE(NULLIF(m.title, ''), m.hostname) as machine_name, 
 				COALESCE(m.primary_ip, m.ip_address) as machine_ip,
 				dcl.nginx_config_id as config_id,
 				nc.name as config_name
@@ -401,7 +401,7 @@ func (h *DomainsHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 	} else {
 		err = h.db.Select(&domains, `
 			SELECT d.*, 
-				m.hostname as machine_name, 
+				COALESCE(NULLIF(m.title, ''), m.hostname) as machine_name, 
 				COALESCE(m.primary_ip, m.ip_address) as machine_ip,
 				dcl.nginx_config_id as config_id,
 				nc.name as config_name
@@ -439,7 +439,7 @@ func (h *DomainsHandler) GetDomain(w http.ResponseWriter, r *http.Request) {
 	var domain DomainWithConfig
 	err = h.db.Get(&domain, `
 		SELECT d.*, 
-			m.hostname as machine_name, 
+			COALESCE(NULLIF(m.title, ''), m.hostname) as machine_name, 
 			COALESCE(m.primary_ip, m.ip_address) as machine_ip,
 			dcl.nginx_config_id as config_id,
 			nc.name as config_name
