@@ -892,12 +892,12 @@ func (h *PassthroughHandler) selectNextMachineWildcard(poolID uuid.UUID, strateg
 	// Get direct members
 	var members []models.WildcardMemberWithMachine
 	h.db.Select(&members, `
-		SELECT wm.*, m.hostname as machine_name, COALESCE(m.primary_ip, m.ip_address) as machine_ip, a.last_seen
+		SELECT wm.*, COALESCE(NULLIF(m.title, ''), m.hostname) as machine_name, COALESCE(m.primary_ip, m.ip_address) as machine_ip, a.last_seen
 		FROM dns_wildcard_pool_members wm
 		JOIN machines m ON wm.machine_id = m.id
 		LEFT JOIN agents a ON m.agent_id = a.id
 		WHERE wm.pool_id = $1 AND wm.is_enabled = true
-		ORDER BY wm.priority, m.hostname
+		ORDER BY wm.priority, COALESCE(NULLIF(m.title, ''), m.hostname)
 	`, poolID)
 
 	// Add machines from groups (deduplicated)
