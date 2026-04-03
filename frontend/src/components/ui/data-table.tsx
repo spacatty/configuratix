@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import {
+  type Column,
   ColumnDef,
   ColumnFiltersState,
   OnChangeFn,
@@ -93,6 +94,7 @@ export function DataTable<TData, TValue>({
     setPagination((p) => (p.pageSize === next ? p : { ...p, pageSize: next, pageIndex: 0 }));
   }, [pageSizeProp]);
 
+  /* eslint-disable-next-line react-hooks/incompatible-library -- TanStack Table useReactTable */
   const table = useReactTable({
     data,
     columns,
@@ -273,7 +275,7 @@ export function DataTable<TData, TValue>({
                 value={String(pagination.pageSize)}
                 onValueChange={(v) => {
                   const n = Number(v);
-                  setPagination((p) => ({ pageIndex: 0, pageSize: n }));
+                  setPagination(() => ({ pageIndex: 0, pageSize: n }));
                 }}
               >
                 <SelectTrigger className="h-8 w-[72px]">
@@ -316,7 +318,13 @@ export function DataTable<TData, TValue>({
 }
 
 // Sort header helper
-export function SortableHeader({ column, children }: { column: any; children: React.ReactNode }) {
+export function SortableHeader<TData, TValue>({
+  column,
+  children,
+}: {
+  column: Column<TData, TValue>;
+  children: React.ReactNode;
+}) {
   return (
     <Button
       variant="ghost"

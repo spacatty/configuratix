@@ -462,7 +462,7 @@ function MachineToolsTab({ machineId, machineIp }: { machineId: string; machineI
     setResult("");
     
     try {
-      let request: SpeedTestRequest = { type: testType as SpeedTestRequest["type"] };
+      const request: SpeedTestRequest = { type: testType as SpeedTestRequest["type"] };
       
       // Configure based on test type
       switch (testType) {

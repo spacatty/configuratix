@@ -329,7 +329,7 @@ export default function ProfilePage() {
               </div>
               <div className="space-y-2">
                 <Label className="text-xs text-muted-foreground">
-                  Can't scan? Enter this code manually:
+                  Can&apos;t scan? Enter this code manually:
                 </Label>
                 <code className="block p-2 bg-muted rounded text-sm font-mono break-all">
                   {totpData.secret}

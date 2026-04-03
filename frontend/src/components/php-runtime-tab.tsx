@@ -299,7 +299,7 @@ export function PHPRuntimeTab({ machineId }: PHPRuntimeTabProps) {
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              Uses Ondřej Surý's PPA for the latest PHP versions
+              Uses Ondřej Surý&apos;s PPA for the latest PHP versions
             </p>
           </div>
 
@@ -400,7 +400,7 @@ export function PHPRuntimeTab({ machineId }: PHPRuntimeTabProps) {
                 automatically used for Nginx configurations with PHP enabled.
               </p>
               <p className="text-xs text-muted-foreground mt-2">
-                Enable "Use PHP" on any static location in your Nginx configs to route .php files to PHP-FPM.
+                Enable &quot;Use PHP&quot; on any static location in your Nginx configs to route .php files to PHP-FPM.
               </p>
             </div>
           </div>

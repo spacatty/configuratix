@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1446,23 +1446,37 @@ function ResourceFormDialog({
   submitting: boolean;
   onSave: (data: { name: string; url?: string | null; notes_md?: string | null }) => Promise<void>;
 }) {
-  const [name, setName] = useState("");
-  const [url, setUrl] = useState("");
-  const [notesMd, setNotesMd] = useState("");
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md rounded-2xl">
+        {open ? (
+          <ResourceFormDialogInner
+            key={resource?.id ?? "new"}
+            resource={resource}
+            submitting={submitting}
+            onSave={onSave}
+            onOpenChange={onOpenChange}
+          />
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
-  useEffect(() => {
-    if (open) {
-      if (resource) {
-        setName(resource.name);
-        setUrl(resource.url ?? "");
-        setNotesMd(resource.notes_md ?? "");
-      } else {
-        setName("");
-        setUrl("");
-        setNotesMd("");
-      }
-    }
-  }, [open, resource]);
+function ResourceFormDialogInner({
+  resource,
+  submitting,
+  onSave,
+  onOpenChange,
+}: {
+  resource: TrackerResource | null;
+  submitting: boolean;
+  onSave: (data: { name: string; url?: string | null; notes_md?: string | null }) => Promise<void>;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [name, setName] = useState(() => resource?.name ?? "");
+  const [url, setUrl] = useState(() => resource?.url ?? "");
+  const [notesMd, setNotesMd] = useState(() => resource?.notes_md ?? "");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1474,32 +1488,30 @@ function ResourceFormDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md rounded-2xl">
-        <DialogHeader>
-          <DialogTitle>{resource ? "Edit resource" : "New resource"}</DialogTitle>
-          <DialogDescription>Name is required. URL and notes are optional.</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1">
-            <Label className="text-xs font-medium text-muted-foreground">Name</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} className="rounded-lg h-9" placeholder="Resource name" required />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs font-medium text-muted-foreground">URL</Label>
-            <Input value={url} onChange={(e) => setUrl(e.target.value)} type="url" className="rounded-lg h-9" placeholder="https://..." />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs font-medium text-muted-foreground">Notes</Label>
-            <Textarea value={notesMd} onChange={(e) => setNotesMd(e.target.value)} rows={3} className="resize-y text-sm rounded-lg" placeholder="Optional notes..." />
-          </div>
-          <DialogFooter className="px-6 py-3 bg-muted/15">
-            <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={submitting} size="sm" className="rounded-lg">{resource ? "Update" : "Create"}</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <>
+      <DialogHeader>
+        <DialogTitle>{resource ? "Edit resource" : "New resource"}</DialogTitle>
+        <DialogDescription>Name is required. URL and notes are optional.</DialogDescription>
+      </DialogHeader>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1">
+          <Label className="text-xs font-medium text-muted-foreground">Name</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} className="rounded-lg h-9" placeholder="Resource name" required />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs font-medium text-muted-foreground">URL</Label>
+          <Input value={url} onChange={(e) => setUrl(e.target.value)} type="url" className="rounded-lg h-9" placeholder="https://..." />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs font-medium text-muted-foreground">Notes</Label>
+          <Textarea value={notesMd} onChange={(e) => setNotesMd(e.target.value)} rows={3} className="resize-y text-sm rounded-lg" placeholder="Optional notes..." />
+        </div>
+        <DialogFooter className="px-6 py-3 bg-muted/15">
+          <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button type="submit" disabled={submitting} size="sm" className="rounded-lg">{resource ? "Update" : "Create"}</Button>
+        </DialogFooter>
+      </form>
+    </>
   );
 }
 
@@ -1854,21 +1866,34 @@ function PaidDialog({
   submitting: boolean;
   onPaid: (data: { expiry_at?: string | null; recurring_period_type?: string; recurring_period_days?: number; amount_usd?: number }) => Promise<void>;
 }) {
-  const [recurringType, setRecurringType] = useState("1m");
-  const [recurringDays, setRecurringDays] = useState("");
-  const [expiryOverride, setExpiryOverride] = useState("");
-  const [amountUsd, setAmountUsd] = useState("");
-
-  useEffect(() => {
-    if (open && item) {
-      setRecurringType(item.recurring_period_type || "1m");
-      setRecurringDays(item.recurring_period_days?.toString() ?? "");
-      setExpiryOverride("");
-      setAmountUsd(item.price_usd?.toString() ?? "");
-    }
-  }, [open, item]);
-
   if (!item) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        {open ? (
+          <PaidDialogInner key={item.id} item={item} submitting={submitting} onPaid={onPaid} onOpenChange={onOpenChange} />
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PaidDialogInner({
+  item,
+  submitting,
+  onPaid,
+  onOpenChange,
+}: {
+  item: TrackerItemWithCategory;
+  submitting: boolean;
+  onPaid: (data: { expiry_at?: string | null; recurring_period_type?: string; recurring_period_days?: number; amount_usd?: number }) => Promise<void>;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [recurringType, setRecurringType] = useState(() => item.recurring_period_type || "1m");
+  const [recurringDays, setRecurringDays] = useState(() => item.recurring_period_days?.toString() ?? "");
+  const [expiryOverride, setExpiryOverride] = useState("");
+  const [amountUsd, setAmountUsd] = useState(() => item.price_usd?.toString() ?? "");
 
   const now = new Date();
   const baseExpiry = item.expiry_at && new Date(item.expiry_at) > now ? new Date(item.expiry_at) : now;
@@ -1894,53 +1919,51 @@ function PaidDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Mark as paid</DialogTitle>
-          <DialogDescription>Record renewal for &quot;{item.name}&quot;. New expiry is computed from the selected period; you can override it.</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label>Renewal period</Label>
-            <div className="flex gap-2 items-center">
-              <Select value={recurringType} onValueChange={setRecurringType}>
-                <SelectTrigger className="w-[140px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {RECURRING_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {recurringType === "custom" && (
-                <Input type="number" min={1} className="w-20" value={recurringDays} onChange={(e) => setRecurringDays(e.target.value)} placeholder="30" />
-              )}
-            </div>
+    <>
+      <DialogHeader>
+        <DialogTitle>Mark as paid</DialogTitle>
+        <DialogDescription>Record renewal for &quot;{item.name}&quot;. New expiry is computed from the selected period; you can override it.</DialogDescription>
+      </DialogHeader>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-2">
+          <Label>Renewal period</Label>
+          <div className="flex gap-2 items-center">
+            <Select value={recurringType} onValueChange={setRecurringType}>
+              <SelectTrigger className="w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {RECURRING_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {recurringType === "custom" && (
+              <Input type="number" min={1} className="w-20" value={recurringDays} onChange={(e) => setRecurringDays(e.target.value)} placeholder="30" />
+            )}
           </div>
-          <div className="space-y-2">
-            <Label>New expiry (computed)</Label>
-            <p className="text-sm text-muted-foreground">{computedExpiry.toLocaleString()}</p>
-          </div>
-          <div className="space-y-2">
-            <Label>Override expiry (optional)</Label>
-            <DateTimePicker value={expiryOverride} onChange={setExpiryOverride} placeholder="Override expiry date" />
-          </div>
-          <div className="space-y-2">
-            <Label>Amount paid (USD, optional)</Label>
-            <Input type="number" step={0.01} value={amountUsd} onChange={(e) => setAmountUsd(e.target.value)} placeholder={item.price_usd?.toString() ?? ""} />
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={submitting}>
-              <CheckCircle2 className="h-4 w-4 mr-2" />
-              Record paid
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+        </div>
+        <div className="space-y-2">
+          <Label>New expiry (computed)</Label>
+          <p className="text-sm text-muted-foreground">{computedExpiry.toLocaleString()}</p>
+        </div>
+        <div className="space-y-2">
+          <Label>Override expiry (optional)</Label>
+          <DateTimePicker value={expiryOverride} onChange={setExpiryOverride} placeholder="Override expiry date" />
+        </div>
+        <div className="space-y-2">
+          <Label>Amount paid (USD, optional)</Label>
+          <Input type="number" step={0.01} value={amountUsd} onChange={(e) => setAmountUsd(e.target.value)} placeholder={item.price_usd?.toString() ?? ""} />
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button type="submit" disabled={submitting}>
+            <CheckCircle2 className="h-4 w-4 mr-2" />
+            Record paid
+          </Button>
+        </DialogFooter>
+      </form>
+    </>
   );
 }
 
@@ -2014,13 +2037,14 @@ function NotificationsDialog({
   onMarkAllRead: () => Promise<void>;
 }) {
   const unread = notifications.filter((n) => !n.read_at);
-  const [permState, setPermState] = useState<NotificationPermission>("default");
-  useEffect(() => {
-    if (open && typeof window !== "undefined" && "Notification" in window) setPermState(Notification.permission);
-  }, [open]);
+  const [permTick, setPermTick] = useState(0);
+  const permState = useMemo((): NotificationPermission => {
+    if (typeof window === "undefined" || !("Notification" in window)) return "default";
+    return Notification.permission;
+  }, [open, permTick]);
   const requestPermission = () => {
     if (typeof window !== "undefined" && "Notification" in window) {
-      Notification.requestPermission().then(setPermState);
+      Notification.requestPermission().then(() => setPermTick((t) => t + 1));
     }
   };
   const showEnableDesktop = typeof window !== "undefined" && "Notification" in window && permState === "default";

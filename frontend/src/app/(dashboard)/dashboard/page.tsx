@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { api, Machine, Domain, NginxConfig } from "@/lib/api";
 
@@ -130,7 +131,7 @@ export default function DashboardPage() {
           <ol className="grid gap-3 text-sm text-muted-foreground md:grid-cols-2">
             <li className={`rounded-lg border border-border/50 px-3 py-3 ${machines.length > 0 ? "opacity-55" : "bg-muted/20"}`}>
               <span className={`mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold ${machines.length > 0 ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}>1</span>
-              Go to <a href="/machines" className="text-primary hover:underline">Machines</a> and create an enrollment token
+              Go to <Link href="/machines" className="text-primary hover:underline">Machines</Link> and create an enrollment token
             </li>
             <li className={`rounded-lg border border-border/50 px-3 py-3 ${machines.length > 0 ? "opacity-55" : "bg-muted/20"}`}>
               <span className={`mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold ${machines.length > 0 ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}>2</span>

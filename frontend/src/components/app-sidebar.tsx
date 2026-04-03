@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Sidebar,
@@ -151,15 +152,15 @@ export function AppSidebar({ user }: AppSidebarProps) {
                     <SidebarMenuSub>
                       <SidebarMenuSubItem>
                         <SidebarMenuSubButton asChild isActive={pathname === "/machines"}>
-                          <a href="/machines">All Machines</a>
+                          <Link href="/machines">All Machines</Link>
                         </SidebarMenuSubButton>
                       </SidebarMenuSubItem>
                       <SidebarMenuSubItem>
                         <SidebarMenuSubButton asChild isActive={pathname === "/machines/tokens"}>
-                          <a href="/machines/tokens" className="flex items-center gap-2">
+                          <Link href="/machines/tokens" className="flex items-center gap-2">
                             <KeyRound className="h-3 w-3" />
                             Enrollment Tokens
-                          </a>
+                          </Link>
                         </SidebarMenuSubButton>
                       </SidebarMenuSubItem>
                     </SidebarMenuSub>
@@ -181,24 +182,24 @@ export function AppSidebar({ user }: AppSidebarProps) {
                     <SidebarMenuSub>
                       <SidebarMenuSubItem>
                         <SidebarMenuSubButton asChild isActive={pathname === "/projects"}>
-                          <a href="/projects">All Projects</a>
+                          <Link href="/projects">All Projects</Link>
                         </SidebarMenuSubButton>
                       </SidebarMenuSubItem>
                       {projects.slice(0, 5).map((project) => (
                         <SidebarMenuSubItem key={project.id}>
                           <SidebarMenuSubButton asChild isActive={pathname === `/projects/${project.id}`}>
-                            <a href={`/projects/${project.id}`} className="truncate">
+                            <Link href={`/projects/${project.id}`} className="truncate">
                               {project.name}
-                            </a>
+                            </Link>
                           </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                       ))}
                       {projects.length > 5 && (
                         <SidebarMenuSubItem>
                           <SidebarMenuSubButton asChild>
-                            <a href="/projects" className="text-muted-foreground">
+                            <Link href="/projects" className="text-muted-foreground">
                               +{projects.length - 5} more...
-                            </a>
+                            </Link>
                           </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                       )}
@@ -220,10 +221,10 @@ export function AppSidebar({ user }: AppSidebarProps) {
               {/* DNS Management - Last in Workspace */}
               <SidebarMenuItem>
                 <SidebarMenuButton asChild isActive={isActive("/domains/dns")}>
-                  <a href="/domains/dns" className="flex items-center gap-3">
+                  <Link href="/domains/dns" className="flex items-center gap-3">
                     <Settings className="h-4 w-4" />
                     <span>DNS Management</span>
-                  </a>
+                  </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
