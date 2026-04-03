@@ -431,7 +431,7 @@ export default function NginxConfigsPage() {
         return (
           <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
             <Lock className="h-3 w-3 mr-1" />
-            {sslMode === "redirect_https" ? "Force HTTPS" : "Allow HTTP"}
+            {sslMode === "https_only" ? "HTTPS only" : sslMode === "redirect_https" ? "Force HTTPS" : "Allow HTTP"}
           </Badge>
         );
       },
@@ -737,9 +737,13 @@ export default function NginxConfigsPage() {
                     <SelectContent>
                       <SelectItem value="disabled">Disabled</SelectItem>
                       <SelectItem value="allow_http">Allow HTTP</SelectItem>
-                      <SelectItem value="redirect_https">Force HTTPS</SelectItem>
+                      <SelectItem value="redirect_https">Force HTTPS (redirect 80→443)</SelectItem>
+                      <SelectItem value="https_only">HTTPS only (443, no port 80)</SelectItem>
                     </SelectContent>
                   </Select>
+                  {formSslMode === "https_only" && (
+                    <p className="text-xs text-muted-foreground">Serves on 443 only; no port 80 listener (hardens SSL issuance).</p>
+                  )}
                   {formSslMode !== "disabled" && (
                     <Input type="email" placeholder="admin@example.com" value={formSslEmail} onChange={(e) => setFormSslEmail(e.target.value)} className="h-8 text-sm" />
                   )}

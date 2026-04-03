@@ -44,6 +44,20 @@ export default function DashboardPage() {
     }).length;
   };
 
+  const onlineMachines = getOnlineMachines();
+  const assignedDomains = domains.filter(d => d.assigned_machine_id).length;
+  const healthyDomains = getHealthyCount();
+  const autoConfigs = configs.filter(c => c.mode === "auto").length;
+  const manualConfigs = configs.filter(c => c.mode === "manual").length;
+  const healthyPercent = domains.length > 0 ? Math.round((healthyDomains / domains.length) * 100) : null;
+  const completedSteps = [
+    machines.length > 0,
+    machines.length > 0,
+    domains.length > 0,
+    configs.length > 0,
+    assignedDomains > 0,
+  ].filter(Boolean).length;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -53,148 +67,85 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-semibold tracking-tight">Dashboard</h1>
-        <p className="text-muted-foreground mt-1">
-          Overview of your proxy infrastructure
-        </p>
-      </div>
+    <div className="space-y-5">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight">Dashboard</h1>
+          <p className="mt-1 text-muted-foreground">
+            Overview of your proxy infrastructure
+          </p>
+        </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total Machines
-            </CardTitle>
-            <svg
-              className="h-4 w-4 text-muted-foreground"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"
-              />
-            </svg>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{machines.length}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {getOnlineMachines()} online
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Active Domains
-            </CardTitle>
-            <svg
-              className="h-4 w-4 text-muted-foreground"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"
-              />
-            </svg>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{domains.length}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {domains.filter(d => d.assigned_machine_id).length} assigned
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Nginx Configs
-            </CardTitle>
-            <svg
-              className="h-4 w-4 text-muted-foreground"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
-              />
-            </svg>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{configs.length}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {configs.filter(c => c.mode === "auto").length} auto, {configs.filter(c => c.mode === "manual").length} manual
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Health Status
-            </CardTitle>
-            <svg
-              className="h-4 w-4 text-muted-foreground"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {domains.length > 0 ? `${Math.round(getHealthyCount() / domains.length * 100)}%` : "—"}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:w-auto">
+          <div className="rounded-xl border border-border/50 bg-card/35 px-3 py-2">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Machines</div>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-lg font-semibold">{machines.length}</span>
+              <span className="text-xs text-muted-foreground">{onlineMachines} online</span>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {getHealthyCount()} healthy domains
-            </p>
-          </CardContent>
-        </Card>
+          </div>
+          <div className="rounded-xl border border-border/50 bg-card/35 px-3 py-2">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Domains</div>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-lg font-semibold">{domains.length}</span>
+              <span className="text-xs text-muted-foreground">{assignedDomains} assigned</span>
+            </div>
+          </div>
+          <div className="rounded-xl border border-border/50 bg-card/35 px-3 py-2">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Configs</div>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-lg font-semibold">{configs.length}</span>
+              <span className="text-xs text-muted-foreground">{autoConfigs}/{manualConfigs} auto/manual</span>
+            </div>
+          </div>
+          <div className="rounded-xl border border-border/50 bg-card/35 px-3 py-2">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Health</div>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-lg font-semibold">{healthyPercent !== null ? `${healthyPercent}%` : "—"}</span>
+              <span className="text-xs text-muted-foreground">{healthyDomains} healthy</span>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <Card className="border-border/50 bg-card/50">
-        <CardHeader>
+      <Card className="border-border/50 bg-card/55 shadow-sm">
+        <CardHeader className="space-y-3 pb-4">
           <CardTitle>Getting Started</CardTitle>
           <CardDescription>
             Follow these steps to set up your first proxy server
           </CardDescription>
+          <div className="flex items-center gap-3">
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary transition-all"
+                style={{ width: `${(completedSteps / 5) * 100}%` }}
+              />
+            </div>
+            <span className="text-xs font-medium text-muted-foreground">
+              {completedSteps}/5 complete
+            </span>
+          </div>
         </CardHeader>
         <CardContent>
-          <ol className="list-decimal list-inside space-y-3 text-sm text-muted-foreground">
-            <li className={machines.length > 0 ? "line-through opacity-50" : ""}>
+          <ol className="grid gap-3 text-sm text-muted-foreground md:grid-cols-2">
+            <li className={`rounded-lg border border-border/50 px-3 py-3 ${machines.length > 0 ? "opacity-55" : "bg-muted/20"}`}>
+              <span className={`mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold ${machines.length > 0 ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}>1</span>
               Go to <a href="/machines" className="text-primary hover:underline">Machines</a> and create an enrollment token
             </li>
-            <li className={machines.length > 0 ? "line-through opacity-50" : ""}>
+            <li className={`rounded-lg border border-border/50 px-3 py-3 ${machines.length > 0 ? "opacity-55" : "bg-muted/20"}`}>
+              <span className={`mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold ${machines.length > 0 ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}>2</span>
               Run the install command on your Ubuntu 22.04/24.04 server
             </li>
-            <li className={domains.length > 0 ? "line-through opacity-50" : ""}>
+            <li className={`rounded-lg border border-border/50 px-3 py-3 ${domains.length > 0 ? "opacity-55" : "bg-muted/20"}`}>
+              <span className={`mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold ${domains.length > 0 ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}>3</span>
               Create a domain in <a href="/domains" className="text-primary hover:underline">Domains</a> section
             </li>
-            <li className={configs.length > 0 ? "line-through opacity-50" : ""}>
+            <li className={`rounded-lg border border-border/50 px-3 py-3 ${configs.length > 0 ? "opacity-55" : "bg-muted/20"}`}>
+              <span className={`mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold ${configs.length > 0 ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}>4</span>
               Create an nginx configuration in <a href="/configs/nginx" className="text-primary hover:underline">Nginx Configs</a>
             </li>
-            <li className={domains.filter(d => d.assigned_machine_id).length > 0 ? "line-through opacity-50" : ""}>
+            <li className={`rounded-lg border border-border/50 px-3 py-3 md:col-span-2 ${assignedDomains > 0 ? "opacity-55" : "bg-muted/20"}`}>
+              <span className={`mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold ${assignedDomains > 0 ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}>5</span>
               Link the domain to your machine with a configuration
             </li>
           </ol>

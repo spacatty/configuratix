@@ -109,6 +109,7 @@ export interface Machine {
   wildcard_pool_count?: number;
   active_dns_target_count?: number;
   group_count?: number;
+  assigned_domains_summary?: { fqdn: string; status: string }[];
 }
 
 export interface MachineGroup {
@@ -241,6 +242,8 @@ export interface Domain {
   fqdn: string;
   assigned_machine_id: string | null;
   status: string;
+  /** Expected HTTP status code for health (default 200) */
+  health_check_expected_status?: number;
   notes_md: string | null;
   last_check_at: string | null;
   created_at: string;
@@ -280,6 +283,7 @@ export interface DNSManagedDomain {
   fqdn: string;
   dns_account_id: string | null;
   proxy_mode: string; // 'separate' or 'wildcard'
+  listener_protocol?: string; // 'http_only' | 'http_and_https' | 'https_only'
   ns_status: string; // unknown, pending, valid, invalid
   ns_last_check: string | null;
   ns_expected: string[] | null;
@@ -1123,6 +1127,48 @@ class ApiClient {
     });
   }
 
+  async updateDomainHealthCheck(id: string, expectedHttpStatus: number): Promise<void> {
+    await this.request(`/api/domains/${id}/health-check`, {
+      method: "PUT",
+      body: JSON.stringify({ expected_http_status: expectedHttpStatus }),
+    });
+  }
+
+  async triggerDomainHealthCheck(id: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(`/api/domains/${id}/check`, { method: "POST" });
+  }
+
+  async bulkAssignDomains(
+    domainIds: string[],
+    machineId: string | null,
+    configId: string | null
+  ): Promise<{ ok: number; errors: { id: string; error: string }[] }> {
+    return this.request("/api/domains/bulk/assign", {
+      method: "POST",
+      body: JSON.stringify({
+        domain_ids: domainIds,
+        machine_id: machineId,
+        config_id: configId,
+      }),
+    });
+  }
+
+  async bulkDeleteDomains(domainIds: string[]): Promise<{ deleted: number }> {
+    return this.request<{ deleted: number }>("/api/domains/bulk/delete", {
+      method: "POST",
+      body: JSON.stringify({ domain_ids: domainIds }),
+    });
+  }
+
+  async bulkCheckDomains(
+    domainIds: string[]
+  ): Promise<{ results: { id: string; status?: string; error?: string }[] }> {
+    return this.request("/api/domains/bulk/check", {
+      method: "POST",
+      body: JSON.stringify({ domain_ids: domainIds }),
+    });
+  }
+
   // DNS Accounts
   async listDNSAccounts(): Promise<DNSAccount[]> {
     return this.request<DNSAccount[]>("/api/dns-accounts");
@@ -1194,6 +1240,7 @@ class ApiClient {
   async updateDNSManagedDomain(id: string, data: {
     dns_account_id?: string | null;
     notes_md?: string;
+    listener_protocol?: 'http_only' | 'http_and_https' | 'https_only';
   }): Promise<void> {
     await this.request(`/api/dns-domains/${id}`, {
       method: "PUT",
@@ -1805,6 +1852,172 @@ class ApiClient {
   async getSecurityStats(): Promise<SecurityStats> {
     return this.request("/api/security/stats");
   }
+
+  // Tracker
+  async listTrackerCategories(): Promise<TrackerCategoryWithCount[]> {
+    return this.request("/api/tracker/categories");
+  }
+
+  async createTrackerCategory(data: { name: string; icon?: string; color?: string; notify_days_before?: number; identifier_label?: string }): Promise<TrackerCategory> {
+    return this.request("/api/tracker/categories", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTrackerCategory(id: string, data: { name?: string; icon?: string; color?: string; position?: number; notify_days_before?: number; identifier_label?: string }): Promise<void> {
+    await this.request(`/api/tracker/categories/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTrackerCategory(id: string): Promise<void> {
+    await this.request(`/api/tracker/categories/${id}`, { method: "DELETE" });
+  }
+
+  async reorderTrackerCategories(categoryIds: string[]): Promise<void> {
+    await this.request("/api/tracker/categories/reorder", {
+      method: "PUT",
+      body: JSON.stringify({ category_ids: categoryIds }),
+    });
+  }
+
+  async listTrackerCategoryTags(categoryId: string): Promise<TrackerTag[]> {
+    return this.request(`/api/tracker/categories/${categoryId}/tags`);
+  }
+
+  async createTrackerCategoryTag(categoryId: string, data: { name: string; color?: string }): Promise<TrackerTag> {
+    return this.request(`/api/tracker/categories/${categoryId}/tags`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTrackerTag(id: string, data: { name?: string; color?: string }): Promise<TrackerTag> {
+    return this.request(`/api/tracker/tags/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTrackerTag(id: string): Promise<void> {
+    await this.request(`/api/tracker/tags/${id}`, { method: "DELETE" });
+  }
+
+  async listTrackerResources(q?: string): Promise<TrackerResource[]> {
+    const params = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : "";
+    return this.request(`/api/tracker/resources${params}`);
+  }
+
+  async getTrackerResource(id: string): Promise<TrackerResource> {
+    return this.request(`/api/tracker/resources/${id}`);
+  }
+
+  async createTrackerResource(data: { name: string; url?: string | null; notes_md?: string | null }): Promise<TrackerResource> {
+    return this.request("/api/tracker/resources", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTrackerResource(id: string, data: Partial<{ name: string; url: string | null; notes_md: string | null }>): Promise<TrackerResource> {
+    return this.request(`/api/tracker/resources/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTrackerResource(id: string): Promise<void> {
+    await this.request(`/api/tracker/resources/${id}`, { method: "DELETE" });
+  }
+
+  async listTrackerItems(categoryId?: string): Promise<TrackerItemWithCategory[]> {
+    const params = categoryId ? `?category_id=${encodeURIComponent(categoryId)}` : "";
+    return this.request(`/api/tracker/items${params}`);
+  }
+
+  async getTrackerItem(id: string): Promise<TrackerItemWithCategory> {
+    return this.request(`/api/tracker/items/${id}`);
+  }
+
+  async createTrackerItem(data: {
+    name: string;
+    resource_id?: string | null;
+    resource_name?: string;
+    identifier_value?: string;
+    category_id?: string | null;
+    tag_ids?: string[];
+    purchase_time?: string | null;
+    order_date?: string | null;
+    expiry_at?: string | null;
+    recurring_period_type?: string | null;
+    recurring_period_days?: number | null;
+    price_usd?: number | null;
+    notes_md?: string | null;
+  }): Promise<TrackerItem> {
+    return this.request("/api/tracker/items", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTrackerItem(id: string, data: Partial<{
+    name: string;
+    identifier_value: string;
+    resource_id: string | null;
+    category_id: string | null;
+    tag_ids: string[];
+    purchase_time: string | null;
+    order_date: string | null;
+    expiry_at: string | null;
+    recurring_period_type: string | null;
+    recurring_period_days: number | null;
+    price_usd: number | null;
+    notes_md: string | null;
+  }>): Promise<void> {
+    await this.request(`/api/tracker/items/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTrackerItem(id: string): Promise<void> {
+    await this.request(`/api/tracker/items/${id}`, { method: "DELETE" });
+  }
+
+  async recordTrackerPaid(id: string, data: {
+    expiry_at?: string | null;
+    recurring_period_type?: string | null;
+    recurring_period_days?: number | null;
+    amount_usd?: number | null;
+  }): Promise<TrackerItem> {
+    return this.request(`/api/tracker/items/${id}/paid`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async listTrackerRenewals(itemId: string): Promise<TrackerRenewal[]> {
+    return this.request(`/api/tracker/items/${itemId}/renewals`);
+  }
+
+  async listTrackerNotifications(unreadOnly?: boolean): Promise<TrackerNotificationWithItem[]> {
+    const params = unreadOnly ? "?unread_only=true" : "";
+    return this.request(`/api/tracker/notifications${params}`);
+  }
+
+  async markTrackerNotificationRead(id: string): Promise<void> {
+    await this.request(`/api/tracker/notifications/${id}/read`, { method: "POST" });
+  }
+
+  async markAllTrackerNotificationsRead(): Promise<void> {
+    await this.request("/api/tracker/notifications/read-all", { method: "POST" });
+  }
+
+  async getTrackerDashboard(): Promise<TrackerDashboardSummary> {
+    return this.request("/api/tracker/dashboard");
+  }
 }
 
 export interface PHPRuntime {
@@ -2041,6 +2254,113 @@ export interface SpeedTestMachine {
   ip_address: string | null;
   primary_ip: string | null;
   is_online: boolean;
+}
+
+// Tracker (subscriptions, servers, domains)
+export interface TrackerCategory {
+  id: string;
+  owner_id: string;
+  name: string;
+  icon: string;
+  color: string;
+  position: number;
+  notify_days_before: number;
+  identifier_label: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrackerCategoryWithCount extends TrackerCategory {
+  item_count: number;
+}
+
+export interface TrackerTag {
+  id: string;
+  owner_id: string;
+  category_id: string;
+  name: string;
+  color: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrackerResource {
+  id: string;
+  owner_id: string;
+  name: string;
+  url: string | null;
+  notes_md: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrackerItem {
+  id: string;
+  owner_id: string;
+  category_id: string | null;
+  name: string;
+  identifier_value: string;
+  resource_id: string | null;
+  purchase_time: string | null;
+  order_date: string | null;
+  expiry_at: string | null;
+  recurring_period_type: string | null;
+  recurring_period_days: number | null;
+  price_usd: number | null;
+  notes_md: string | null;
+  last_notified_at: string | null;
+  next_notification_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TrackerItemTagRef {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export interface TrackerItemWithCategory extends TrackerItem {
+  category_name?: string | null;
+  category_icon?: string | null;
+  category_color?: string | null;
+  category_identifier_label?: string | null;
+  resource_name?: string | null;
+  resource_url?: string | null;
+  tags?: TrackerItemTagRef[];
+}
+
+export interface TrackerRenewal {
+  id: string;
+  item_id: string;
+  renewed_at: string;
+  expiry_before: string | null;
+  expiry_after: string;
+  amount_usd: number | null;
+  created_at: string;
+}
+
+export interface TrackerNotification {
+  id: string;
+  owner_id: string;
+  item_id: string | null;
+  title: string;
+  body: string | null;
+  type: string;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface TrackerNotificationWithItem extends TrackerNotification {
+  item_name?: string | null;
+}
+
+export interface TrackerDashboardSummary {
+  monthly_recurring_expense: number;
+  total_spent: number;
+  closest_payment: TrackerItem | null;
+  due_soon_count: number;
+  overdue_count: number;
 }
 
 export const api = new ApiClient(API_URL);

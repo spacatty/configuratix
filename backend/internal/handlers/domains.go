@@ -11,7 +11,6 @@ import (
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
 	"configuratix/backend/internal/models"
-	"configuratix/backend/internal/templates"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -132,15 +131,21 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 		proxyProtocolPort = structured.ProxySettings.ProxyProtocolPort
 	}
 
+	// ssl_mode: disabled = 80 only; allow_http = 80+443; redirect_https = 80+443 (legacy, redirect); https_only = 443 only (hardened)
+	listenHTTP := structured.SSLMode != "https_only"
 	if useProxyProtocol {
 		// With PROXY protocol - use custom port
-		config += fmt.Sprintf("    listen %d proxy_protocol;\n", proxyProtocolPort)
+		if listenHTTP {
+			config += fmt.Sprintf("    listen %d proxy_protocol;\n", proxyProtocolPort)
+		}
 		if structured.SSLMode != "disabled" {
 			config += fmt.Sprintf("    listen %d ssl http2 proxy_protocol;\n", proxyProtocolPort)
 		}
 	} else {
 		// Standard listen
-		config += "    listen 80;\n"
+		if listenHTTP {
+			config += "    listen 80;\n"
+		}
 		if structured.SSLMode != "disabled" {
 			config += "    listen 443 ssl http2;\n"
 		}
@@ -362,19 +367,20 @@ func NewDomainsHandler(db *database.DB) *DomainsHandler {
 }
 
 type DomainWithConfig struct {
-	ID                uuid.UUID  `db:"id" json:"id"`
-	FQDN              string     `db:"fqdn" json:"fqdn"`
-	OwnerID           *uuid.UUID `db:"owner_id" json:"owner_id"`
-	AssignedMachineID *uuid.UUID `db:"assigned_machine_id" json:"assigned_machine_id"`
-	Status            string     `db:"status" json:"status"`
-	NotesMD           *string    `db:"notes_md" json:"notes_md"`
-	LastCheckAt       *time.Time `db:"last_check_at" json:"last_check_at"`
-	CreatedAt         time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt         time.Time  `db:"updated_at" json:"updated_at"`
-	MachineName       *string    `db:"machine_name" json:"machine_name"`
-	MachineIP         *string    `db:"machine_ip" json:"machine_ip"`
-	ConfigID          *uuid.UUID `db:"config_id" json:"config_id"`
-	ConfigName        *string    `db:"config_name" json:"config_name"`
+	ID                        uuid.UUID  `db:"id" json:"id"`
+	FQDN                      string     `db:"fqdn" json:"fqdn"`
+	OwnerID                   *uuid.UUID `db:"owner_id" json:"owner_id"`
+	AssignedMachineID         *uuid.UUID `db:"assigned_machine_id" json:"assigned_machine_id"`
+	Status                    string     `db:"status" json:"status"`
+	HealthCheckExpectedStatus int        `db:"health_check_expected_status" json:"health_check_expected_status"`
+	NotesMD                   *string    `db:"notes_md" json:"notes_md"`
+	LastCheckAt               *time.Time `db:"last_check_at" json:"last_check_at"`
+	CreatedAt                 time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt                 time.Time  `db:"updated_at" json:"updated_at"`
+	MachineName               *string    `db:"machine_name" json:"machine_name"`
+	MachineIP                 *string    `db:"machine_ip" json:"machine_ip"`
+	ConfigID                  *uuid.UUID `db:"config_id" json:"config_id"`
+	ConfigName                *string    `db:"config_name" json:"config_name"`
 }
 
 // ListDomains returns all domains with their machine and config info
@@ -515,274 +521,9 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get current assignment to check if we need to remove from old machine
-	var currentMachineID *uuid.UUID
-	h.db.Get(&currentMachineID, "SELECT assigned_machine_id FROM domains WHERE id = $1", id)
-
-	// Start transaction
-	tx, err := h.db.Beginx()
-	if err != nil {
-		log.Printf("Failed to start transaction: %v", err)
-		http.Error(w, "Failed to assign domain", http.StatusInternalServerError)
-		return
-	}
-	defer tx.Rollback()
-
-	// Update domain assignment
-	status := "idle"
-	if req.MachineID != nil {
-		status = "linked"
-	}
-
-	_, err = tx.Exec(`
-		UPDATE domains 
-		SET assigned_machine_id = $1, status = $2, updated_at = NOW()
-		WHERE id = $3
-	`, req.MachineID, status, id)
-	if err != nil {
-		log.Printf("Failed to update domain: %v", err)
-		http.Error(w, "Failed to assign domain", http.StatusInternalServerError)
-		return
-	}
-
-	// Update config link
-	if req.ConfigID != nil {
-		// Remove existing link
-		tx.Exec("DELETE FROM domain_config_links WHERE domain_id = $1", id)
-		// Add new link
-		_, err = tx.Exec(`
-			INSERT INTO domain_config_links (domain_id, nginx_config_id)
-			VALUES ($1, $2)
-		`, id, req.ConfigID)
-		if err != nil {
-			log.Printf("Failed to link config: %v", err)
-			http.Error(w, "Failed to link config", http.StatusInternalServerError)
-			return
-		}
-	}
-
-	// Create jobs to apply/remove config on machines
-	// Get domain and config info for job payload
-	var domainFQDN string
-	tx.Get(&domainFQDN, "SELECT fqdn FROM domains WHERE id = $1", id)
-
-	var nginxConfig string
-	var configJSON json.RawMessage
-	if req.ConfigID != nil {
-		var config struct {
-			StructuredJSON json.RawMessage `db:"structured_json"`
-			RawText        *string         `db:"raw_text"`
-			Mode           string          `db:"mode"`
-		}
-		tx.Get(&config, "SELECT structured_json, raw_text, mode FROM nginx_configs WHERE id = $1", req.ConfigID)
-		configJSON = config.StructuredJSON
-		
-		// Look up PHP version for the target machine if available
-		phpVersion := ""
-		if req.MachineID != nil {
-			var runtime struct {
-				Version string `db:"version"`
-				Status  string `db:"status"`
-			}
-			err := tx.Get(&runtime, "SELECT version, status FROM php_runtimes WHERE machine_id = $1", req.MachineID)
-			if err == nil && runtime.Status == "installed" {
-				phpVersion = runtime.Version
-			}
-		}
-		
-		if config.Mode == "manual" && config.RawText != nil {
-			nginxConfig = *config.RawText
-		} else {
-			// Fetch security configuration for this nginx config
-			var securityCfg *SecurityConfig
-
-			// Parse structured JSON to check if security is enabled
-			var secCheck struct {
-				UABlockingEnabled       bool `json:"ua_blocking_enabled"`
-				EndpointBlockingEnabled bool `json:"endpoint_blocking_enabled"`
-			}
-			json.Unmarshal(config.StructuredJSON, &secCheck)
-
-			if secCheck.UABlockingEnabled || secCheck.EndpointBlockingEnabled {
-				securityCfg = &SecurityConfig{}
-
-				// Fetch UA patterns if UA blocking is enabled (using main db, not transaction)
-				if secCheck.UABlockingEnabled {
-					var patterns []string
-					// Use DISTINCT to avoid duplicates, only get 'contains' patterns (not 'exact')
-					// Skip empty patterns and single-char patterns that are too broad
-					err := h.db.Select(&patterns, `
-						SELECT DISTINCT pattern FROM security_ua_patterns 
-						WHERE is_active = true 
-						  AND match_type = 'contains'
-						  AND pattern != ''
-						  AND pattern != '-'
-						  AND LENGTH(pattern) > 2
-					`)
-					if err != nil {
-						log.Printf("Warning: Failed to fetch UA patterns: %v", err)
-					} else {
-						securityCfg.UAPatterns = patterns
-						log.Printf("Loaded %d UA patterns for blocking", len(patterns))
-					}
-				}
-
-				// Fetch endpoint rules if endpoint blocking is enabled (using main db, not transaction)
-				if secCheck.EndpointBlockingEnabled {
-					var rules []string
-					err := h.db.Select(&rules, `
-						SELECT pattern FROM security_endpoint_rules 
-						WHERE nginx_config_id = $1
-					`, req.ConfigID)
-					if err != nil {
-						log.Printf("Warning: Failed to fetch endpoint rules: %v", err)
-					} else {
-						securityCfg.EndpointRules = rules
-						log.Printf("Loaded %d endpoint rules for blocking", len(rules))
-					}
-				}
-			}
-
-			// Generate nginx config from structured JSON with PHP version and security config
-			nginxConfig = generateNginxFromStructured(config.StructuredJSON, domainFQDN, phpVersion, securityCfg)
-		}
-	}
-
-	// If old machine exists and different from new, create remove_domain job using template
-	if currentMachineID != nil && (req.MachineID == nil || *currentMachineID != *req.MachineID) {
-		var oldAgentID uuid.UUID
-		tx.Get(&oldAgentID, "SELECT agent_id FROM machines WHERE id = $1", currentMachineID)
-		if oldAgentID != uuid.Nil {
-			// Use template-based job
-			removeCmd := templates.GetCommand("remove_domain")
-			if removeCmd != nil {
-				payload := removeCmd.ToPayload(map[string]string{"domain": domainFQDN})
-				tx.Exec(`
-					INSERT INTO jobs (agent_id, type, payload_json, status)
-					VALUES ($1, 'run', $2, 'pending')
-				`, oldAgentID, payload)
-			}
-		}
-	}
-
-	// If new machine exists, create apply_domain job using template
-	if req.MachineID != nil && req.ConfigID != nil {
-		var newAgentID uuid.UUID
-		tx.Get(&newAgentID, "SELECT agent_id FROM machines WHERE id = $1", req.MachineID)
-		if newAgentID != uuid.Nil {
-			// Check if this is a passthrough config
-			if isPassthroughConfig(configJSON) {
-				// Use passthrough template
-				passthroughTarget := getPassthroughTarget(configJSON)
-				applyCmd := templates.GetCommand("apply_passthrough_domain")
-				if applyCmd != nil {
-					payload := applyCmd.ToPayload(map[string]string{
-						"domain": domainFQDN,
-						"target": passthroughTarget,
-					})
-					tx.Exec(`
-						INSERT INTO jobs (agent_id, type, payload_json, status)
-						VALUES ($1, 'run', $2, 'pending')
-					`, newAgentID, payload)
-				}
-			} else {
-				// Regular HTTP config
-				// Determine if SSL is enabled and get SSL email
-				sslEnabled := "true"
-				sslEmail := "admin@example.com"
-				var structured struct {
-					SSLMode  string `json:"ssl_mode"`
-					SSLEmail string `json:"ssl_email"`
-				}
-				json.Unmarshal(configJSON, &structured)
-				if structured.SSLMode == "disabled" {
-					sslEnabled = "false"
-				}
-				if structured.SSLEmail != "" {
-					sslEmail = structured.SSLEmail
-				}
-
-				// Use template-based job
-				applyCmd := templates.GetCommand("apply_domain")
-				if applyCmd != nil {
-					payload := applyCmd.ToPayload(map[string]string{
-						"domain":       domainFQDN,
-						"nginx_config": nginxConfig,
-						"ssl_enabled":  sslEnabled,
-						"ssl_email":    sslEmail,
-					})
-					tx.Exec(`
-						INSERT INTO jobs (agent_id, type, payload_json, status)
-						VALUES ($1, 'run', $2, 'pending')
-					`, newAgentID, payload)
-				}
-
-			// Check for landing deployments in the config
-			var landingStructured struct {
-				Locations []struct {
-					StaticType            string `json:"static_type"`
-					LandingID             string `json:"landing_id"`
-					Root                  string `json:"root"`
-					Index                 string `json:"index"`
-					UsePHP                bool   `json:"use_php"`
-					ReplaceLandingContent *bool  `json:"replace_landing_content"` // default true
-				} `json:"locations"`
-			}
-			json.Unmarshal(configJSON, &landingStructured)
-
-			for _, loc := range landingStructured.Locations {
-				if loc.StaticType == "landing" && loc.LandingID != "" {
-					landingUUID, err := uuid.Parse(loc.LandingID)
-					if err != nil {
-						continue
-					}
-
-					// Get landing info
-					var landing struct {
-						StoragePath string `db:"storage_path"`
-						Type        string `db:"type"`
-						FileName    string `db:"file_name"`
-					}
-					err = tx.Get(&landing, "SELECT storage_path, type, file_name FROM landings WHERE id = $1", landingUUID)
-					if err != nil {
-						log.Printf("Failed to get landing %s: %v", loc.LandingID, err)
-						continue
-					}
-
-					// Create deploy_landing job
-					index := loc.Index
-					if index == "" {
-						if landing.Type == "php" {
-							index = "index.php"
-						} else {
-							index = "index.html"
-						}
-					}
-
-					// Default replace_content to true if not specified
-					replaceContent := loc.ReplaceLandingContent == nil || *loc.ReplaceLandingContent
-
-					deployPayload, _ := json.Marshal(map[string]interface{}{
-						"landing_id":      loc.LandingID,
-						"storage_path":    landing.StoragePath,
-						"target_path":     loc.Root,
-						"index_file":      index,
-						"use_php":         loc.UsePHP,
-						"replace_content": replaceContent,
-					})
-					tx.Exec(`
-						INSERT INTO jobs (agent_id, type, payload_json, status)
-						VALUES ($1, 'deploy_landing', $2, 'pending')
-					`, newAgentID, deployPayload)
-				}
-			}
-			} // end of else block for non-passthrough
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		log.Printf("Failed to commit transaction: %v", err)
-		http.Error(w, "Failed to assign domain", http.StatusInternalServerError)
+	if err := h.assignDomainCore(id, req); err != nil {
+		log.Printf("Failed to assign domain: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 

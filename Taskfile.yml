@@ -5,16 +5,16 @@ dotenv: ['.env']
 
 # Environment variables used:
 # - DATABASE_URL: PostgreSQL connection string (backend)
-# - PORT: Backend HTTP port (default 8080)
+# - BACKEND_PORT: Backend HTTP port (default 8080)
 # - JWT_SECRET: JWT signing secret (backend)
 # - CORS_ALLOWED_ORIGINS: Comma-separated allowed origins (backend)
 # - FRONTEND_PORT: Frontend HTTP port (default 3000)
-# - NEXT_PUBLIC_API_URL: Backend API URL for frontend (e.g., http://localhost:8080)
+# - NEXT_PUBLIC_API_URL: Backend API URL for frontend (default http://localhost:BACKEND_PORT)
 
 vars:
-  PORT: '{{.PORT | default "8080"}}'
+  BACKEND_PORT: '{{.BACKEND_PORT | default "8080"}}'
   FRONTEND_PORT: '{{.FRONTEND_PORT | default "3000"}}'
-  NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL | default "http://localhost:8080"}}'
+  NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL | default (printf "http://localhost:%s" .BACKEND_PORT)}}'
 
 tasks:
   default:
@@ -40,7 +40,7 @@ tasks:
     desc: Start backend in development mode
     dir: backend
     cmds:
-      - echo "Starting backend on port {{.PORT}}..."
+      - echo "Starting backend on port {{.BACKEND_PORT}}..."
       - go run cmd/server/main.go
 
   dev:frontend:
@@ -73,7 +73,7 @@ tasks:
     cmds:
       - echo "Building backend..."
       - go build -o bin/server.exe cmd/server/main.go
-      - echo "Starting backend on port {{.PORT}}..."
+      - echo "Starting backend on port {{.BACKEND_PORT}}..."
       - bin/server.exe
 
   prod:frontend:
@@ -159,12 +159,12 @@ tasks:
       - go run cmd/dbcheck/main.go
 
   db:migrate:
-    desc: Run database migrations
+    desc: Run database migrations (applies SQL files under backend/migrations)
     dir: backend
     cmds:
       - task: db:check
       - echo "Running migrations..."
-      - go run cmd/server/main.go
+      - go run ./cmd/migrate/main.go
 
   # ============================================
   # BUILD

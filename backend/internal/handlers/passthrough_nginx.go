@@ -22,15 +22,16 @@ func NewPassthroughNginxGenerator(db *database.DB) *PassthroughNginxGenerator {
 
 // GenerateForMachine generates nginx stream config for a specific proxy machine
 func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (string, error) {
-	// Get all record pools this machine is a member of
+	// Get all record pools this machine is a member of (with domain listener_protocol)
 	var recordPools []struct {
-		PoolID         uuid.UUID `db:"pool_id"`
-		TargetIP       string    `db:"target_ip"`
-		TargetPort     int       `db:"target_port"`
-		TargetPortHTTP int       `db:"target_port_http"`
-		RecordName     string    `db:"record_name"`
-		DomainFQDN     string    `db:"domain_fqdn"`
-		IsCurrent      bool      `db:"is_current"`
+		PoolID            uuid.UUID `db:"pool_id"`
+		TargetIP          string    `db:"target_ip"`
+		TargetPort        int       `db:"target_port"`
+		TargetPortHTTP    int       `db:"target_port_http"`
+		RecordName        string    `db:"record_name"`
+		DomainFQDN        string    `db:"domain_fqdn"`
+		IsCurrent         bool      `db:"is_current"`
+		ListenerProtocol  string    `db:"listener_protocol"`
 	}
 	g.db.Select(&recordPools, `
 		SELECT 
@@ -40,7 +41,8 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 			COALESCE(pp.target_port_http, 80) as target_port_http,
 			dr.name as record_name,
 			dmd.fqdn as domain_fqdn,
-			(pp.current_machine_id = $1) as is_current
+			(pp.current_machine_id = $1) as is_current,
+			COALESCE(dmd.listener_protocol, 'http_and_https') as listener_protocol
 		FROM dns_passthrough_members pm
 		JOIN dns_passthrough_pools pp ON pm.pool_id = pp.id
 		JOIN dns_records dr ON pp.dns_record_id = dr.id
@@ -50,12 +52,13 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 
 	// Also get pools where this machine is in a group
 	var groupRecordPools []struct {
-		PoolID         uuid.UUID `db:"pool_id"`
-		TargetIP       string    `db:"target_ip"`
-		TargetPort     int       `db:"target_port"`
-		TargetPortHTTP int       `db:"target_port_http"`
-		RecordName     string    `db:"record_name"`
-		DomainFQDN     string    `db:"domain_fqdn"`
+		PoolID           uuid.UUID `db:"pool_id"`
+		TargetIP         string    `db:"target_ip"`
+		TargetPort       int       `db:"target_port"`
+		TargetPortHTTP   int       `db:"target_port_http"`
+		RecordName       string    `db:"record_name"`
+		DomainFQDN       string    `db:"domain_fqdn"`
+		ListenerProtocol string    `db:"listener_protocol"`
 	}
 	g.db.Select(&groupRecordPools, `
 		SELECT DISTINCT
@@ -64,7 +67,8 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 			pp.target_port,
 			COALESCE(pp.target_port_http, 80) as target_port_http,
 			dr.name as record_name,
-			dmd.fqdn as domain_fqdn
+			dmd.fqdn as domain_fqdn,
+			COALESCE(dmd.listener_protocol, 'http_and_https') as listener_protocol
 		FROM dns_passthrough_pools pp
 		JOIN dns_records dr ON pp.dns_record_id = dr.id
 		JOIN dns_managed_domains dmd ON dr.dns_domain_id = dmd.id
@@ -80,33 +84,36 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 	for _, p := range groupRecordPools {
 		if !poolIDs[p.PoolID] {
 			recordPools = append(recordPools, struct {
-				PoolID         uuid.UUID `db:"pool_id"`
-				TargetIP       string    `db:"target_ip"`
-				TargetPort     int       `db:"target_port"`
-				TargetPortHTTP int       `db:"target_port_http"`
-				RecordName     string    `db:"record_name"`
-				DomainFQDN     string    `db:"domain_fqdn"`
-				IsCurrent      bool      `db:"is_current"`
+				PoolID           uuid.UUID `db:"pool_id"`
+				TargetIP         string    `db:"target_ip"`
+				TargetPort       int       `db:"target_port"`
+				TargetPortHTTP   int       `db:"target_port_http"`
+				RecordName       string    `db:"record_name"`
+				DomainFQDN       string    `db:"domain_fqdn"`
+				IsCurrent        bool      `db:"is_current"`
+				ListenerProtocol string    `db:"listener_protocol"`
 			}{
-				PoolID:         p.PoolID,
-				TargetIP:       p.TargetIP,
-				TargetPort:     p.TargetPort,
-				TargetPortHTTP: p.TargetPortHTTP,
-				RecordName:     p.RecordName,
-				DomainFQDN:     p.DomainFQDN,
-				IsCurrent:      false,
+				PoolID:           p.PoolID,
+				TargetIP:         p.TargetIP,
+				TargetPort:       p.TargetPort,
+				TargetPortHTTP:   p.TargetPortHTTP,
+				RecordName:       p.RecordName,
+				DomainFQDN:       p.DomainFQDN,
+				IsCurrent:        false,
+				ListenerProtocol: p.ListenerProtocol,
 			})
 		}
 	}
 
 	var wildcardPools []struct {
-		PoolID         uuid.UUID `db:"pool_id"`
-		TargetIP       string    `db:"target_ip"`
-		TargetPort     int       `db:"target_port"`
-		TargetPortHTTP int       `db:"target_port_http"`
-		DomainFQDN     string    `db:"domain_fqdn"`
-		IncludeRoot    bool      `db:"include_root"`
-		IsCurrent      bool      `db:"is_current"`
+		PoolID           uuid.UUID `db:"pool_id"`
+		TargetIP         string    `db:"target_ip"`
+		TargetPort       int       `db:"target_port"`
+		TargetPortHTTP   int       `db:"target_port_http"`
+		DomainFQDN       string    `db:"domain_fqdn"`
+		IncludeRoot      bool      `db:"include_root"`
+		IsCurrent        bool      `db:"is_current"`
+		ListenerProtocol string    `db:"listener_protocol"`
 	}
 	g.db.Select(&wildcardPools, `
 		SELECT 
@@ -116,7 +123,8 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 			COALESCE(wp.target_port_http, 80) as target_port_http,
 			dmd.fqdn as domain_fqdn,
 			wp.include_root,
-			(wp.current_machine_id = $1) as is_current
+			(wp.current_machine_id = $1) as is_current,
+			COALESCE(dmd.listener_protocol, 'http_and_https') as listener_protocol
 		FROM dns_wildcard_pool_members wm
 		JOIN dns_wildcard_pools wp ON wm.pool_id = wp.id
 		JOIN dns_managed_domains dmd ON wp.dns_domain_id = dmd.id
@@ -125,12 +133,13 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 
 	// Also get wildcard pools where this machine is in a group
 	var groupWildcardPools []struct {
-		PoolID         uuid.UUID `db:"pool_id"`
-		TargetIP       string    `db:"target_ip"`
-		TargetPort     int       `db:"target_port"`
-		TargetPortHTTP int       `db:"target_port_http"`
-		DomainFQDN     string    `db:"domain_fqdn"`
-		IncludeRoot    bool      `db:"include_root"`
+		PoolID           uuid.UUID `db:"pool_id"`
+		TargetIP         string    `db:"target_ip"`
+		TargetPort       int       `db:"target_port"`
+		TargetPortHTTP   int       `db:"target_port_http"`
+		DomainFQDN       string    `db:"domain_fqdn"`
+		IncludeRoot      bool      `db:"include_root"`
+		ListenerProtocol string    `db:"listener_protocol"`
 	}
 	g.db.Select(&groupWildcardPools, `
 		SELECT DISTINCT
@@ -139,7 +148,8 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 			wp.target_port,
 			COALESCE(wp.target_port_http, 80) as target_port_http,
 			dmd.fqdn as domain_fqdn,
-			wp.include_root
+			wp.include_root,
+			COALESCE(dmd.listener_protocol, 'http_and_https') as listener_protocol
 		FROM dns_wildcard_pools wp
 		JOIN dns_managed_domains dmd ON wp.dns_domain_id = dmd.id
 		JOIN machine_group_members gm ON gm.group_id = ANY(wp.group_ids)
@@ -154,21 +164,23 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 	for _, p := range groupWildcardPools {
 		if !wildcardPoolIDs[p.PoolID] {
 			wildcardPools = append(wildcardPools, struct {
-				PoolID         uuid.UUID `db:"pool_id"`
-				TargetIP       string    `db:"target_ip"`
-				TargetPort     int       `db:"target_port"`
-				TargetPortHTTP int       `db:"target_port_http"`
-				DomainFQDN     string    `db:"domain_fqdn"`
-				IncludeRoot    bool      `db:"include_root"`
-				IsCurrent      bool      `db:"is_current"`
+				PoolID           uuid.UUID `db:"pool_id"`
+				TargetIP         string    `db:"target_ip"`
+				TargetPort       int       `db:"target_port"`
+				TargetPortHTTP   int       `db:"target_port_http"`
+				DomainFQDN       string    `db:"domain_fqdn"`
+				IncludeRoot      bool      `db:"include_root"`
+				IsCurrent        bool      `db:"is_current"`
+				ListenerProtocol string    `db:"listener_protocol"`
 			}{
-				PoolID:         p.PoolID,
-				TargetIP:       p.TargetIP,
-				TargetPort:     p.TargetPort,
-				TargetPortHTTP: p.TargetPortHTTP,
-				DomainFQDN:     p.DomainFQDN,
-				IncludeRoot:    p.IncludeRoot,
-				IsCurrent:      false,
+				PoolID:           p.PoolID,
+				TargetIP:         p.TargetIP,
+				TargetPort:       p.TargetPort,
+				TargetPortHTTP:   p.TargetPortHTTP,
+				DomainFQDN:       p.DomainFQDN,
+				IncludeRoot:      p.IncludeRoot,
+				IsCurrent:        false,
+				ListenerProtocol: p.ListenerProtocol,
 			})
 		}
 	}
@@ -213,49 +225,71 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 	config.WriteString("# Auto-generated - DO NOT EDIT MANUALLY\n")
 	config.WriteString("# Included from stream{} block in nginx.conf\n\n")
 
-	// SNI map for HTTPS (port 443) - maps by TLS SNI to target:port
-	config.WriteString("# SNI-based backend routing for HTTPS\n")
-	config.WriteString("map $ssl_preread_server_name $backend_https {\n")
-	config.WriteString("    default reject;\n")
-
+	// Emit HTTPS (port 443) only when at least one domain allows HTTPS (not http_only)
+	hasHTTPS := false
 	for _, pool := range recordPools {
-		fullDomain := pool.DomainFQDN
-		if pool.RecordName != "@" {
-			fullDomain = pool.RecordName + "." + pool.DomainFQDN
-		}
-		config.WriteString(fmt.Sprintf("    %s %s:%d;\n", fullDomain, pool.TargetIP, pool.TargetPort))
-	}
-
-	for _, pool := range wildcardPools {
-		config.WriteString(fmt.Sprintf("    ~^.+\\.%s$ %s:%d;\n",
-			strings.ReplaceAll(pool.DomainFQDN, ".", "\\."), pool.TargetIP, pool.TargetPort))
-		if pool.IncludeRoot {
-			config.WriteString(fmt.Sprintf("    %s %s:%d;\n", pool.DomainFQDN, pool.TargetIP, pool.TargetPort))
+		if pool.ListenerProtocol != "http_only" {
+			hasHTTPS = true
+			break
 		}
 	}
-	config.WriteString("}\n\n")
-
-	// Note: HTTP (port 80) SNI map is not useful since plain HTTP has no SNI.
-	// HTTP routing is handled directly in the server block below.
-
-	// Reject upstream
-	config.WriteString("# Reject upstream (closed connection)\n")
-	config.WriteString("upstream reject {\n")
-	config.WriteString("    server 127.0.0.1:1 down;\n")
-	config.WriteString("}\n\n")
-
-	// Server block for HTTPS passthrough (port 443)
-	config.WriteString("# HTTPS Passthrough (TLS SNI-based routing)\n")
-	config.WriteString("server {\n")
-	config.WriteString("    listen 443;\n")
-	config.WriteString("    ssl_preread on;\n")
-	config.WriteString("    proxy_pass $backend_https;\n")
-	if proxyProtocolEnabled {
-		config.WriteString("    proxy_protocol on;\n") // Send PROXY protocol to backend for real client IP
+	if !hasHTTPS {
+		for _, pool := range wildcardPools {
+			if pool.ListenerProtocol != "http_only" {
+				hasHTTPS = true
+				break
+			}
+		}
 	}
-	config.WriteString("    proxy_connect_timeout 10s;\n")
-	config.WriteString("    proxy_timeout 30m;\n")
-	config.WriteString("}\n\n")
+
+	if hasHTTPS {
+		// SNI map for HTTPS (port 443) - maps by TLS SNI to target:port
+		config.WriteString("# SNI-based backend routing for HTTPS\n")
+		config.WriteString("map $ssl_preread_server_name $backend_https {\n")
+		config.WriteString("    default reject;\n")
+
+		for _, pool := range recordPools {
+			if pool.ListenerProtocol == "http_only" {
+				continue
+			}
+			fullDomain := pool.DomainFQDN
+			if pool.RecordName != "@" {
+				fullDomain = pool.RecordName + "." + pool.DomainFQDN
+			}
+			config.WriteString(fmt.Sprintf("    %s %s:%d;\n", fullDomain, pool.TargetIP, pool.TargetPort))
+		}
+
+		for _, pool := range wildcardPools {
+			if pool.ListenerProtocol == "http_only" {
+				continue
+			}
+			config.WriteString(fmt.Sprintf("    ~^.+\\.%s$ %s:%d;\n",
+				strings.ReplaceAll(pool.DomainFQDN, ".", "\\."), pool.TargetIP, pool.TargetPort))
+			if pool.IncludeRoot {
+				config.WriteString(fmt.Sprintf("    %s %s:%d;\n", pool.DomainFQDN, pool.TargetIP, pool.TargetPort))
+			}
+		}
+		config.WriteString("}\n\n")
+
+		// Reject upstream
+		config.WriteString("# Reject upstream (closed connection)\n")
+		config.WriteString("upstream reject {\n")
+		config.WriteString("    server 127.0.0.1:1 down;\n")
+		config.WriteString("}\n\n")
+
+		// Server block for HTTPS passthrough (port 443)
+		config.WriteString("# HTTPS Passthrough (TLS SNI-based routing)\n")
+		config.WriteString("server {\n")
+		config.WriteString("    listen 443;\n")
+		config.WriteString("    ssl_preread on;\n")
+		config.WriteString("    proxy_pass $backend_https;\n")
+		if proxyProtocolEnabled {
+			config.WriteString("    proxy_protocol on;\n") // Send PROXY protocol to backend for real client IP
+		}
+		config.WriteString("    proxy_connect_timeout 10s;\n")
+		config.WriteString("    proxy_timeout 30m;\n")
+		config.WriteString("}\n\n")
+	}
 
 	// Note: HTTP (port 80) passthrough is tricky because there's no SNI for plain HTTP.
 	// We use nginx's preread module to look at the first bytes - if it's TLS, we route via SNI.
@@ -264,9 +298,12 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 	// Approach: Create separate upstream blocks and use the same target as HTTPS.
 	// The target server handles Host-based routing in its HTTP config.
 	
-	// Generate upstreams for each unique target (for HTTP port mapping)
+	// Generate upstreams for each unique target (for HTTP port mapping); only for domains that allow HTTP
 	httpTargets := make(map[string]string) // domain -> target:port
 	for _, pool := range recordPools {
+		if pool.ListenerProtocol == "https_only" {
+			continue
+		}
 		fullDomain := pool.DomainFQDN
 		if pool.RecordName != "@" {
 			fullDomain = pool.RecordName + "." + pool.DomainFQDN
@@ -274,6 +311,9 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 		httpTargets[fullDomain] = fmt.Sprintf("%s:%d", pool.TargetIP, pool.TargetPortHTTP)
 	}
 	for _, pool := range wildcardPools {
+		if pool.ListenerProtocol == "https_only" {
+			continue
+		}
 		// For wildcards, just use the root domain as key
 		httpTargets["wildcard_"+pool.DomainFQDN] = fmt.Sprintf("%s:%d", pool.TargetIP, pool.TargetPortHTTP)
 		if pool.IncludeRoot {
@@ -281,44 +321,45 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 		}
 	}
 
-	// If all HTTP targets are the same, create a simple server block
-	// Otherwise, create multiple server blocks or use a default
+	// Emit HTTP server block(s) only when at least one domain allows HTTP (not https_only)
 	uniqueHTTPTargets := make(map[string]bool)
 	for _, target := range httpTargets {
 		uniqueHTTPTargets[target] = true
 	}
 
-	if len(uniqueHTTPTargets) == 1 {
-		// Single target - simple passthrough
-		var target string
-		for t := range uniqueHTTPTargets {
-			target = t
-			break
+	if len(uniqueHTTPTargets) >= 1 {
+		if len(uniqueHTTPTargets) == 1 {
+			// Single target - simple passthrough
+			var target string
+			for t := range uniqueHTTPTargets {
+				target = t
+				break
+			}
+			config.WriteString("# HTTP Passthrough (all traffic to single target)\n")
+			config.WriteString("server {\n")
+			config.WriteString("    listen 80;\n")
+			config.WriteString(fmt.Sprintf("    proxy_pass %s;\n", target))
+			config.WriteString("    proxy_connect_timeout 10s;\n")
+			config.WriteString("    proxy_timeout 30m;\n")
+			config.WriteString("}\n")
+		} else {
+			// Multiple targets - need layer 7 for proper routing
+			// For now, use the first target as default and add a comment
+			var defaultTarget string
+			for t := range uniqueHTTPTargets {
+				defaultTarget = t
+				break
+			}
+			config.WriteString("# HTTP Passthrough\n")
+			config.WriteString("# NOTE: Multiple HTTP targets configured. Layer 4 cannot route by Host header.\n")
+			config.WriteString("# All HTTP traffic goes to default target. Target server handles Host routing.\n")
+			config.WriteString("server {\n")
+			config.WriteString("    listen 80;\n")
+			config.WriteString(fmt.Sprintf("    proxy_pass %s;\n", defaultTarget))
+			config.WriteString("    proxy_connect_timeout 10s;\n")
+			config.WriteString("    proxy_timeout 30m;\n")
+			config.WriteString("}\n")
 		}
-		config.WriteString("# HTTP Passthrough (all traffic to single target)\n")
-		config.WriteString("server {\n")
-		config.WriteString("    listen 80;\n")
-		config.WriteString(fmt.Sprintf("    proxy_pass %s;\n", target))
-		config.WriteString("    proxy_connect_timeout 10s;\n")
-		config.WriteString("    proxy_timeout 30m;\n")
-		config.WriteString("}\n")
-	} else if len(uniqueHTTPTargets) > 1 {
-		// Multiple targets - need layer 7 for proper routing
-		// For now, use the first target as default and add a comment
-		var defaultTarget string
-		for t := range uniqueHTTPTargets {
-			defaultTarget = t
-			break
-		}
-		config.WriteString("# HTTP Passthrough\n")
-		config.WriteString("# NOTE: Multiple HTTP targets configured. Layer 4 cannot route by Host header.\n")
-		config.WriteString("# All HTTP traffic goes to default target. Target server handles Host routing.\n")
-		config.WriteString("server {\n")
-		config.WriteString("    listen 80;\n")
-		config.WriteString(fmt.Sprintf("    proxy_pass %s;\n", defaultTarget))
-		config.WriteString("    proxy_connect_timeout 10s;\n")
-		config.WriteString("    proxy_timeout 30m;\n")
-		config.WriteString("}\n")
 	}
 
 	return config.String(), nil

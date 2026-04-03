@@ -2,10 +2,9 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { ColumnDef } from "@tanstack/react-table";
+import { ColumnDef, RowSelectionState } from "@tanstack/react-table";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -15,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { DataTable } from "@/components/ui/data-table";
 import { api, Domain, Machine, NginxConfig, DomainGroup, DomainGroupWithCount } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
-import { ExternalLink, MoreHorizontal, Trash, Link2, FileText, Server, Globe, Circle, CheckCircle, XCircle, Cloud, FolderOpen, Pencil, Users } from "lucide-react";
+import { ExternalLink, MoreHorizontal, Trash, Link2, FileText, Server, Circle, CheckCircle, XCircle, Cloud, FolderOpen, Pencil, Users, HeartPulse } from "lucide-react";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -50,6 +49,56 @@ function sortDomainsByApex(list: Domain[]): Domain[] {
   });
 }
 
+/** Fuzzy match config name (e.g. `land` matches `Landing Page`) */
+function fuzzyConfigMatch(configName: string | null | undefined, query: string): boolean {
+  if (!configName || !query.trim()) return false;
+  const nl = configName.toLowerCase();
+  const ql = query.toLowerCase().trim();
+  if (nl.includes(ql)) return true;
+  let i = 0;
+  for (const c of nl) {
+    if (c === ql[i]) i++;
+    if (i >= ql.length) return true;
+  }
+  return false;
+}
+
+function DomainStatusIcon({ status }: { status: string }) {
+  const box = "h-8 w-8 rounded-md flex items-center justify-center flex-shrink-0 ";
+  switch (status) {
+    case "healthy":
+      return (
+        <div className={box + "bg-green-500/15"} title="Healthy">
+          <CheckCircle className="h-4 w-4 text-green-500" />
+        </div>
+      );
+    case "unhealthy":
+      return (
+        <div className={box + "bg-red-500/15"} title="Unhealthy">
+          <XCircle className="h-4 w-4 text-red-500" />
+        </div>
+      );
+    case "linked":
+      return (
+        <div className={box + "bg-blue-500/15"} title="Linked">
+          <Link2 className="h-4 w-4 text-blue-500" />
+        </div>
+      );
+    case "proxied":
+      return (
+        <div className={box + "bg-purple-500/15"} title="Proxied">
+          <Cloud className="h-4 w-4 text-purple-500" />
+        </div>
+      );
+    default:
+      return (
+        <div className={box + "bg-zinc-500/15"} title="Idle">
+          <Circle className="h-4 w-4 text-zinc-400" />
+        </div>
+      );
+  }
+}
+
 export default function DomainsPage() {
   const router = useRouter();
   const [domains, setDomains] = useState<Domain[]>([]);
@@ -71,6 +120,9 @@ export default function DomainsPage() {
   const [groups, setGroups] = useState<DomainGroupWithCount[]>([]);
   const [groupMembers, setGroupMembers] = useState<Record<string, { id: string; fqdn: string; status: string; position: number }[]>>({});
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string | null>(null);
+  // Created-at filter (date range)
+  const [createdFrom, setCreatedFrom] = useState<string>("");
+  const [createdTo, setCreatedTo] = useState<string>("");
   const [showGroupDialog, setShowGroupDialog] = useState(false);
   const [editingGroup, setEditingGroup] = useState<DomainGroupWithCount | null>(null);
   const [groupForm, setGroupForm] = useState({ name: "", emoji: "📁", color: "#6366f1" });
@@ -78,6 +130,20 @@ export default function DomainsPage() {
   const [showAssignGroupsDialog, setShowAssignGroupsDialog] = useState(false);
   const [selectedDomainForGroups, setSelectedDomainForGroups] = useState<Domain | null>(null);
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
+
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [showBulkAssignDialog, setShowBulkAssignDialog] = useState(false);
+  const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
+  const [showBulkGroupsDialog, setShowBulkGroupsDialog] = useState(false);
+  const [bulkGroupIds, setBulkGroupIds] = useState<string[]>([]);
+  const [showCustomCheckDialog, setShowCustomCheckDialog] = useState(false);
+  const [customCheckDomain, setCustomCheckDomain] = useState<Domain | null>(null);
+  const [customExpectedStatus, setCustomExpectedStatus] = useState("200");
+
+  const selectedDomainIds = useMemo(
+    () => Object.keys(rowSelection).filter((id) => rowSelection[id]),
+    [rowSelection]
+  );
 
   const loadData = async () => {
     try {
@@ -273,60 +339,169 @@ export default function DomainsPage() {
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "healthy":
-        return (
-          <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
-            <CheckCircle className="h-3 w-3 mr-1" />
-            Healthy
-          </Badge>
-        );
-      case "unhealthy":
-        return (
-          <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-xs">
-            <XCircle className="h-3 w-3 mr-1" />
-            Unhealthy
-          </Badge>
-        );
-      case "linked":
-        return (
-          <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30 text-xs">
-            <Link2 className="h-3 w-3 mr-1" />
-            Linked
-          </Badge>
-        );
-      case "proxied":
-        return (
-          <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30 text-xs">
-            <Cloud className="h-3 w-3 mr-1" />
-            Proxied
-          </Badge>
-        );
-      default:
-        return (
-          <Badge className="bg-zinc-500/20 text-zinc-400 border-zinc-500/30 text-xs">
-            <Circle className="h-3 w-3 mr-1" />
-            Idle
-          </Badge>
-        );
+  const openCustomCheckDialog = (domain: Domain) => {
+    setCustomCheckDomain(domain);
+    setCustomExpectedStatus(String(domain.health_check_expected_status ?? 200));
+    setShowCustomCheckDialog(true);
+  };
+
+  const handleSaveCustomCheck = async () => {
+    if (!customCheckDomain || submitting) return;
+    const code = parseInt(customExpectedStatus, 10);
+    if (Number.isNaN(code) || code < 100 || code > 599) {
+      toast.error("Enter a valid HTTP status (100–599)");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api.updateDomainHealthCheck(customCheckDomain.id, code);
+      setShowCustomCheckDialog(false);
+      loadData();
+      toast.success("Custom check updated");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to update custom check");
+    } finally {
+      setSubmitting(false);
     }
   };
 
+  const handleForceHealthCheck = async (domain: Domain) => {
+    try {
+      await api.triggerDomainHealthCheck(domain.id);
+      await loadData();
+      toast.success("Health check completed");
+    } catch (err) {
+      console.error(err);
+      toast.error("Health check failed");
+    }
+  };
+
+  const handleBulkAssign = async () => {
+    if (selectedDomainIds.length === 0 || submitting) return;
+    setSubmitting(true);
+    try {
+      const res = await api.bulkAssignDomains(
+        selectedDomainIds,
+        assignMachineId || null,
+        assignConfigId || null
+      );
+      if (res.errors.length) {
+        toast.warning(`Updated ${res.ok} domain(s); ${res.errors.length} failed`);
+      } else {
+        toast.success(`Updated ${res.ok} domain(s)`);
+      }
+      setShowBulkAssignDialog(false);
+      setRowSelection({});
+      loadData();
+    } catch (err) {
+      console.error(err);
+      toast.error("Bulk assign failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedDomainIds.length === 0 || submitting) return;
+    setSubmitting(true);
+    try {
+      await api.bulkDeleteDomains(selectedDomainIds);
+      setShowBulkDeleteDialog(false);
+      setRowSelection({});
+      loadData();
+      toast.success("Domains deleted");
+    } catch (err) {
+      console.error(err);
+      toast.error("Bulk delete failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleBulkAddToGroups = async () => {
+    if (selectedDomainIds.length === 0 || bulkGroupIds.length === 0 || submitting) return;
+    setSubmitting(true);
+    try {
+      for (const gid of bulkGroupIds) {
+        await api.addDomainGroupMembers(gid, selectedDomainIds);
+      }
+      setShowBulkGroupsDialog(false);
+      setBulkGroupIds([]);
+      setRowSelection({});
+      loadData();
+      toast.success("Domains added to groups");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to add to groups");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleBulkForceHealthCheck = async () => {
+    if (selectedDomainIds.length === 0) return;
+    try {
+      const res = await api.bulkCheckDomains(selectedDomainIds);
+      const failed = res.results.filter((r) => r.error);
+      if (failed.length) {
+        toast.warning(`Checked ${res.results.length - failed.length}; ${failed.length} failed`);
+      } else {
+        toast.success(`Health check finished for ${res.results.length} domain(s)`);
+      }
+      loadData();
+    } catch (err) {
+      console.error(err);
+      toast.error("Bulk health check failed");
+    }
+  };
 
   const columns: ColumnDef<Domain>[] = [
     {
+      id: "select",
+      header: ({ table }) => (
+        <Checkbox
+          checked={
+            table.getIsAllPageRowsSelected()
+              ? true
+              : table.getIsSomePageRowsSelected()
+                ? "indeterminate"
+                : false
+          }
+          onCheckedChange={(v) => table.toggleAllPageRowsSelected(!!v)}
+          aria-label="Select all on this page"
+        />
+      ),
+      cell: ({ row }) => (
+        <Checkbox
+          checked={row.getIsSelected()}
+          onCheckedChange={(v) => row.toggleSelected(!!v)}
+          aria-label={`Select ${row.original.fqdn}`}
+        />
+      ),
+      enableSorting: false,
+      enableHiding: false,
+    },
+    {
       accessorKey: "fqdn",
       header: "Domain",
+      filterFn: (row, _columnId, filterValue) => {
+        const raw = String(filterValue ?? "").trim();
+        if (!raw) return true;
+        const m = raw.match(/^config:\s*(.*)$/i);
+        if (m) {
+          const q = m[1].trim();
+          return fuzzyConfigMatch(row.original.config_name, q);
+        }
+        return row.original.fqdn.toLowerCase().includes(raw.toLowerCase());
+      },
       cell: ({ row }) => {
         const domain = row.original;
         const apex = getApexDomain(domain.fqdn);
         const isApex = domain.fqdn === apex;
         return (
           <div className="flex items-center gap-3 py-0.5">
-            <div className="h-8 w-8 rounded-md bg-gradient-to-br from-blue-500/20 to-blue-500/5 flex items-center justify-center flex-shrink-0">
-              <Globe className="h-4 w-4 text-blue-500" />
-            </div>
+            <DomainStatusIcon status={domain.status} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="font-medium text-sm">{domain.fqdn}</span>
@@ -348,18 +523,18 @@ export default function DomainsPage() {
       },
     },
     {
-      accessorKey: "status",
-      header: "Status",
-      cell: ({ row }) => getStatusBadge(row.original.status),
-    },
-    {
       accessorKey: "machine_name",
       header: "Machine",
       cell: ({ row }) => {
         const domain = row.original;
         return domain.machine_name ? (
           <div className="flex items-center gap-2">
-            <span className="text-sm">{domain.machine_name}</span>
+            <div className="flex flex-col">
+              <span className="text-sm">{domain.machine_name}</span>
+              {domain.machine_ip && (
+                <span className="text-xs text-muted-foreground">{domain.machine_ip}</span>
+              )}
+            </div>
             {domain.status === "linked" && domain.assigned_machine_id && (
               <Button
                 variant="ghost"
@@ -389,6 +564,16 @@ export default function DomainsPage() {
       },
     },
     {
+      accessorKey: "created_at",
+      header: "Created",
+      cell: ({ row }) => {
+        const domain = row.original;
+        if (!domain.created_at) return <span className="text-muted-foreground text-xs">—</span>;
+        const d = new Date(domain.created_at);
+        return <span className="text-xs text-muted-foreground">{d.toLocaleDateString()}</span>;
+      },
+    },
+    {
       id: "actions",
       cell: ({ row }) => {
         const domain = row.original;
@@ -407,6 +592,17 @@ export default function DomainsPage() {
               <DropdownMenuItem onClick={() => openAssignGroupsDialog(domain)}>
                 <Users className="h-4 w-4 mr-2" />
                 Assign to Groups
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openCustomCheckDialog(domain)}>
+                <HeartPulse className="h-4 w-4 mr-2" />
+                Custom check
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => handleForceHealthCheck(domain)}
+                disabled={!domain.assigned_machine_id}
+              >
+                <HeartPulse className="h-4 w-4 mr-2" />
+                Force health check now
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => openNotesDialog(domain)}>
                 <FileText className="h-4 w-4 mr-2" />
@@ -431,11 +627,23 @@ export default function DomainsPage() {
   ];
 
   const filteredDomains = useMemo(() => {
-    if (!selectedGroupFilter) return domains;
-    const members = groupMembers[selectedGroupFilter] || [];
-    const memberIds = new Set(members.map((m) => m.id));
-    return domains.filter((d) => memberIds.has(d.id));
-  }, [domains, selectedGroupFilter, groupMembers]);
+    let list = domains;
+    if (selectedGroupFilter) {
+      const members = groupMembers[selectedGroupFilter] || [];
+      const memberIds = new Set(members.map((m) => m.id));
+      list = list.filter((d) => memberIds.has(d.id));
+    }
+    if (createdFrom || createdTo) {
+      list = list.filter((d) => {
+        if (!d.created_at) return false;
+        const t = new Date(d.created_at).getTime();
+        const from = createdFrom ? new Date(createdFrom + "T00:00:00").getTime() : 0;
+        const to = createdTo ? new Date(createdTo + "T23:59:59").getTime() : Number.MAX_SAFE_INTEGER;
+        return t >= from && t <= to;
+      });
+    }
+    return list;
+  }, [domains, selectedGroupFilter, groupMembers, createdFrom, createdTo]);
 
   const displayDomains = useMemo(() => sortDomainsByApex(filteredDomains), [filteredDomains]);
 
@@ -529,11 +737,59 @@ export default function DomainsPage() {
 
       <Card className="border-border/50 bg-card/50">
         <CardContent className="pt-5 pb-5">
+          <div className="flex flex-wrap items-center gap-3 pb-4">
+            <span className="text-sm text-muted-foreground">Created:</span>
+            <Input
+              type="date"
+              className="h-9 w-40"
+              value={createdFrom}
+              onChange={(e) => setCreatedFrom(e.target.value)}
+              placeholder="From"
+            />
+            <Input
+              type="date"
+              className="h-9 w-40"
+              value={createdTo}
+              onChange={(e) => setCreatedTo(e.target.value)}
+              placeholder="To"
+            />
+            {(createdFrom || createdTo) && (
+              <Button variant="ghost" size="sm" className="h-9" onClick={() => { setCreatedFrom(""); setCreatedTo(""); }}>
+                Clear
+              </Button>
+            )}
+          </div>
+          {selectedDomainIds.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 pb-4 border-b border-border/50 mb-4">
+              <span className="text-sm text-muted-foreground mr-2">
+                {selectedDomainIds.length} selected
+              </span>
+              <Button size="sm" variant="secondary" onClick={() => setShowBulkAssignDialog(true)}>
+                Reassign
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setShowBulkGroupsDialog(true)}>
+                Add to groups
+              </Button>
+              <Button size="sm" variant="secondary" onClick={handleBulkForceHealthCheck}>
+                Force health check
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => setShowBulkDeleteDialog(true)}>
+                Delete
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setRowSelection({})}>
+                Clear selection
+              </Button>
+            </div>
+          )}
           <DataTable
             columns={columns}
             data={displayDomains}
             searchKey="fqdn"
-            searchPlaceholder="Search domains..."
+            searchPlaceholder="Search… use config:name to filter by config"
+            getRowId={(row) => row.id}
+            enableRowSelection
+            rowSelection={rowSelection}
+            onRowSelectionChange={setRowSelection}
           />
         </CardContent>
       </Card>
@@ -818,6 +1074,168 @@ export default function DomainsPage() {
             <Button onClick={handleAssignGroups} disabled={submitting || groups.length === 0}>
               {submitting ? "Saving..." : "Save"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk reassign */}
+      <Dialog open={showBulkAssignDialog} onOpenChange={setShowBulkAssignDialog}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Bulk reassign</DialogTitle>
+            <DialogDescription>
+              Assign {selectedDomainIds.length} domain(s) to a machine and configuration.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Machine</Label>
+              <Select value={assignMachineId || "_none"} onValueChange={(v) => setAssignMachineId(v === "_none" ? "" : v)}>
+                <SelectTrigger className="h-11">
+                  <SelectValue placeholder="Select a machine" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_none">None (Unassign)</SelectItem>
+                  {machines.map((machine) => (
+                    <SelectItem key={machine.id} value={machine.id}>
+                      {machine.title || machine.hostname || "Unknown"} ({machine.ip_address})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Nginx Configuration</Label>
+              <Select value={assignConfigId || "_none"} onValueChange={(v) => setAssignConfigId(v === "_none" ? "" : v)}>
+                <SelectTrigger className="h-11">
+                  <SelectValue placeholder="Select a configuration" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_none">None</SelectItem>
+                  {configs.map((config) => (
+                    <SelectItem key={config.id} value={config.id}>
+                      {config.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulkAssignDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleBulkAssign} disabled={submitting}>
+              {submitting ? "Saving..." : "Apply"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={showBulkDeleteDialog} onOpenChange={setShowBulkDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {selectedDomainIds.length} domain(s)?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This cannot be undone. Associated server configuration may need manual cleanup.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              disabled={submitting}
+              onClick={() => void handleBulkDelete()}
+            >
+              {submitting ? "Deleting..." : "Delete"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={showBulkGroupsDialog} onOpenChange={setShowBulkGroupsDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add selected to groups</DialogTitle>
+            <DialogDescription>
+              Domains keep any groups they are already in. Only new memberships are added.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 max-h-64 overflow-y-auto py-2">
+            {groups.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-4">No groups yet.</p>
+            ) : (
+              groups.map((group) => (
+                <label
+                  key={group.id}
+                  className="flex items-center gap-2 p-2 rounded border border-border hover:bg-muted/50 cursor-pointer"
+                >
+                  <Checkbox
+                    checked={bulkGroupIds.includes(group.id)}
+                    onCheckedChange={(checked) => {
+                      if (checked) setBulkGroupIds([...bulkGroupIds, group.id]);
+                      else setBulkGroupIds(bulkGroupIds.filter((id) => id !== group.id));
+                    }}
+                  />
+                  <span className="text-lg">{group.emoji}</span>
+                  <span className="text-sm font-medium">{group.name}</span>
+                </label>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulkGroupsDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleBulkAddToGroups} disabled={submitting || bulkGroupIds.length === 0}>
+              {submitting ? "Saving..." : "Add to groups"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showCustomCheckDialog} onOpenChange={setShowCustomCheckDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Custom check</DialogTitle>
+            <DialogDescription>
+              HTTP status that counts as healthy for{" "}
+              <strong>{customCheckDomain?.fqdn}</strong> (default 200). Mismatch marks the domain unhealthy
+              even when the server responds.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="expected-status">Expected HTTP status</Label>
+            <Input
+              id="expected-status"
+              type="number"
+              min={100}
+              max={599}
+              className="h-10"
+              value={customExpectedStatus}
+              onChange={(e) => setCustomExpectedStatus(e.target.value)}
+            />
+          </div>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!customCheckDomain}
+              onClick={async () => {
+                if (!customCheckDomain) return;
+                await handleForceHealthCheck(customCheckDomain);
+              }}
+            >
+              Force health check now
+            </Button>
+            <div className="flex gap-2 justify-end flex-1">
+              <Button variant="outline" onClick={() => setShowCustomCheckDialog(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleSaveCustomCheck} disabled={submitting}>
+                {submitting ? "Saving..." : "Save"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

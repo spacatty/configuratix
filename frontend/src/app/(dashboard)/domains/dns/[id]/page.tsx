@@ -243,6 +243,7 @@ export default function DomainDNSSettingsPage() {
   // Form state
   const [dnsAccountId, setDnsAccountId] = useState<string>("");
   const [proxyMode, setProxyMode] = useState<string>("static");
+  const [listenerProtocol, setListenerProtocol] = useState<string>("http_and_https");
 
   // Passthrough state
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -327,7 +328,8 @@ export default function DomainDNSSettingsPage() {
         setDnsAccounts(accountsData);
         setDnsAccountId(domainData.dns_account_id || "");
         setProxyMode(domainData.proxy_mode || "static");
-        
+        setListenerProtocol(domainData.listener_protocol || "http_and_https");
+
         // Load nameservers if account is set
         if (domainData.dns_account_id) {
           loadExpectedNameservers(domainData.dns_account_id, domainData.fqdn);
@@ -480,6 +482,7 @@ export default function DomainDNSSettingsPage() {
     try {
       await api.updateDNSManagedDomain(domain.id, {
         dns_account_id: dnsAccountId || null,
+        listener_protocol: listenerProtocol as 'http_only' | 'http_and_https' | 'https_only',
       });
       if (proxyMode !== domain.proxy_mode) {
         await api.setDomainProxyMode(domain.id, proxyMode);
@@ -1008,9 +1011,28 @@ export default function DomainDNSSettingsPage() {
                     </label>
                   </div>
                   {proxyMode !== "static" && (
-                    <p className="text-xs text-muted-foreground bg-purple-500/10 p-2 rounded">
-                      ⚡ Passthrough mode enabled. Configure pools in the <strong>Passthrough</strong> tab.
-                    </p>
+                    <>
+                      <p className="text-xs text-muted-foreground bg-purple-500/10 p-2 rounded">
+                        ⚡ Passthrough mode enabled. Configure pools in the <strong>Passthrough</strong> tab.
+                      </p>
+                      <div className="pt-3 border-t border-border/50">
+                        <Label className="text-sm font-medium">Listener ports</Label>
+                        <p className="text-xs text-muted-foreground mt-0.5 mb-2">Which ports to expose for this domain (80 / 443)</p>
+                        <Select value={listenerProtocol} onValueChange={setListenerProtocol}>
+                          <SelectTrigger className="w-full max-w-xs h-9">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="http_and_https">Both 80 & 443</SelectItem>
+                            <SelectItem value="https_only">443 only (harden SSL)</SelectItem>
+                            <SelectItem value="http_only">80 only</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {listenerProtocol === "https_only" && (
+                          <p className="text-xs text-muted-foreground mt-1.5">No port 80 listener; helps with SSL issuance on some setups.</p>
+                        )}
+                      </div>
+                    </>
                   )}
                 </div>
               )}

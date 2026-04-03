@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DataTable } from "@/components/ui/data-table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, Machine, EnrollmentToken, ProjectWithStats, MachineGroup, MachineGroupMember, BACKEND_URL } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
 import { toast } from "sonner";
@@ -22,15 +23,12 @@ import {
   Server, 
   Trash2, 
   ExternalLink,
-  Shield,
   MoreHorizontal,
   FolderOpen,
   Pencil,
   Users,
   Globe,
-  Network,
   Cpu,
-  Lock,
   Activity
 } from "lucide-react";
 import {
@@ -124,6 +122,15 @@ export default function MachinesPage() {
     else if (quickFilter === "Security Issues") list = list.filter(hasSecurityGaps);
     return list;
   }, [machines, selectedGroupFilter, groupMembers, quickFilter]);
+
+  /** Table order: newest first by creation date */
+  const machinesNewestFirst = useMemo(
+    () =>
+      [...filteredMachines].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ),
+    [filteredMachines]
+  );
 
   // Summary counts (over filtered-by-project list for display)
   const summaryCounts = useMemo(() => {
@@ -322,22 +329,6 @@ export default function MachinesPage() {
     }
   };
 
-  const getStatusBadge = (machine: Machine) => {
-    if (!machine.last_seen) {
-      return <Badge variant="secondary" className="text-xs">Never connected</Badge>;
-    }
-    const lastSeen = new Date(machine.last_seen);
-    const now = new Date();
-    const diffMinutes = (now.getTime() - lastSeen.getTime()) / 1000 / 60;
-
-    if (diffMinutes < 5) {
-      return <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">Online</Badge>;
-    } else if (diffMinutes < 60) {
-      return <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 text-xs">Idle</Badge>;
-    }
-    return <Badge variant="destructive" className="text-xs">Offline</Badge>;
-  };
-
   const formatBytes = (bytes: number) => {
     if (!bytes || bytes === 0) return "0 B";
     const k = 1024;
@@ -405,7 +396,8 @@ export default function MachinesPage() {
         const proxied = m.proxied_domains_count ?? 0;
         if (total === 0) return <span className="text-muted-foreground text-xs">—</span>;
         const rest = total - healthy - unhealthy - proxied;
-        return (
+        const summary = (m.assigned_domains_summary || []) as { fqdn: string; status: string }[];
+        const inner = (
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1" title={`${total} domains (${healthy} healthy, ${unhealthy} unhealthy, ${proxied} proxied)`}>
               <Globe className="h-3.5 w-3.5 text-muted-foreground" />
@@ -421,6 +413,28 @@ export default function MachinesPage() {
               </div>
             )}
           </div>
+        );
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="cursor-default inline-flex">{inner}</div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-h-48 overflow-y-auto p-2">
+              <div className="space-y-1 font-medium mb-1">Domains</div>
+              <ul className="space-y-0.5 text-left">
+                {summary.length > 0 ? summary.map((d, i) => (
+                  <li key={i} className="flex items-center justify-between gap-4">
+                    <span className="truncate max-w-[200px]">{d.fqdn}</span>
+                    <Badge variant={d.status === "healthy" ? "default" : d.status === "unhealthy" ? "destructive" : "secondary"} className="text-[10px] shrink-0">
+                      {d.status}
+                    </Badge>
+                  </li>
+                )) : (
+                  <li className="text-muted-foreground">—</li>
+                )}
+              </ul>
+            </TooltipContent>
+          </Tooltip>
         );
       },
     },
@@ -509,54 +523,6 @@ export default function MachinesPage() {
             >
               {pressure === "critical" ? "High" : pressure === "high" ? "Load" : "OK"}
             </Badge>
-          </div>
-        );
-      },
-    },
-    {
-      id: "security_runtime",
-      header: "Security & runtime",
-      cell: ({ row }) => {
-        const m = row.original;
-        const parts: string[] = [];
-        if (m.ufw_enabled) parts.push("UFW");
-        if (m.fail2ban_enabled) parts.push("F2B");
-        if (m.access_token_set) parts.push("Token");
-        return (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {m.ufw_enabled && <span title="UFW"><Shield className="h-3.5 w-3.5 text-green-600" /></span>}
-            {m.fail2ban_enabled && <span title="Fail2Ban"><Lock className="h-3.5 w-3.5 text-blue-600" /></span>}
-            {m.access_token_set && <span title="Access token">🔒</span>}
-            {parts.length === 0 && <span className="text-muted-foreground text-xs">—</span>}
-            {(m.ubuntu_version || m.agent_version) && (
-              <span className="text-xs text-muted-foreground truncate max-w-[80px]" title={`Ubuntu ${m.ubuntu_version ?? ""} · Agent ${m.agent_version ?? ""}`}>
-                {m.ubuntu_version ?? ""} {m.agent_version ? `· v${m.agent_version}` : ""}
-              </span>
-            )}
-          </div>
-        );
-      },
-    },
-    {
-      id: "placement",
-      header: "Placement",
-      cell: ({ row }) => {
-        const m = row.original;
-        const project = m.project_name;
-        const groupCount = m.group_count ?? 0;
-        return (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {project ? (
-              <span className="text-xs text-muted-foreground">{project}</span>
-            ) : (
-              <span className="text-muted-foreground/50 text-xs">No project</span>
-            )}
-            {groupCount > 0 && (
-              <Badge variant="outline" className="text-xs font-normal">
-                <Network className="h-3 w-3 mr-0.5" />
-                {groupCount} group{groupCount !== 1 ? "s" : ""}
-              </Badge>
-            )}
           </div>
         );
       },
@@ -794,10 +760,10 @@ export default function MachinesPage() {
         <CardContent className="flex-1 overflow-auto p-6">
           <DataTable
             columns={columns}
-            data={filteredMachines}
+            data={machinesNewestFirst}
             searchKey="title"
             searchPlaceholder="Search machines by name, hostname, or IP..."
-            initialState={{ sorting: [{ id: "resources", desc: true }, { id: "title", desc: false }] }}
+            initialState={{ sorting: [{ id: "title", desc: false }] }}
             emptyMessage={
               filteredMachines.length === 0 && machines.length > 0
                 ? "No machines match the current filters."

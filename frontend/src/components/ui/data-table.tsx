@@ -4,6 +4,9 @@ import * as React from "react";
 import {
   ColumnDef,
   ColumnFiltersState,
+  OnChangeFn,
+  PaginationState,
+  RowSelectionState,
   SortingState,
   VisibilityState,
   flexRender,
@@ -18,6 +21,13 @@ import { ChevronDown, ChevronUp, ChevronsUpDown, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
@@ -31,12 +41,21 @@ interface DataTableProps<TData, TValue> {
   searchPlaceholder?: string;
   showColumnToggle?: boolean;
   showPagination?: boolean;
+  /** Default rows per page (default 20) */
   pageSize?: number;
+  /** Page size dropdown options (default 10, 20, 50, 100) */
+  pageSizeOptions?: number[];
   initialState?: {
     sorting?: SortingState;
   };
   emptyMessage?: string;
   getRowClassName?: (row: TData) => string | undefined;
+  /** Stable row id for selection / cross-page selection */
+  getRowId?: (row: TData) => string;
+  enableRowSelection?: boolean;
+  /** Controlled row selection (persists across pages when getRowId is set) */
+  rowSelection?: RowSelectionState;
+  onRowSelectionChange?: OnChangeFn<RowSelectionState>;
 }
 
 export function DataTable<TData, TValue>({
@@ -46,20 +65,39 @@ export function DataTable<TData, TValue>({
   searchPlaceholder = "Search...",
   showColumnToggle = true,
   showPagination = true,
-  pageSize = 10,
+  pageSize: pageSizeProp,
+  pageSizeOptions = [10, 20, 50, 100],
   initialState: initialStateProp,
   emptyMessage = "No results.",
   getRowClassName,
+  getRowId,
+  enableRowSelection = false,
+  rowSelection: rowSelectionControlled,
+  onRowSelectionChange: onRowSelectionChangeControlled,
 }: DataTableProps<TData, TValue>) {
+  const defaultPageSize = pageSizeProp ?? 20;
   const [sorting, setSorting] = React.useState<SortingState>(initialStateProp?.sorting ?? []);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
-  const [rowSelection, setRowSelection] = React.useState({});
+  const [rowSelectionInternal, setRowSelectionInternal] = React.useState<RowSelectionState>({});
+  const rowSelection = rowSelectionControlled ?? rowSelectionInternal;
+  const setRowSelection = onRowSelectionChangeControlled ?? setRowSelectionInternal;
   const [globalFilter, setGlobalFilter] = React.useState("");
+  const [pagination, setPagination] = React.useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: defaultPageSize,
+  });
+
+  React.useEffect(() => {
+    const next = pageSizeProp ?? 20;
+    setPagination((p) => (p.pageSize === next ? p : { ...p, pageSize: next, pageIndex: 0 }));
+  }, [pageSizeProp]);
 
   const table = useReactTable({
     data,
     columns,
+    getRowId: getRowId,
+    enableRowSelection,
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
     getCoreRowModel: getCoreRowModel(),
@@ -67,8 +105,9 @@ export function DataTable<TData, TValue>({
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     onColumnVisibilityChange: setColumnVisibility,
-    onRowSelectionChange: setRowSelection,
+    onRowSelectionChange: setRowSelection as OnChangeFn<RowSelectionState>,
     onGlobalFilterChange: setGlobalFilter,
+    onPaginationChange: setPagination,
     globalFilterFn: "includesString",
     state: {
       sorting,
@@ -76,13 +115,17 @@ export function DataTable<TData, TValue>({
       columnVisibility,
       rowSelection,
       globalFilter,
+      pagination,
     },
     initialState: {
-      pagination: {
-        pageSize,
-      },
+      sorting: initialStateProp?.sorting,
     },
   });
+
+  const selectedCount = enableRowSelection
+    ? Object.values(rowSelection).filter(Boolean).length
+    : 0;
+  const filteredTotal = table.getFilteredRowModel().rows.length;
 
   return (
     <div className="w-full">
@@ -213,15 +256,41 @@ export function DataTable<TData, TValue>({
         </table>
       </div>
       {showPagination && (
-        <div className="flex items-center justify-between space-x-2 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 py-4">
           <div className="text-sm text-muted-foreground">
-            {table.getFilteredSelectedRowModel().rows.length} of{" "}
-            {table.getFilteredRowModel().rows.length} row(s) selected.
+            {enableRowSelection ? (
+              <>
+                {selectedCount} of {filteredTotal} row(s) selected.
+              </>
+            ) : (
+              <span>{filteredTotal} row(s)</span>
+            )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>Rows</span>
+              <Select
+                value={String(pagination.pageSize)}
+                onValueChange={(v) => {
+                  const n = Number(v);
+                  setPagination((p) => ({ pageIndex: 0, pageSize: n }));
+                }}
+              >
+                <SelectTrigger className="h-8 w-[72px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {pageSizeOptions.map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="text-sm text-muted-foreground">
               Page {table.getState().pagination.pageIndex + 1} of{" "}
-              {table.getPageCount()}
+              {Math.max(1, table.getPageCount())}
             </div>
             <Button
               variant="outline"
@@ -265,4 +334,3 @@ export function SortableHeader({ column, children }: { column: any; children: Re
     </Button>
   );
 }
-

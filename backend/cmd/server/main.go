@@ -178,9 +178,14 @@ func main() {
 	domainsHandler := handlers.NewDomainsHandler(db)
 	apiRouter.HandleFunc("/domains", domainsHandler.ListDomains).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/domains", domainsHandler.CreateDomain).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/domains/bulk/assign", domainsHandler.BulkAssignDomains).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/domains/bulk/delete", domainsHandler.BulkDeleteDomains).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/domains/bulk/check", domainsHandler.BulkCheckDomains).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}", domainsHandler.GetDomain).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/assign", domainsHandler.AssignDomain).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/notes", domainsHandler.UpdateDomainNotes).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/domains/{id}/health-check", domainsHandler.UpdateDomainHealthCheck).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/domains/{id}/check", domainsHandler.TriggerDomainHealthCheck).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}", domainsHandler.DeleteDomain).Methods("DELETE", "OPTIONS")
 
 	// Domain Groups
@@ -228,6 +233,7 @@ func main() {
 
 	// DNS Passthrough (Dynamic rotation pools)
 	passthroughHandler := handlers.NewPassthroughHandler(db, dnsHandler)
+	dnsHandler.SetNginxGenerator(passthroughHandler.NginxGenerator())
 	// Domain proxy mode
 	apiRouter.HandleFunc("/dns-domains/{domainId}/proxy-mode", passthroughHandler.GetDomainProxyMode).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/dns-domains/{domainId}/proxy-mode", passthroughHandler.SetDomainProxyMode).Methods("PUT", "OPTIONS")
@@ -296,6 +302,34 @@ func main() {
 	apiRouter.HandleFunc("/nginx-configs/{id}", nginxConfigsHandler.UpdateNginxConfig).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/nginx-configs/{id}", nginxConfigsHandler.DeleteNginxConfig).Methods("DELETE", "OPTIONS")
 
+	// Tracker (subscriptions, servers, domains)
+	trackerHandler := handlers.NewTrackerHandler(db)
+	apiRouter.HandleFunc("/tracker/categories", trackerHandler.ListCategories).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/categories", trackerHandler.CreateCategory).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/categories/reorder", trackerHandler.ReorderCategories).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/categories/{id}", trackerHandler.UpdateCategory).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/categories/{id}", trackerHandler.DeleteCategory).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/categories/{id}/tags", trackerHandler.ListCategoryTags).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/categories/{id}/tags", trackerHandler.CreateCategoryTag).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/tags/{id}", trackerHandler.UpdateTag).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/tags/{id}", trackerHandler.DeleteTag).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/resources", trackerHandler.ListResources).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/resources", trackerHandler.CreateResource).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/resources/{id}", trackerHandler.GetResource).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/resources/{id}", trackerHandler.UpdateResource).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/resources/{id}", trackerHandler.DeleteResource).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/items", trackerHandler.ListItems).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/items", trackerHandler.CreateItem).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/items/{id}", trackerHandler.GetItem).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/items/{id}", trackerHandler.UpdateItem).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/items/{id}", trackerHandler.DeleteItem).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/items/{id}/paid", trackerHandler.RecordPaid).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/items/{id}/renewals", trackerHandler.ListRenewals).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/notifications", trackerHandler.ListNotifications).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/notifications/read-all", trackerHandler.MarkAllNotificationsRead).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/notifications/{id}/read", trackerHandler.MarkNotificationRead).Methods("POST", "PUT", "OPTIONS")
+	apiRouter.HandleFunc("/tracker/dashboard", trackerHandler.DashboardSummary).Methods("GET", "OPTIONS")
+
 	// Jobs
 	jobsHandler := handlers.NewJobsHandler(db)
 	apiRouter.HandleFunc("/jobs", jobsHandler.ListJobs).Methods("GET", "OPTIONS")
@@ -355,7 +389,15 @@ func main() {
 	go passthroughSched.Start()
 	defer passthroughSched.Stop()
 
-	port := os.Getenv("PORT")
+	// Start tracker reminder scheduler
+	trackerSched := services.NewTrackerScheduler(db)
+	go trackerSched.Start()
+	defer trackerSched.Stop()
+
+	port := os.Getenv("BACKEND_PORT")
+	if port == "" {
+		port = os.Getenv("PORT")
+	}
 	if port == "" {
 		port = "8080"
 	}

@@ -22,8 +22,9 @@ import (
 )
 
 type DNSHandler struct {
-	db          *database.DB
+	db     *database.DB
 	syncService *dns.SyncService
+	nginx  *PassthroughNginxGenerator
 }
 
 func NewDNSHandler(db *database.DB) *DNSHandler {
@@ -31,6 +32,11 @@ func NewDNSHandler(db *database.DB) *DNSHandler {
 		db:          db,
 		syncService: dns.NewSyncService(),
 	}
+}
+
+// SetNginxGenerator sets the passthrough nginx generator for triggering config regeneration when domain settings change
+func (h *DNSHandler) SetNginxGenerator(nginx *PassthroughNginxGenerator) {
+	h.nginx = nginx
 }
 
 // ==================== DNS Accounts ====================
@@ -520,8 +526,9 @@ func (h *DNSHandler) CreateDNSManagedDomain(w http.ResponseWriter, r *http.Reque
 }
 
 type UpdateDNSManagedDomainRequest struct {
-	DNSAccountID *string `json:"dns_account_id"` // Use string to detect null vs not-provided
-	NotesMD      *string `json:"notes_md"`
+	DNSAccountID       *string `json:"dns_account_id"`       // Use string to detect null vs not-provided
+	NotesMD            *string `json:"notes_md"`
+	ListenerProtocol   *string `json:"listener_protocol"`   // http_only, http_and_https, https_only
 }
 
 // UpdateDNSManagedDomain updates DNS settings for a managed domain
@@ -540,6 +547,12 @@ func (h *DNSHandler) UpdateDNSManagedDomain(w http.ResponseWriter, r *http.Reque
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	// If updating listener_protocol, fetch current value so we only regenerate when it actually changed
+	var currentListenerProtocol string
+	if req.ListenerProtocol != nil && h.nginx != nil {
+		_ = h.db.Get(&currentListenerProtocol, "SELECT COALESCE(listener_protocol, 'http_and_https') FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
 	}
 
 	// Build update query dynamically
@@ -567,6 +580,17 @@ func (h *DNSHandler) UpdateDNSManagedDomain(w http.ResponseWriter, r *http.Reque
 		args = append(args, *req.NotesMD)
 		argNum++
 	}
+	if req.ListenerProtocol != nil {
+		switch *req.ListenerProtocol {
+		case "http_only", "http_and_https", "https_only":
+			updates = append(updates, fmt.Sprintf("listener_protocol = $%d", argNum))
+			args = append(args, *req.ListenerProtocol)
+			argNum++
+		default:
+			http.Error(w, "Invalid listener_protocol; use http_only, http_and_https, or https_only", http.StatusBadRequest)
+			return
+		}
+	}
 
 	query := "UPDATE dns_managed_domains SET " + updates[0]
 	for i := 1; i < len(updates); i++ {
@@ -580,6 +604,31 @@ func (h *DNSHandler) UpdateDNSManagedDomain(w http.ResponseWriter, r *http.Reque
 		log.Printf("Failed to update DNS managed domain: %v", err)
 		http.Error(w, "Failed to update domain", http.StatusInternalServerError)
 		return
+	}
+
+	// When listener_protocol actually changed, regenerate passthrough nginx configs for all pools of this domain
+	listenerChanged := req.ListenerProtocol != nil && h.nginx != nil && *req.ListenerProtocol != currentListenerProtocol
+	if listenerChanged {
+		go func(domainID uuid.UUID) {
+			var wildcardPoolIDs []uuid.UUID
+			_ = h.db.Select(&wildcardPoolIDs, "SELECT id FROM dns_wildcard_pools WHERE dns_domain_id = $1", domainID)
+			for _, pid := range wildcardPoolIDs {
+				if err := h.nginx.ApplyToAllPoolMembers(pid, true); err != nil {
+					log.Printf("Failed to apply nginx for wildcard pool %s: %v", pid, err)
+				}
+			}
+			var recordPoolIDs []uuid.UUID
+			_ = h.db.Select(&recordPoolIDs, `
+				SELECT pp.id FROM dns_passthrough_pools pp
+				JOIN dns_records dr ON pp.dns_record_id = dr.id
+				WHERE dr.dns_domain_id = $1
+			`, domainID)
+			for _, pid := range recordPoolIDs {
+				if err := h.nginx.ApplyToAllPoolMembers(pid, false); err != nil {
+					log.Printf("Failed to apply nginx for record pool %s: %v", pid, err)
+				}
+			}
+		}(domainID)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

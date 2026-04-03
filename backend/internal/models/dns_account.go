@@ -23,18 +23,19 @@ type DNSAccount struct {
 // DNSManagedDomain represents a domain managed for DNS purposes
 // Completely independent from the main domains table
 type DNSManagedDomain struct {
-	ID           uuid.UUID      `db:"id" json:"id"`
-	OwnerID      uuid.UUID      `db:"owner_id" json:"owner_id"`
-	FQDN         string         `db:"fqdn" json:"fqdn"`
-	DNSAccountID *uuid.UUID     `db:"dns_account_id" json:"dns_account_id"`
-	ProxyMode    string         `db:"proxy_mode" json:"proxy_mode"` // separate, wildcard
-	NSStatus     string         `db:"ns_status" json:"ns_status"`   // unknown, pending, valid, invalid
-	NSLastCheck  *time.Time     `db:"ns_last_check" json:"ns_last_check"`
-	NSExpected   pq.StringArray `db:"ns_expected" json:"ns_expected"`
-	NSActual     pq.StringArray `db:"ns_actual" json:"ns_actual"`
-	NotesMD      *string        `db:"notes_md" json:"notes_md"`
-	CreatedAt    time.Time      `db:"created_at" json:"created_at"`
-	UpdatedAt    time.Time      `db:"updated_at" json:"updated_at"`
+	ID                 uuid.UUID      `db:"id" json:"id"`
+	OwnerID            uuid.UUID      `db:"owner_id" json:"owner_id"`
+	FQDN               string         `db:"fqdn" json:"fqdn"`
+	DNSAccountID       *uuid.UUID     `db:"dns_account_id" json:"dns_account_id"`
+	ProxyMode          string         `db:"proxy_mode" json:"proxy_mode"`                   // separate, wildcard
+	ListenerProtocol   string         `db:"listener_protocol" json:"listener_protocol"`     // http_only, http_and_https, https_only
+	NSStatus           string         `db:"ns_status" json:"ns_status"`                   // unknown, pending, valid, invalid
+	NSLastCheck        *time.Time     `db:"ns_last_check" json:"ns_last_check"`
+	NSExpected         pq.StringArray `db:"ns_expected" json:"ns_expected"`
+	NSActual           pq.StringArray `db:"ns_actual" json:"ns_actual"`
+	NotesMD            *string        `db:"notes_md" json:"notes_md"`
+	CreatedAt          time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt          time.Time      `db:"updated_at" json:"updated_at"`
 }
 
 // DNSManagedDomainWithAccount includes account info for display

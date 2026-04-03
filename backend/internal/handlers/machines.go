@@ -71,10 +71,11 @@ type MachineWithDetails struct {
 	HealthyDomainsCount   int `db:"healthy_domains_count" json:"healthy_domains_count"`
 	UnhealthyDomainsCount int `db:"unhealthy_domains_count" json:"unhealthy_domains_count"`
 	ProxiedDomainsCount   int `db:"proxied_domains_count" json:"proxied_domains_count"`
-	PassthroughPoolCount  int `db:"passthrough_pool_count" json:"passthrough_pool_count"`
-	WildcardPoolCount     int `db:"wildcard_pool_count" json:"wildcard_pool_count"`
-	ActiveDNSTargetCount  int `db:"active_dns_target_count" json:"active_dns_target_count"`
-	GroupCount            int `db:"group_count" json:"group_count"`
+	PassthroughPoolCount   int             `db:"passthrough_pool_count" json:"passthrough_pool_count"`
+	WildcardPoolCount      int             `db:"wildcard_pool_count" json:"wildcard_pool_count"`
+	ActiveDNSTargetCount   int             `db:"active_dns_target_count" json:"active_dns_target_count"`
+	GroupCount             int             `db:"group_count" json:"group_count"`
+	AssignedDomainsSummary json.RawMessage `db:"assigned_domains_summary" json:"assigned_domains_summary"`
 }
 
 // ListMachines returns machines the user can access
@@ -115,7 +116,8 @@ func (h *MachinesHandler) ListMachines(w http.ResponseWriter, r *http.Request) {
 			) t) as wildcard_pool_count,
 			(SELECT COUNT(*)::int FROM dns_passthrough_pools WHERE current_machine_id = m.id)
 			+ (SELECT COUNT(*)::int FROM dns_wildcard_pools WHERE current_machine_id = m.id) as active_dns_target_count,
-			(SELECT COUNT(*)::int FROM machine_group_members WHERE machine_id = m.id) as group_count
+			(SELECT COUNT(*)::int FROM machine_group_members WHERE machine_id = m.id) as group_count,
+			(SELECT COALESCE(json_agg(json_build_object('fqdn', d.fqdn, 'status', d.status)), '[]'::json) FROM domains d WHERE d.assigned_machine_id = m.id) as assigned_domains_summary
 		FROM machines m
 		LEFT JOIN agents a ON m.agent_id = a.id
 		LEFT JOIN users u ON m.owner_id = u.id
@@ -236,7 +238,8 @@ func (h *MachinesHandler) GetMachine(w http.ResponseWriter, r *http.Request) {
 			) t) as wildcard_pool_count,
 			(SELECT COUNT(*)::int FROM dns_passthrough_pools WHERE current_machine_id = m.id)
 			+ (SELECT COUNT(*)::int FROM dns_wildcard_pools WHERE current_machine_id = m.id) as active_dns_target_count,
-			(SELECT COUNT(*)::int FROM machine_group_members WHERE machine_id = m.id) as group_count
+			(SELECT COUNT(*)::int FROM machine_group_members WHERE machine_id = m.id) as group_count,
+			(SELECT COALESCE(json_agg(json_build_object('fqdn', d.fqdn, 'status', d.status)), '[]'::json) FROM domains d WHERE d.assigned_machine_id = m.id) as assigned_domains_summary
 		FROM machines m
 		LEFT JOIN agents a ON m.agent_id = a.id
 		LEFT JOIN users u ON m.owner_id = u.id

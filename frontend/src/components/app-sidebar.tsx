@@ -51,7 +51,8 @@ import {
   LogOut,
   ChevronUp,
   ChevronRight,
-  KeyRound
+  KeyRound,
+  CalendarClock
 } from "lucide-react";
 
 interface AppSidebarProps {
@@ -114,6 +115,14 @@ export function AppSidebar({ user }: AppSidebarProps) {
                   <a href="/dashboard" className="flex items-center gap-3">
                     <LayoutDashboard className="h-4 w-4" />
                     <span>Dashboard</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isActive("/tracker")}>
+                  <a href="/tracker" className="flex items-center gap-3">
+                    <CalendarClock className="h-4 w-4" />
+                    <span>Tracker</span>
                   </a>
                 </SidebarMenuButton>
               </SidebarMenuItem>

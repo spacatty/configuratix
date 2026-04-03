@@ -4,6 +4,7 @@ vendor/
 
 # Build outputs
 backend/bin/
+backend/agent-binaries/configuratix-agent
 frontend/.next/
 frontend/dist/
 frontend/out/

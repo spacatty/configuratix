@@ -23,12 +23,12 @@ func New() (*DB, error) {
 		dsn = "postgres://postgres:postgres@localhost:5432/configuratix?sslmode=disable"
 	}
 
-	// Add connection timeout if not present
+	// Add connection timeout if not present (generous for remote/slow DBs)
 	if !strings.Contains(dsn, "connect_timeout") {
 		if strings.Contains(dsn, "?") {
-			dsn += "&connect_timeout=10"
+			dsn += "&connect_timeout=30"
 		} else {
-			dsn += "?connect_timeout=10"
+			dsn += "?connect_timeout=30"
 		}
 	}
 
@@ -78,8 +78,7 @@ func (db *DB) RunMigrations() error {
 	}
 
 	if migrationsDir == "" {
-		fmt.Printf("Warning: Migrations directory not found (cwd: %s)\n", cwd)
-		return nil
+		return fmt.Errorf("migrations directory not found (cwd: %s); run the server or `go run ./cmd/migrate` from the backend folder, or set cwd so backend/migrations is discoverable", cwd)
 	}
 
 	// Read all .sql files from the migrations directory
@@ -102,8 +101,21 @@ func (db *DB) RunMigrations() error {
 	// Sort migrations alphabetically (they should be numbered like 001_, 002_, etc.)
 	sort.Strings(migrations)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	// Per-migration timeout: generous for remote/slow DBs (e.g. 002 can be large)
+	perMigrationTimeout := 3 * time.Minute
+	if s := os.Getenv("MIGRATION_TIMEOUT_SECONDS"); s != "" {
+		var sec int
+		if _, err := fmt.Sscanf(s, "%d", &sec); err == nil && sec > 0 {
+			perMigrationTimeout = time.Duration(sec) * time.Second
+		}
+	}
+	migrationRetryDelay := 5 * time.Second
+	if s := os.Getenv("MIGRATION_RETRY_DELAY_MS"); s != "" {
+		var ms int
+		if _, err := fmt.Sscanf(s, "%d", &ms); err == nil && ms >= 0 {
+			migrationRetryDelay = time.Duration(ms) * time.Millisecond
+		}
+	}
 
 	appliedCount := 0
 	for _, migration := range migrations {
@@ -114,17 +126,40 @@ func (db *DB) RunMigrations() error {
 			continue
 		}
 
-		// Run migration
-		if _, err := db.ExecContext(ctx, string(migrationSQL)); err != nil {
-			// Ignore errors from already-applied migrations (e.g., "already exists")
-			if !strings.Contains(err.Error(), "already exists") &&
-				!strings.Contains(err.Error(), "duplicate") {
-				return fmt.Errorf("failed to run migration %s: %w", migration, err)
+		var execErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				time.Sleep(migrationRetryDelay)
 			}
-		} else {
-			fmt.Printf("Applied migration: %s (from %s)\n", migration, fullPath)
-			appliedCount++
+			ctx, cancel := context.WithTimeout(context.Background(), perMigrationTimeout)
+			_, execErr = db.ExecContext(ctx, string(migrationSQL))
+			cancel()
+			if execErr == nil {
+				break
+			}
+			errStr := execErr.Error()
+			if strings.Contains(errStr, "already exists") || strings.Contains(errStr, "duplicate") {
+				break // leave execErr set so we skip "Applied" and continue to next migration
+			}
+			// Retry on connection/timeout errors (e.g. flaky remote DB)
+			if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "connection") ||
+				strings.Contains(errStr, "did not properly respond") || strings.Contains(errStr, "wsarecv") {
+				if attempt < 2 {
+					fmt.Printf("Migration %s attempt %d failed (will retry): %v\n", migration, attempt+1, execErr)
+					continue
+				}
+			}
+			break
 		}
+		if execErr != nil {
+			errStr := execErr.Error()
+			if strings.Contains(errStr, "already exists") || strings.Contains(errStr, "duplicate") {
+				continue
+			}
+			return fmt.Errorf("failed to run migration %s: %w", migration, execErr)
+		}
+		fmt.Printf("Applied migration: %s (from %s)\n", migration, fullPath)
+		appliedCount++
 	}
 
 	if appliedCount > 0 {
