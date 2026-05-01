@@ -507,6 +507,7 @@ export interface NginxConfigStructured {
   // Passthrough mode - SSL passthrough proxy (Layer 4)
   is_passthrough?: boolean;       // If true, use stream proxy (SSL passthrough)
   passthrough_target?: string;    // Backend target for passthrough (host:port)
+  passthrough_http_enabled?: boolean; // Enable manual passthrough listener/marker for port 80 (default: true)
 
   // Standard HTTP mode settings
   ssl_mode: string;

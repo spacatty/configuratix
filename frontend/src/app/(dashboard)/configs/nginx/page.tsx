@@ -34,6 +34,7 @@ export default function NginxConfigsPage() {
   const [formMode, setFormMode] = useState("auto");
   const [formIsPassthrough, setFormIsPassthrough] = useState(false);
   const [formPassthroughTarget, setFormPassthroughTarget] = useState("");
+  const [formPassthroughHttpEnabled, setFormPassthroughHttpEnabled] = useState(true);
   const [formSslMode, setFormSslMode] = useState("allow_http");
   const [formSslEmail, setFormSslEmail] = useState("");
   const [formCorsEnabled, setFormCorsEnabled] = useState(true);
@@ -82,6 +83,7 @@ export default function NginxConfigsPage() {
     setFormMode("auto");
     setFormIsPassthrough(false);
     setFormPassthroughTarget("");
+    setFormPassthroughHttpEnabled(true);
     setFormSslMode("allow_http");
     setFormSslEmail("");
     setFormCorsEnabled(true);
@@ -116,6 +118,7 @@ export default function NginxConfigsPage() {
       const structured: NginxConfigStructured = {
         is_passthrough: formIsPassthrough,
         passthrough_target: formIsPassthrough ? formPassthroughTarget : undefined,
+        passthrough_http_enabled: formIsPassthrough ? formPassthroughHttpEnabled : undefined,
         ssl_mode: formSslMode,
         ssl_email: formSslEmail || undefined,
         locations: formIsPassthrough ? [] : locationsWithPHP,
@@ -161,6 +164,7 @@ export default function NginxConfigsPage() {
       const structured: NginxConfigStructured = {
         is_passthrough: formIsPassthrough,
         passthrough_target: formIsPassthrough ? formPassthroughTarget : undefined,
+        passthrough_http_enabled: formIsPassthrough ? formPassthroughHttpEnabled : undefined,
         ssl_mode: formSslMode,
         ssl_email: formSslEmail || undefined,
         locations: formIsPassthrough ? [] : locationsWithPHP,
@@ -217,11 +221,13 @@ export default function NginxConfigsPage() {
     setFormName(config.name);
     setFormMode(config.mode);
     setFormRawText(config.raw_text || "");
+    setFormPassthroughHttpEnabled(true);
     if (config.structured_json) {
       const structured = config.structured_json as NginxConfigStructured;
       // Passthrough settings
       setFormIsPassthrough(structured.is_passthrough ?? false);
       setFormPassthroughTarget(structured.passthrough_target || "");
+      setFormPassthroughHttpEnabled(structured.passthrough_http_enabled ?? true);
       // Standard settings
       setFormSslMode(structured.ssl_mode || "allow_http");
       setFormSslEmail(structured.ssl_email || "");
@@ -671,6 +677,19 @@ export default function NginxConfigsPage() {
                     <p className="text-xs text-muted-foreground">
                       The server that handles SSL and serves the content. Format: host:port
                     </p>
+                  </div>
+
+                  <div className="flex items-start justify-between rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5">
+                    <div className="pr-3">
+                      <Label className="text-sm">Enable HTTP passthrough on port 80</Label>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Disable this when you want HTTPS passthrough only. Port 443 passthrough stays enabled.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={formPassthroughHttpEnabled}
+                      onCheckedChange={setFormPassthroughHttpEnabled}
+                    />
                   </div>
                   
                   <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm space-y-3">

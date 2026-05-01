@@ -147,11 +147,17 @@ func (h *DomainsHandler) assignDomainCore(id uuid.UUID, req AssignDomainRequest)
 		if newAgentID != uuid.Nil {
 			if isPassthroughConfig(configJSON) {
 				passthroughTarget := getPassthroughTarget(configJSON)
+				passthroughHTTPEnabled := getPassthroughHTTPEnabled(configJSON)
+				httpEnabledValue := "false"
+				if passthroughHTTPEnabled {
+					httpEnabledValue = "true"
+				}
 				applyCmd := templates.GetCommand("apply_passthrough_domain")
 				if applyCmd != nil {
 					payload := applyCmd.ToPayload(map[string]string{
-						"domain": domainFQDN,
-						"target": passthroughTarget,
+						"domain":      domainFQDN,
+						"target":      passthroughTarget,
+						"enable_http": httpEnabledValue,
 					})
 					tx.Exec(`
 						INSERT INTO jobs (agent_id, type, payload_json, status)

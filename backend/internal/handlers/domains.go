@@ -28,6 +28,7 @@ func escapeNginxRegex(pattern string) string {
 type structuredConfig struct {
 	IsPassthrough           bool   `json:"is_passthrough"`
 	PassthroughTarget       string `json:"passthrough_target"`
+	PassthroughHTTPEnabled  *bool  `json:"passthrough_http_enabled"`
 	SSLMode                 string `json:"ssl_mode"`
 	AutoindexOff            *bool  `json:"autoindex_off"`
 	DenyAllCatchall         *bool  `json:"deny_all_catchall"`
@@ -98,6 +99,17 @@ func getPassthroughTarget(structuredJSON json.RawMessage) string {
 	var cfg structuredConfig
 	json.Unmarshal(structuredJSON, &cfg)
 	return cfg.PassthroughTarget
+}
+
+// getPassthroughHTTPEnabled returns whether passthrough should generate HTTP (port 80) marker/listener.
+// Missing value defaults to true for backwards compatibility.
+func getPassthroughHTTPEnabled(structuredJSON json.RawMessage) bool {
+	var cfg structuredConfig
+	json.Unmarshal(structuredJSON, &cfg)
+	if cfg.PassthroughHTTPEnabled == nil {
+		return true
+	}
+	return *cfg.PassthroughHTTPEnabled
 }
 
 // SecurityConfig holds security settings for Nginx config generation
@@ -293,7 +305,7 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 			locationDirective += "~ "
 		case "case_insensitive_regex":
 			locationDirective += "~* "
-		// "prefix" or empty = default prefix match (no modifier)
+			// "prefix" or empty = default prefix match (no modifier)
 		}
 		locationDirective += loc.Path + " {\n"
 		config += locationDirective
@@ -356,7 +368,6 @@ func generateNginxFromStructured(structuredJSON json.RawMessage, domain string, 
 	config += "}\n"
 	return config
 }
-
 
 type DomainsHandler struct {
 	db *database.DB
@@ -579,4 +590,3 @@ func (h *DomainsHandler) DeleteDomain(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
-

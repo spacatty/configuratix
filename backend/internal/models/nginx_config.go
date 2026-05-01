@@ -21,12 +21,13 @@ type NginxConfig struct {
 // NginxConfigStructured represents the structured form data
 type NginxConfigStructured struct {
 	// Passthrough mode - SSL passthrough proxy (Layer 4)
-	IsPassthrough     bool   `json:"is_passthrough,omitempty"`     // If true, use stream proxy (SSL passthrough)
-	PassthroughTarget string `json:"passthrough_target,omitempty"` // Backend target for passthrough (host:port)
+	IsPassthrough          bool   `json:"is_passthrough,omitempty"`           // If true, use stream proxy (SSL passthrough)
+	PassthroughTarget      string `json:"passthrough_target,omitempty"`       // Backend target for passthrough (host:port)
+	PassthroughHTTPEnabled *bool  `json:"passthrough_http_enabled,omitempty"` // Enable manual passthrough listener/marker for port 80 (defaults true when omitted)
 
 	// Standard HTTP mode settings
-	SSLMode         string           `json:"ssl_mode"`                    // disabled, allow_http, redirect_https
-	SSLEmail        string           `json:"ssl_email,omitempty"`         // Email for SSL certificate issuance
+	SSLMode         string           `json:"ssl_mode"`            // disabled, allow_http, redirect_https
+	SSLEmail        string           `json:"ssl_email,omitempty"` // Email for SSL certificate issuance
 	Locations       []LocationConfig `json:"locations"`
 	CORS            *CORSConfig      `json:"cors"`
 	AutoindexOff    *bool            `json:"autoindex_off,omitempty"`     // Deny directory listing (default: true)
@@ -42,18 +43,18 @@ type NginxConfigStructured struct {
 
 // ProxySettings configures real IP handling for proxied requests
 type ProxySettings struct {
-	Enabled           bool   `json:"enabled"`                        // Enable real IP extraction
-	ProxyType         string `json:"proxy_type"`                     // cloudflare, proxy_protocol, custom
-	UseProxyProtocol  bool   `json:"use_proxy_protocol,omitempty"`   // Use PROXY protocol for listen
-	ProxyProtocolPort int    `json:"proxy_protocol_port,omitempty"`  // Custom port for PROXY protocol (default: 443)
-	CustomTrustedIPs  string `json:"custom_trusted_ips,omitempty"`   // Comma-separated trusted IPs for custom type
+	Enabled           bool   `json:"enabled"`                       // Enable real IP extraction
+	ProxyType         string `json:"proxy_type"`                    // cloudflare, proxy_protocol, custom
+	UseProxyProtocol  bool   `json:"use_proxy_protocol,omitempty"`  // Use PROXY protocol for listen
+	ProxyProtocolPort int    `json:"proxy_protocol_port,omitempty"` // Custom port for PROXY protocol (default: 443)
+	CustomTrustedIPs  string `json:"custom_trusted_ips,omitempty"`  // Comma-separated trusted IPs for custom type
 }
 
 type LocationConfig struct {
 	Path                  string `json:"path"`
-	MatchType             string `json:"match_type"`                        // prefix (default), exact, regex
-	Type                  string `json:"type"`                              // proxy, static
-	StaticType            string `json:"static_type"`                       // local, static (deploy static content from uploaded archive)
+	MatchType             string `json:"match_type"`  // prefix (default), exact, regex
+	Type                  string `json:"type"`        // proxy, static
+	StaticType            string `json:"static_type"` // local, static (deploy static content from uploaded archive)
 	ProxyURL              string `json:"proxy_url,omitempty"`
 	Root                  string `json:"root,omitempty"`
 	Index                 string `json:"index,omitempty"`
@@ -69,4 +70,3 @@ type CORSConfig struct {
 	AllowHeaders []string `json:"allow_headers,omitempty"`
 	AllowOrigins []string `json:"allow_origins,omitempty"`
 }
-

@@ -617,7 +617,11 @@ for marker in "$STREAM_DIR"/passthrough-*.conf; do
     
     if [ -n "$target_https" ]; then
         HTTPS_TARGETS["$domain"]="$target_https"
-        echo "Found: $domain -> HTTPS: $target_https, HTTP: $target_http"
+        if [ -n "$target_http" ]; then
+            echo "Found: $domain -> HTTPS: $target_https, HTTP: $target_http"
+        else
+            echo "Found: $domain -> HTTPS: $target_https, HTTP: disabled"
+        fi
     fi
     if [ -n "$target_http" ]; then
         HTTP_TARGETS["$domain"]="$target_http"
@@ -736,6 +740,7 @@ systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || systemctl
 			{Name: "target", Type: "string", Required: true, Description: "Backend target IP address"},
 			{Name: "https_port", Type: "string", Required: false, Default: "443", Description: "Backend HTTPS port"},
 			{Name: "http_port", Type: "string", Required: false, Default: "80", Description: "Backend HTTP port"},
+			{Name: "enable_http", Type: "string", Required: false, Default: "true", Description: "Enable HTTP passthrough marker/listener for port 80"},
 		},
 		OnError: "stop",
 		Steps: []Step{
@@ -748,6 +753,7 @@ DOMAIN="{{domain}}"
 TARGET="{{target}}"
 HTTPS_PORT="{{https_port}}"
 HTTP_PORT="{{http_port}}"
+ENABLE_HTTP="{{enable_http}}"
 
 # Default ports if not specified or template not substituted
 if [ -z "$HTTPS_PORT" ] || [[ "$HTTPS_PORT" == *"{{"* ]]; then
@@ -756,6 +762,15 @@ fi
 if [ -z "$HTTP_PORT" ] || [[ "$HTTP_PORT" == *"{{"* ]]; then
     HTTP_PORT="80"
 fi
+if [ -z "$ENABLE_HTTP" ] || [[ "$ENABLE_HTTP" == *"{{"* ]]; then
+    ENABLE_HTTP="true"
+fi
+
+# Normalize HTTP toggle values
+case "$(echo "$ENABLE_HTTP" | tr '[:upper:]' '[:lower:]')" in
+    true|1|yes|on) ENABLE_HTTP="true" ;;
+    *) ENABLE_HTTP="false" ;;
+esac
 
 NGINX_CONF="/etc/nginx/nginx.conf"
 STREAM_DIR="/etc/nginx/stream.d"
@@ -764,7 +779,11 @@ MARKER_FILE="$STREAM_DIR/passthrough-${DOMAIN}.conf"
 DNS_MGMT_CONFIG="$STREAM_DIR/configuratix-passthrough.conf"
 
 echo "=== Configuratix Passthrough Setup for $DOMAIN ==="
-echo "Target: $TARGET (HTTPS: $HTTPS_PORT, HTTP: $HTTP_PORT)"
+if [ "$ENABLE_HTTP" = "true" ]; then
+    echo "Target: $TARGET (HTTPS: $HTTPS_PORT, HTTP: $HTTP_PORT)"
+else
+    echo "Target: $TARGET (HTTPS: $HTTPS_PORT, HTTP: disabled)"
+fi
 
 # 1. Create directories
 mkdir -p "$STREAM_DIR" /etc/nginx/conf.d/configuratix
@@ -897,10 +916,15 @@ cat > "$MARKER_FILE" << EOF
 # Configuratix Passthrough Marker
 # Domain: $DOMAIN
 # Target HTTPS: ${TARGET}:${HTTPS_PORT}
-# Target HTTP: ${TARGET}:${HTTP_PORT}
 # PROXY Protocol: enabled
+# HTTP Passthrough Enabled: ${ENABLE_HTTP}
 # Created: $(date -Iseconds)
 EOF
+if [ "$ENABLE_HTTP" = "true" ]; then
+    echo "# Target HTTP: ${TARGET}:${HTTP_PORT}" >> "$MARKER_FILE"
+else
+    echo "# HTTP Passthrough: disabled" >> "$MARKER_FILE"
+fi
 echo "Created marker: $MARKER_FILE"
 
 # 8. Regenerate consolidated config from all markers
@@ -927,7 +951,11 @@ for marker in "$STREAM_DIR"/passthrough-*.conf; do
     if [ -n "$target_http" ]; then
         HTTP_TARGETS["$dom"]="$target_http"
     fi
-    echo "  - $dom -> HTTPS: $target_https, HTTP: $target_http"
+    if [ -n "$target_http" ]; then
+        echo "  - $dom -> HTTPS: $target_https, HTTP: $target_http"
+    else
+        echo "  - $dom -> HTTPS: $target_https, HTTP: disabled"
+    fi
 done
 
 # Generate config
