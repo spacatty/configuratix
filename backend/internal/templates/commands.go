@@ -4,6 +4,14 @@ import (
 	"encoding/json"
 )
 
+const ensureNginxBansSnippetCommand = `mkdir -p /etc/nginx/snippets
+if [ ! -f /etc/nginx/snippets/configuratix-bans.conf ]; then
+    cat > /etc/nginx/snippets/configuratix-bans.conf << 'EOF'
+# Configuratix Security - Banned IPs
+# Auto-generated - do not edit manually
+EOF
+fi`
+
 // Step represents a single operation
 type Step struct {
 	Action  string `json:"action"`            // exec, file, service, fetch
@@ -164,6 +172,7 @@ var Commands = map[string]*CommandTemplate{
 		Steps: []Step{
 			{Action: "file", Op: "backup", Path: "/etc/nginx/conf.d/configuratix/{{domain}}.conf"},
 			{Action: "file", Op: "write", Path: "/etc/nginx/conf.d/configuratix/{{domain}}.conf", Content: "{{config}}", Mode: "0644"},
+			{Action: "exec", Command: ensureNginxBansSnippetCommand, Timeout: 10},
 			{Action: "exec", Command: "nginx -t", Timeout: 30},
 			{Action: "service", Name: "nginx", Op: "reload"},
 		},
@@ -210,6 +219,7 @@ var Commands = map[string]*CommandTemplate{
 			{Action: "exec", Command: "apt-get update", Timeout: 120},
 			{Action: "exec", Command: "apt-get install -y nginx certbot python3-certbot-nginx fail2ban ufw", Timeout: 300},
 			{Action: "exec", Command: "mkdir -p /etc/nginx/conf.d/configuratix", Timeout: 10},
+			{Action: "exec", Command: ensureNginxBansSnippetCommand, Timeout: 10},
 			{Action: "service", Name: "nginx", Op: "enable"},
 			{Action: "service", Name: "nginx", Op: "start"},
 			{Action: "service", Name: "fail2ban", Op: "enable"},
@@ -345,6 +355,7 @@ var Commands = map[string]*CommandTemplate{
 		Steps: []Step{
 			{Action: "file", Op: "backup", Path: "{{path}}"},
 			{Action: "file", Op: "write", Path: "{{path}}", Content: "{{content}}", Mode: "0644"},
+			{Action: "exec", Command: ensureNginxBansSnippetCommand, Timeout: 10},
 			{Action: "exec", Command: "nginx -t", Timeout: 30},
 			{Action: "exec", Command: "systemctl reload nginx", Timeout: 30},
 		},
@@ -497,6 +508,7 @@ var Commands = map[string]*CommandTemplate{
 		Steps: []Step{
 			// Create config directory
 			{Action: "exec", Command: "mkdir -p /etc/nginx/conf.d/configuratix", Timeout: 10},
+			{Action: "exec", Command: ensureNginxBansSnippetCommand, Timeout: 10},
 			// Issue SSL cert if needed - remove old config first to avoid PHP socket issues
 			{Action: "exec", Command: `
 DOMAIN="{{domain}}"

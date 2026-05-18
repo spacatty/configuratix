@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -123,6 +124,9 @@ func (m *Module) Start() error {
 	if err := m.fullSync(); err != nil {
 		log.Printf("Initial security sync failed: %v", err)
 	}
+
+	// Ensure nginx include exists even when there are no bans yet.
+	m.updateNginxBanFile()
 
 	// Start log watcher
 	m.watcher = NewLogWatcher(m.config.SecurityLogPath, m.handleBlockedRequest)
@@ -303,11 +307,16 @@ func (m *Module) GetUAPatterns() []string {
 
 // updateNginxBanFile writes banned IPs to nginx include file and reloads nginx
 func (m *Module) updateNginxBanFile() {
-	// Path for nginx ban file
-	banFilePath := "/etc/nginx/snippets/configuratix-bans.conf"
+	banFilePath := m.config.NginxIncludePath
+	if strings.TrimSpace(banFilePath) == "" {
+		banFilePath = "/etc/nginx/snippets/configuratix-bans.conf"
+	}
 
 	// Ensure directory exists
-	os.MkdirAll("/etc/nginx/snippets", 0755)
+	if err := os.MkdirAll(filepath.Dir(banFilePath), 0755); err != nil {
+		log.Printf("Failed to create nginx snippet directory: %v", err)
+		return
+	}
 
 	// Build deny rules
 	var content strings.Builder

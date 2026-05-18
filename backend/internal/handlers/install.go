@@ -113,6 +113,15 @@ apt-get install -y nginx certbot python3-certbot-nginx fail2ban ufw unzip curl
 mkdir -p /etc/configuratix
 mkdir -p /opt/configuratix/bin
 mkdir -p /etc/nginx/conf.d/configuratix
+mkdir -p /etc/nginx/snippets
+
+# Ensure configuratix bans include exists for generated nginx configs
+if [ ! -f /etc/nginx/snippets/configuratix-bans.conf ]; then
+    cat > /etc/nginx/snippets/configuratix-bans.conf << 'EOF'
+# Configuratix Security - Banned IPs
+# Auto-generated - do not edit manually
+EOF
+fi
 
 # Add configuratix include to nginx.conf if not already present
 if ! grep -q "conf.d/configuratix" /etc/nginx/nginx.conf; then

@@ -414,6 +414,9 @@ func (e *Executor) bootstrap() (string, error) {
 	out, _ := runCommand("apt-get", "install", "-y", "nginx", "certbot", "python3-certbot-nginx", "fail2ban", "ufw", "unzip")
 	logs.WriteString(out)
 	os.MkdirAll("/etc/nginx/conf.d/configuratix", 0755)
+	if err := ensureNginxBansSnippet(); err != nil {
+		logs.WriteString(fmt.Sprintf("Warning: failed to initialize nginx bans snippet: %v\n", err))
+	}
 	runCommand("systemctl", "enable", "nginx")
 	runCommand("systemctl", "start", "nginx")
 	runCommand("systemctl", "enable", "fail2ban")
@@ -433,6 +436,10 @@ func (e *Executor) applyDomain(domain, nginxConfig, sslMode string) (string, err
 		return logs.String(), fmt.Errorf("failed to write nginx config: %v", err)
 	}
 	logs.WriteString("Nginx config written\n")
+
+	if err := ensureNginxBansSnippet(); err != nil {
+		return logs.String(), fmt.Errorf("failed to initialize nginx bans snippet: %v", err)
+	}
 
 	logs.WriteString("Testing nginx configuration...\n")
 	if out, err := runCommand("nginx", "-t"); err != nil {
@@ -459,6 +466,24 @@ func (e *Executor) applyDomain(domain, nginxConfig, sslMode string) (string, err
 
 	logs.WriteString(fmt.Sprintf("Domain %s configured successfully!\n", domain))
 	return logs.String(), nil
+}
+
+func ensureNginxBansSnippet() error {
+	const snippetDir = "/etc/nginx/snippets"
+	const snippetPath = snippetDir + "/configuratix-bans.conf"
+
+	if err := os.MkdirAll(snippetDir, 0755); err != nil {
+		return err
+	}
+
+	if _, err := os.Stat(snippetPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	content := "# Configuratix Security - Banned IPs\n# Auto-generated - do not edit manually\n"
+	return os.WriteFile(snippetPath, []byte(content), 0644)
 }
 
 // removeDomain removes nginx config for a domain

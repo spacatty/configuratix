@@ -134,7 +134,7 @@ func run() error {
 			MachineID:        cfg.AgentID,     // Using AgentID as machine identifier
 			SyncInterval:     1 * time.Minute, // Sync every minute
 			SecurityLogPath:  "/var/log/nginx/security-blocked.log",
-			NginxIncludePath: "/etc/nginx/snippets/configuratix-security.conf",
+			NginxIncludePath: "/etc/nginx/snippets/configuratix-bans.conf",
 		})
 		if err := securityModule.Start(); err != nil {
 			log.Printf("Security module failed to start: %v", err)
