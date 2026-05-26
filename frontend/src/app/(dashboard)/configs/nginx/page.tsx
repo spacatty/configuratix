@@ -35,6 +35,8 @@ export default function NginxConfigsPage() {
   const [formIsPassthrough, setFormIsPassthrough] = useState(false);
   const [formPassthroughTarget, setFormPassthroughTarget] = useState("");
   const [formPassthroughHttpEnabled, setFormPassthroughHttpEnabled] = useState(true);
+  const [formPassthroughHttpPort, setFormPassthroughHttpPort] = useState(80);
+  const [formPassthroughProxyProtocol, setFormPassthroughProxyProtocol] = useState(false);
   const [formSslMode, setFormSslMode] = useState("allow_http");
   const [formSslEmail, setFormSslEmail] = useState("");
   const [formCorsEnabled, setFormCorsEnabled] = useState(true);
@@ -84,6 +86,8 @@ export default function NginxConfigsPage() {
     setFormIsPassthrough(false);
     setFormPassthroughTarget("");
     setFormPassthroughHttpEnabled(true);
+    setFormPassthroughHttpPort(80);
+    setFormPassthroughProxyProtocol(false);
     setFormSslMode("allow_http");
     setFormSslEmail("");
     setFormCorsEnabled(true);
@@ -119,6 +123,8 @@ export default function NginxConfigsPage() {
         is_passthrough: formIsPassthrough,
         passthrough_target: formIsPassthrough ? formPassthroughTarget : undefined,
         passthrough_http_enabled: formIsPassthrough ? formPassthroughHttpEnabled : undefined,
+        passthrough_http_port: formIsPassthrough ? formPassthroughHttpPort : undefined,
+        passthrough_proxy_protocol: formIsPassthrough ? formPassthroughProxyProtocol : undefined,
         ssl_mode: formSslMode,
         ssl_email: formSslEmail || undefined,
         locations: formIsPassthrough ? [] : locationsWithPHP,
@@ -165,6 +171,8 @@ export default function NginxConfigsPage() {
         is_passthrough: formIsPassthrough,
         passthrough_target: formIsPassthrough ? formPassthroughTarget : undefined,
         passthrough_http_enabled: formIsPassthrough ? formPassthroughHttpEnabled : undefined,
+        passthrough_http_port: formIsPassthrough ? formPassthroughHttpPort : undefined,
+        passthrough_proxy_protocol: formIsPassthrough ? formPassthroughProxyProtocol : undefined,
         ssl_mode: formSslMode,
         ssl_email: formSslEmail || undefined,
         locations: formIsPassthrough ? [] : locationsWithPHP,
@@ -222,12 +230,16 @@ export default function NginxConfigsPage() {
     setFormMode(config.mode);
     setFormRawText(config.raw_text || "");
     setFormPassthroughHttpEnabled(true);
+    setFormPassthroughHttpPort(80);
+    setFormPassthroughProxyProtocol(false);
     if (config.structured_json) {
       const structured = config.structured_json as NginxConfigStructured;
       // Passthrough settings
       setFormIsPassthrough(structured.is_passthrough ?? false);
       setFormPassthroughTarget(structured.passthrough_target || "");
       setFormPassthroughHttpEnabled(structured.passthrough_http_enabled ?? true);
+      setFormPassthroughHttpPort(structured.passthrough_http_port ?? 80);
+      setFormPassthroughProxyProtocol(structured.passthrough_proxy_protocol ?? false);
       // Standard settings
       setFormSslMode(structured.ssl_mode || "allow_http");
       setFormSslEmail(structured.ssl_email || "");
@@ -681,14 +693,41 @@ export default function NginxConfigsPage() {
 
                   <div className="flex items-start justify-between rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5">
                     <div className="pr-3">
-                      <Label className="text-sm">Enable HTTP passthrough on port 80</Label>
+                      <Label className="text-sm">Enable HTTP routing on port 80</Label>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Disable this when you want HTTPS passthrough only. Port 443 passthrough stays enabled.
+                        Routes plain HTTP by Host header to the backend HTTP port. Port 443 passthrough stays enabled.
                       </p>
                     </div>
                     <Switch
                       checked={formPassthroughHttpEnabled}
                       onCheckedChange={setFormPassthroughHttpEnabled}
+                    />
+                  </div>
+
+                  {formPassthroughHttpEnabled && (
+                    <div className="space-y-2">
+                      <Label className="text-sm">Backend HTTP Port</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={65535}
+                        value={formPassthroughHttpPort}
+                        onChange={(e) => setFormPassthroughHttpPort(Number(e.target.value) || 80)}
+                        className="h-9 font-mono"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-start justify-between rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5">
+                    <div className="pr-3">
+                      <Label className="text-sm">Send PROXY protocol to HTTPS backend</Label>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Enable only if the backend nginx/OpenResty listener is configured with proxy_protocol.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={formPassthroughProxyProtocol}
+                      onCheckedChange={setFormPassthroughProxyProtocol}
                     />
                   </div>
                   
@@ -718,7 +757,7 @@ export default function NginxConfigsPage() {
                     
                     <div>
                       <p className="text-muted-foreground text-xs mb-1">
-                        <strong>Step 2:</strong> Update to accept PROXY Protocol for HTTPS:
+                        <strong>Optional:</strong> If enabled above, update the backend to accept PROXY Protocol for HTTPS:
                       </p>
                       <pre className="text-xs bg-black/30 p-2 rounded overflow-x-auto font-mono text-amber-300/80">{`server {
     listen 80;

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -26,15 +27,17 @@ func escapeNginxRegex(pattern string) string {
 
 // structuredConfig is used for parsing the structured JSON
 type structuredConfig struct {
-	IsPassthrough           bool   `json:"is_passthrough"`
-	PassthroughTarget       string `json:"passthrough_target"`
-	PassthroughHTTPEnabled  *bool  `json:"passthrough_http_enabled"`
-	SSLMode                 string `json:"ssl_mode"`
-	AutoindexOff            *bool  `json:"autoindex_off"`
-	DenyAllCatchall         *bool  `json:"deny_all_catchall"`
-	UABlockingEnabled       bool   `json:"ua_blocking_enabled"`
-	EndpointBlockingEnabled bool   `json:"endpoint_blocking_enabled"`
-	ProxySettings           *struct {
+	IsPassthrough            bool   `json:"is_passthrough"`
+	PassthroughTarget        string `json:"passthrough_target"`
+	PassthroughHTTPEnabled   *bool  `json:"passthrough_http_enabled"`
+	PassthroughHTTPPort      int    `json:"passthrough_http_port"`
+	PassthroughProxyProtocol *bool  `json:"passthrough_proxy_protocol"`
+	SSLMode                  string `json:"ssl_mode"`
+	AutoindexOff             *bool  `json:"autoindex_off"`
+	DenyAllCatchall          *bool  `json:"deny_all_catchall"`
+	UABlockingEnabled        bool   `json:"ua_blocking_enabled"`
+	EndpointBlockingEnabled  bool   `json:"endpoint_blocking_enabled"`
+	ProxySettings            *struct {
 		Enabled           bool   `json:"enabled"`
 		ProxyType         string `json:"proxy_type"`          // cloudflare, proxy_protocol, custom
 		UseProxyProtocol  bool   `json:"use_proxy_protocol"`  // Use PROXY protocol for listen
@@ -94,13 +97,6 @@ func isPassthroughConfig(structuredJSON json.RawMessage) bool {
 	return cfg.IsPassthrough
 }
 
-// getPassthroughTarget returns the passthrough target from structured JSON
-func getPassthroughTarget(structuredJSON json.RawMessage) string {
-	var cfg structuredConfig
-	json.Unmarshal(structuredJSON, &cfg)
-	return cfg.PassthroughTarget
-}
-
 // getPassthroughHTTPEnabled returns whether passthrough should generate HTTP (port 80) marker/listener.
 // Missing value defaults to true for backwards compatibility.
 func getPassthroughHTTPEnabled(structuredJSON json.RawMessage) bool {
@@ -110,6 +106,52 @@ func getPassthroughHTTPEnabled(structuredJSON json.RawMessage) bool {
 		return true
 	}
 	return *cfg.PassthroughHTTPEnabled
+}
+
+func getPassthroughApplyValues(structuredJSON json.RawMessage) map[string]string {
+	var cfg structuredConfig
+	json.Unmarshal(structuredJSON, &cfg)
+
+	target := strings.TrimSpace(cfg.PassthroughTarget)
+	httpsPort := "443"
+	httpPort := "80"
+	if cfg.PassthroughHTTPPort > 0 {
+		httpPort = fmt.Sprintf("%d", cfg.PassthroughHTTPPort)
+	}
+
+	if host, port, err := net.SplitHostPort(target); err == nil {
+		target = strings.Trim(host, "[]")
+		if port != "" {
+			httpsPort = port
+		}
+	} else if strings.Count(target, ":") == 1 {
+		parts := strings.SplitN(target, ":", 2)
+		if parts[0] != "" && parts[1] != "" && isNumericPort(parts[1]) {
+			target = parts[0]
+			httpsPort = parts[1]
+		}
+	}
+
+	proxyProtocol := "false"
+	if cfg.PassthroughProxyProtocol != nil && *cfg.PassthroughProxyProtocol {
+		proxyProtocol = "true"
+	}
+
+	return map[string]string{
+		"target":         target,
+		"https_port":     httpsPort,
+		"http_port":      httpPort,
+		"proxy_protocol": proxyProtocol,
+	}
+}
+
+func isNumericPort(value string) bool {
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return value != ""
 }
 
 // SecurityConfig holds security settings for Nginx config generation

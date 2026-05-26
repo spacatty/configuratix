@@ -23,8 +23,8 @@ import (
 // PassthroughHandler handles DNS passthrough pool operations
 type PassthroughHandler struct {
 	db          *database.DB
-	dnsProvider *DNSHandler                 // For DNS record updates
-	nginx       *PassthroughNginxGenerator  // For nginx config generation
+	dnsProvider *DNSHandler                // For DNS record updates
+	nginx       *PassthroughNginxGenerator // For nginx config generation
 }
 
 // NewPassthroughHandler creates a new PassthroughHandler
@@ -131,14 +131,14 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 
 	var req struct {
 		TargetIP           string   `json:"target_ip"`
-		TargetPort         int      `json:"target_port"`          // HTTPS (443) target port
-		TargetPortHTTP     int      `json:"target_port_http"`     // HTTP (80) target port
+		TargetPort         int      `json:"target_port"`      // HTTPS (443) target port
+		TargetPortHTTP     int      `json:"target_port_http"` // HTTP (80) target port
 		RotationStrategy   string   `json:"rotation_strategy"`
 		RotationMode       string   `json:"rotation_mode"`
 		IntervalMinutes    int      `json:"interval_minutes"`
 		ScheduledTimes     []string `json:"scheduled_times"`
 		HealthCheckEnabled bool     `json:"health_check_enabled"`
-		ProxyProtocol      *bool    `json:"proxy_protocol"`       // Send PROXY protocol to backend
+		ProxyProtocol      *bool    `json:"proxy_protocol"` // Send PROXY protocol to backend
 		MachineIDs         []string `json:"machine_ids"`
 		GroupIDs           []string `json:"group_ids"` // Machine groups for dynamic membership
 	}
@@ -174,8 +174,8 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 
 	scheduledTimesJSON, _ := json.Marshal(req.ScheduledTimes)
 	groupIDsArray := pq.StringArray(req.GroupIDs)
-	
-	log.Printf("CreateOrUpdateRecordPool: machine_ids=%v, group_ids=%v, groupIDsArray=%v", 
+
+	log.Printf("CreateOrUpdateRecordPool: machine_ids=%v, group_ids=%v, groupIDsArray=%v",
 		req.MachineIDs, req.GroupIDs, groupIDsArray)
 
 	// Upsert pool
@@ -238,7 +238,7 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 			allMachineIDs = append(allMachineIDs, id)
 		}
 	}
-	
+
 	// Add machines from groups
 	if len(req.GroupIDs) > 0 {
 		var groupMachines []uuid.UUID
@@ -266,7 +266,7 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 	if pool.CurrentMachineID == nil && len(allMachineIDs) > 0 {
 		firstMachineID := allMachineIDs[0]
 		h.db.Exec("UPDATE dns_passthrough_pools SET current_machine_id = $1 WHERE id = $2", firstMachineID, pool.ID)
-		
+
 		// Update DNS record to point to this machine (syncs to provider)
 		if err := h.updateDNSRecordToMachine(recordID, firstMachineID, "initial"); err != nil {
 			log.Printf("Failed to update DNS record to first machine: %v", err)
@@ -299,7 +299,7 @@ func (h *PassthroughHandler) DeleteRecordPool(w http.ResponseWriter, r *http.Req
 	if err := h.db.Get(&pool, "SELECT * FROM dns_passthrough_pools WHERE dns_record_id = $1", recordID); err == nil {
 		// Get direct members
 		h.db.Select(&machineIDs, "SELECT machine_id FROM dns_passthrough_members WHERE pool_id = $1", pool.ID)
-		
+
 		// Also get group members
 		var groupMachineIDs []uuid.UUID
 		h.db.Select(&groupMachineIDs, `
@@ -307,7 +307,7 @@ func (h *PassthroughHandler) DeleteRecordPool(w http.ResponseWriter, r *http.Req
 			FROM machine_group_members gm
 			WHERE gm.group_id = ANY($1::uuid[])
 		`, pq.Array(pool.GroupIDs))
-		
+
 		// Merge and dedupe
 		seen := make(map[uuid.UUID]bool)
 		for _, id := range machineIDs {
@@ -536,14 +536,14 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 	var req struct {
 		IncludeRoot        bool     `json:"include_root"`
 		TargetIP           string   `json:"target_ip"`
-		TargetPort         int      `json:"target_port"`          // HTTPS (443) target port
-		TargetPortHTTP     int      `json:"target_port_http"`     // HTTP (80) target port
+		TargetPort         int      `json:"target_port"`      // HTTPS (443) target port
+		TargetPortHTTP     int      `json:"target_port_http"` // HTTP (80) target port
 		RotationStrategy   string   `json:"rotation_strategy"`
 		RotationMode       string   `json:"rotation_mode"`
 		IntervalMinutes    int      `json:"interval_minutes"`
 		ScheduledTimes     []string `json:"scheduled_times"`
 		HealthCheckEnabled bool     `json:"health_check_enabled"`
-		ProxyProtocol      *bool    `json:"proxy_protocol"`       // Send PROXY protocol to backend
+		ProxyProtocol      *bool    `json:"proxy_protocol"` // Send PROXY protocol to backend
 		MachineIDs         []string `json:"machine_ids"`
 		GroupIDs           []string `json:"group_ids"` // Machine groups for dynamic membership
 	}
@@ -632,7 +632,7 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 			allMachineIDs = append(allMachineIDs, id)
 		}
 	}
-	
+
 	// Add machines from groups
 	if len(req.GroupIDs) > 0 {
 		var groupMachines []uuid.UUID
@@ -660,7 +660,7 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 	if pool.CurrentMachineID == nil && len(allMachineIDs) > 0 {
 		firstMachineID := allMachineIDs[0]
 		h.db.Exec("UPDATE dns_wildcard_pools SET current_machine_id = $1 WHERE id = $2", firstMachineID, pool.ID)
-		
+
 		// Update wildcard DNS record
 		if err := h.updateWildcardDNS(domainID, firstMachineID, pool.IncludeRoot, "initial"); err != nil {
 			log.Printf("Failed to update wildcard DNS to first machine: %v", err)
@@ -693,7 +693,7 @@ func (h *PassthroughHandler) DeleteWildcardPool(w http.ResponseWriter, r *http.R
 	if err := h.db.Get(&pool, "SELECT * FROM dns_wildcard_pools WHERE dns_domain_id = $1", domainID); err == nil {
 		// Get direct members
 		h.db.Select(&machineIDs, "SELECT machine_id FROM dns_wildcard_pool_members WHERE pool_id = $1", pool.ID)
-		
+
 		// Also get group members
 		var groupMachineIDs []uuid.UUID
 		h.db.Select(&groupMachineIDs, `
@@ -701,7 +701,7 @@ func (h *PassthroughHandler) DeleteWildcardPool(w http.ResponseWriter, r *http.R
 			FROM machine_group_members gm
 			WHERE gm.group_id = ANY($1::uuid[])
 		`, pq.Array(pool.GroupIDs))
-		
+
 		// Merge and dedupe
 		seen := make(map[uuid.UUID]bool)
 		for _, id := range machineIDs {
@@ -1007,7 +1007,7 @@ func (h *PassthroughHandler) rotateToMachine(poolID, recordID uuid.UUID, member 
 	// Log history
 	log.Printf("Inserting rotation history: pool_type=%s, pool_id=%s, from_machine=%v, from_ip=%s, to_machine=%s, to_ip=%s, trigger=%s",
 		poolType, poolID, pool.CurrentMachineID, fromIP, member.MachineID, member.MachineIP, trigger)
-	
+
 	result, histErr := h.db.Exec(`
 		INSERT INTO dns_rotation_history 
 			(pool_type, pool_id, from_machine_id, from_ip, to_machine_id, to_ip, trigger)
@@ -1106,7 +1106,7 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 		return fmt.Errorf("failed to get record info: %w", err)
 	}
 
-	log.Printf("DNS Passthrough: Updating %s.%s from %s to %s (trigger: %s)", 
+	log.Printf("DNS Passthrough: Updating %s.%s from %s to %s (trigger: %s)",
 		recordInfo.Name, recordInfo.DomainFQDN, recordInfo.Value, machineIP, trigger)
 
 	// Update local record first
@@ -1122,7 +1122,7 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 	var account models.DNSAccount
 	err = h.db.Get(&account, "SELECT * FROM dns_accounts WHERE id = $1", *recordInfo.DNSAccountID)
 	if err != nil {
-		h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", 
+		h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2",
 			"DNS account not found", recordID)
 		return fmt.Errorf("failed to get DNS account: %w", err)
 	}
@@ -1134,7 +1134,7 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 	}
 	provider, err := dns.NewProvider(account.Provider, apiID, account.ApiToken)
 	if err != nil {
-		h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", 
+		h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2",
 			err.Error(), recordID)
 		return fmt.Errorf("failed to create DNS provider: %w", err)
 	}
@@ -1144,7 +1144,7 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 	if recordInfo.ProviderID != nil {
 		providerRecordID = *recordInfo.ProviderID
 	}
-	
+
 	dnsRecord := dns.Record{
 		ID:       providerRecordID,
 		Type:     recordInfo.RecordType,
@@ -1156,7 +1156,7 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 	}
 
 	ctx := context.Background()
-	
+
 	// Always try to find the existing record first to get correct ID
 	findAndUpdateExisting := func() (string, error) {
 		remoteRecords, listErr := provider.ListRecords(ctx, recordInfo.DomainFQDN)
@@ -1168,7 +1168,7 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 			remoteName := remote.Name
 			if remoteName == recordInfo.Name+"."+recordInfo.DomainFQDN || remoteName == recordInfo.Name {
 				if remote.Type == recordInfo.RecordType {
-					log.Printf("Found existing record %s (ID: %s, value: %s) - updating to %s", 
+					log.Printf("Found existing record %s (ID: %s, value: %s) - updating to %s",
 						remoteName, remote.ID, remote.Value, machineIP)
 					dnsRecord.ID = remote.ID
 					_, updateErr := provider.UpdateRecord(ctx, recordInfo.DomainFQDN, remote.ID, dnsRecord)
@@ -1194,7 +1194,7 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 				// Try to create new
 				createdRecord, createErr := provider.CreateRecord(ctx, recordInfo.DomainFQDN, dnsRecord)
 				if createErr != nil {
-					h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", 
+					h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2",
 						createErr.Error(), recordID)
 					return fmt.Errorf("failed to sync DNS record: %w", createErr)
 				}
@@ -1213,7 +1213,7 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 				// If create fails, try find again (race condition)
 				foundID2, findErr2 := findAndUpdateExisting()
 				if findErr2 != nil {
-					h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2", 
+					h.db.Exec("UPDATE dns_records SET sync_status = 'error', sync_error = $1 WHERE id = $2",
 						createErr.Error(), recordID)
 					return fmt.Errorf("failed to sync DNS record: %w", createErr)
 				}
@@ -1227,7 +1227,7 @@ func (h *PassthroughHandler) updateDNSRecordToMachine(recordID, machineID uuid.U
 	}
 
 	// Update local record with provider ID and mark as synced
-	h.db.Exec("UPDATE dns_records SET remote_record_id = $1, sync_status = 'synced', sync_error = NULL WHERE id = $2", 
+	h.db.Exec("UPDATE dns_records SET remote_record_id = $1, sync_status = 'synced', sync_error = NULL WHERE id = $2",
 		providerRecordID, recordID)
 
 	log.Printf("DNS Passthrough: Successfully synced %s.%s = %s", recordInfo.Name, recordInfo.DomainFQDN, machineIP)
@@ -1384,7 +1384,10 @@ func (h *PassthroughHandler) GetNginxConfig(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(config))
+	w.Write([]byte("=== /etc/nginx/stream.d/configuratix-passthrough.conf ===\n"))
+	w.Write([]byte(config.StreamConfig))
+	w.Write([]byte("\n=== /etc/nginx/conf.d/configuratix/passthrough-dns-http.conf ===\n"))
+	w.Write([]byte(config.HTTPConfig))
 }
 
 // ApplyNginxConfig triggers nginx config deployment to a machine
@@ -1424,4 +1427,3 @@ func (h *PassthroughHandler) ApplyPoolNginxConfigs(w http.ResponseWriter, r *htt
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "applied"})
 }
-

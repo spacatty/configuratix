@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -15,23 +16,28 @@ type PassthroughNginxGenerator struct {
 	db *database.DB
 }
 
+type PassthroughNginxConfigBundle struct {
+	StreamConfig string
+	HTTPConfig   string
+}
+
 // NewPassthroughNginxGenerator creates a new generator
 func NewPassthroughNginxGenerator(db *database.DB) *PassthroughNginxGenerator {
 	return &PassthroughNginxGenerator{db: db}
 }
 
 // GenerateForMachine generates nginx stream config for a specific proxy machine
-func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (string, error) {
+func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (PassthroughNginxConfigBundle, error) {
 	// Get all record pools this machine is a member of (with domain listener_protocol)
 	var recordPools []struct {
-		PoolID            uuid.UUID `db:"pool_id"`
-		TargetIP          string    `db:"target_ip"`
-		TargetPort        int       `db:"target_port"`
-		TargetPortHTTP    int       `db:"target_port_http"`
-		RecordName        string    `db:"record_name"`
-		DomainFQDN        string    `db:"domain_fqdn"`
-		IsCurrent         bool      `db:"is_current"`
-		ListenerProtocol  string    `db:"listener_protocol"`
+		PoolID           uuid.UUID `db:"pool_id"`
+		TargetIP         string    `db:"target_ip"`
+		TargetPort       int       `db:"target_port"`
+		TargetPortHTTP   int       `db:"target_port_http"`
+		RecordName       string    `db:"record_name"`
+		DomainFQDN       string    `db:"domain_fqdn"`
+		IsCurrent        bool      `db:"is_current"`
+		ListenerProtocol string    `db:"listener_protocol"`
 	}
 	g.db.Select(&recordPools, `
 		SELECT 
@@ -186,7 +192,7 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 	}
 
 	if len(recordPools) == 0 && len(wildcardPools) == 0 {
-		return "", nil // No passthrough config needed
+		return PassthroughNginxConfigBundle{}, nil // No passthrough config needed
 	}
 
 	// Check if any pool has proxy_protocol enabled (direct members + group members)
@@ -217,13 +223,8 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 	`, machineID)
 	proxyProtocolEnabled = proxyProtocolCount > 0
 
-	// Generate config
-	// NOTE: This file is included FROM WITHIN a stream{} block in nginx.conf
-	// So we do NOT wrap with stream{} here - only the inner directives
-	var config strings.Builder
-	config.WriteString("# Configuratix Passthrough Configuration\n")
-	config.WriteString("# Auto-generated - DO NOT EDIT MANUALLY\n")
-	config.WriteString("# Included from stream{} block in nginx.conf\n\n")
+	var streamConfig strings.Builder
+	var httpConfig strings.Builder
 
 	// Emit HTTPS (port 443) only when at least one domain allows HTTPS (not http_only)
 	hasHTTPS := false
@@ -243,10 +244,13 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 	}
 
 	if hasHTTPS {
+		streamConfig.WriteString("# Configuratix Passthrough Configuration\n")
+		streamConfig.WriteString("# Auto-generated - DO NOT EDIT MANUALLY\n")
+		streamConfig.WriteString("# Included from stream{} block in nginx.conf\n\n")
 		// SNI map for HTTPS (port 443) - maps by TLS SNI to target:port
-		config.WriteString("# SNI-based backend routing for HTTPS\n")
-		config.WriteString("map $ssl_preread_server_name $backend_https {\n")
-		config.WriteString("    default reject;\n")
+		streamConfig.WriteString("# SNI-based backend routing for HTTPS\n")
+		streamConfig.WriteString("map $ssl_preread_server_name $backend_https {\n")
+		streamConfig.WriteString("    default reject;\n")
 
 		for _, pool := range recordPools {
 			if pool.ListenerProtocol == "http_only" {
@@ -256,49 +260,48 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 			if pool.RecordName != "@" {
 				fullDomain = pool.RecordName + "." + pool.DomainFQDN
 			}
-			config.WriteString(fmt.Sprintf("    %s %s:%d;\n", fullDomain, pool.TargetIP, pool.TargetPort))
+			streamConfig.WriteString(fmt.Sprintf("    %s %s:%d;\n", fullDomain, pool.TargetIP, pool.TargetPort))
 		}
 
 		for _, pool := range wildcardPools {
 			if pool.ListenerProtocol == "http_only" {
 				continue
 			}
-			config.WriteString(fmt.Sprintf("    ~^.+\\.%s$ %s:%d;\n",
+			streamConfig.WriteString(fmt.Sprintf("    ~^.+\\.%s$ %s:%d;\n",
 				strings.ReplaceAll(pool.DomainFQDN, ".", "\\."), pool.TargetIP, pool.TargetPort))
 			if pool.IncludeRoot {
-				config.WriteString(fmt.Sprintf("    %s %s:%d;\n", pool.DomainFQDN, pool.TargetIP, pool.TargetPort))
+				streamConfig.WriteString(fmt.Sprintf("    %s %s:%d;\n", pool.DomainFQDN, pool.TargetIP, pool.TargetPort))
 			}
 		}
-		config.WriteString("}\n\n")
+		streamConfig.WriteString("}\n\n")
 
 		// Reject upstream
-		config.WriteString("# Reject upstream (closed connection)\n")
-		config.WriteString("upstream reject {\n")
-		config.WriteString("    server 127.0.0.1:1 down;\n")
-		config.WriteString("}\n\n")
+		streamConfig.WriteString("# Reject upstream (closed connection)\n")
+		streamConfig.WriteString("upstream reject {\n")
+		streamConfig.WriteString("    server 127.0.0.1:1 down;\n")
+		streamConfig.WriteString("}\n\n")
 
 		// Server block for HTTPS passthrough (port 443)
-		config.WriteString("# HTTPS Passthrough (TLS SNI-based routing)\n")
-		config.WriteString("server {\n")
-		config.WriteString("    listen 443;\n")
-		config.WriteString("    ssl_preread on;\n")
-		config.WriteString("    proxy_pass $backend_https;\n")
+		streamConfig.WriteString("# HTTPS Passthrough (TLS SNI-based routing)\n")
+		streamConfig.WriteString("server {\n")
+		streamConfig.WriteString("    listen 443;\n")
+		streamConfig.WriteString("    ssl_preread on;\n")
+		streamConfig.WriteString("    proxy_pass $backend_https;\n")
 		if proxyProtocolEnabled {
-			config.WriteString("    proxy_protocol on;\n") // Send PROXY protocol to backend for real client IP
+			streamConfig.WriteString("    proxy_protocol on;\n") // Send PROXY protocol to backend for real client IP
 		}
-		config.WriteString("    proxy_connect_timeout 10s;\n")
-		config.WriteString("    proxy_timeout 30m;\n")
-		config.WriteString("}\n\n")
+		streamConfig.WriteString("    proxy_connect_timeout 10s;\n")
+		streamConfig.WriteString("    proxy_timeout 30m;\n")
+		streamConfig.WriteString("}\n\n")
 	}
 
 	// Note: HTTP (port 80) passthrough is tricky because there's no SNI for plain HTTP.
 	// We use nginx's preread module to look at the first bytes - if it's TLS, we route via SNI.
 	// For plain HTTP, we need to use the Host header which requires layer 7 inspection.
-	// 
+	//
 	// Approach: Create separate upstream blocks and use the same target as HTTPS.
 	// The target server handles Host-based routing in its HTTP config.
-	
-	// Generate upstreams for each unique target (for HTTP port mapping); only for domains that allow HTTP
+
 	httpTargets := make(map[string]string) // domain -> target:port
 	for _, pool := range recordPools {
 		if pool.ListenerProtocol == "https_only" {
@@ -314,130 +317,75 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (str
 		if pool.ListenerProtocol == "https_only" {
 			continue
 		}
-		// For wildcards, just use the root domain as key
-		httpTargets["wildcard_"+pool.DomainFQDN] = fmt.Sprintf("%s:%d", pool.TargetIP, pool.TargetPortHTTP)
+		httpTargets["*."+pool.DomainFQDN] = fmt.Sprintf("%s:%d", pool.TargetIP, pool.TargetPortHTTP)
 		if pool.IncludeRoot {
 			httpTargets[pool.DomainFQDN] = fmt.Sprintf("%s:%d", pool.TargetIP, pool.TargetPortHTTP)
 		}
 	}
 
-	// Emit HTTP server block(s) only when at least one domain allows HTTP (not https_only)
-	uniqueHTTPTargets := make(map[string]bool)
-	for _, target := range httpTargets {
-		uniqueHTTPTargets[target] = true
-	}
-
-	if len(uniqueHTTPTargets) >= 1 {
-		if len(uniqueHTTPTargets) == 1 {
-			// Single target - simple passthrough
-			var target string
-			for t := range uniqueHTTPTargets {
-				target = t
-				break
-			}
-			config.WriteString("# HTTP Passthrough (all traffic to single target)\n")
-			config.WriteString("server {\n")
-			config.WriteString("    listen 80;\n")
-			config.WriteString(fmt.Sprintf("    proxy_pass %s;\n", target))
-			config.WriteString("    proxy_connect_timeout 10s;\n")
-			config.WriteString("    proxy_timeout 30m;\n")
-			config.WriteString("}\n")
-		} else {
-			// Multiple targets - need layer 7 for proper routing
-			// For now, use the first target as default and add a comment
-			var defaultTarget string
-			for t := range uniqueHTTPTargets {
-				defaultTarget = t
-				break
-			}
-			config.WriteString("# HTTP Passthrough\n")
-			config.WriteString("# NOTE: Multiple HTTP targets configured. Layer 4 cannot route by Host header.\n")
-			config.WriteString("# All HTTP traffic goes to default target. Target server handles Host routing.\n")
-			config.WriteString("server {\n")
-			config.WriteString("    listen 80;\n")
-			config.WriteString(fmt.Sprintf("    proxy_pass %s;\n", defaultTarget))
-			config.WriteString("    proxy_connect_timeout 10s;\n")
-			config.WriteString("    proxy_timeout 30m;\n")
-			config.WriteString("}\n")
+	if len(httpTargets) > 0 {
+		httpConfig.WriteString("# Configuratix HTTP Passthrough Configuration\n")
+		httpConfig.WriteString("# Auto-generated - DO NOT EDIT MANUALLY\n\n")
+		for domain, target := range httpTargets {
+			httpConfig.WriteString("server {\n")
+			httpConfig.WriteString("    listen 80;\n")
+			httpConfig.WriteString(fmt.Sprintf("    server_name %s;\n\n", domain))
+			httpConfig.WriteString("    location / {\n")
+			httpConfig.WriteString(fmt.Sprintf("        proxy_pass http://%s;\n", target))
+			httpConfig.WriteString("        proxy_set_header Host $host;\n")
+			httpConfig.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
+			httpConfig.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
+			httpConfig.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
+			httpConfig.WriteString("        proxy_connect_timeout 10s;\n")
+			httpConfig.WriteString("        proxy_read_timeout 30m;\n")
+			httpConfig.WriteString("        proxy_send_timeout 30m;\n")
+			httpConfig.WriteString("    }\n")
+			httpConfig.WriteString("}\n\n")
 		}
 	}
 
-	return config.String(), nil
+	return PassthroughNginxConfigBundle{
+		StreamConfig: streamConfig.String(),
+		HTTPConfig:   httpConfig.String(),
+	}, nil
 }
 
 // ApplyToMachine sends a job to apply the config on a machine
 func (g *PassthroughNginxGenerator) ApplyToMachine(machineID uuid.UUID) error {
-	config, err := g.GenerateForMachine(machineID)
+	configs, err := g.GenerateForMachine(machineID)
 	if err != nil {
 		return err
-	}
-
-	if config == "" {
-		log.Printf("No passthrough config for machine %s", machineID)
-		return nil
 	}
 
 	// Create a job to write the config
 	// Note: stream blocks must be in a file included by nginx.conf, not in conf.d
 	// The config goes to /etc/nginx/stream.d/ or /etc/nginx/conf.d/stream/
-	configPath := "/etc/nginx/stream.d/configuratix-passthrough.conf"
-	
+	streamConfigPath := "/etc/nginx/stream.d/configuratix-passthrough.conf"
+	httpConfigPath := "/etc/nginx/conf.d/configuratix/passthrough-dns-http.conf"
+
 	// Get agent_id for this machine
 	var agentID *uuid.UUID
 	err = g.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1", machineID)
 	if err != nil || agentID == nil {
 		return fmt.Errorf("machine %s has no agent", machineID)
 	}
-	
-	// Use 'run' job with multiple steps:
-	// 1. Disable conflicting sites-enabled configs
-	// 2. Install stream module if needed
-	// 3. Ensure nginx.conf includes stream.d
-	// 4. Write the config
-	// 5. Reload nginx
-	setupScript := `
+
+	needsStream := configs.StreamConfig != ""
+	setupScript := fmt.Sprintf(`
 #!/bin/bash
 set -e
 
 # Setup nginx stream passthrough
 NGINX_CONF="/etc/nginx/nginx.conf"
-SITES_ENABLED="/etc/nginx/sites-enabled"
-SITES_AVAILABLE="/etc/nginx/sites-available"
+NEED_STREAM="%t"
 
 echo "=== Configuratix Passthrough Setup ==="
 
-# 1. Disable sites-enabled configs that listen on ports 80/443
-# (Stream passthrough needs exclusive access to these ports)
-# We MOVE files to sites-disabled because nginx's include glob still matches renamed files
-echo "Checking for conflicting site configs..."
-SITES_DISABLED="/etc/nginx/sites-disabled-by-passthrough"
-mkdir -p "$SITES_DISABLED"
+mkdir -p /etc/nginx/stream.d /etc/nginx/conf.d/configuratix
 
-if [ -d "$SITES_ENABLED" ]; then
-    for conf in "$SITES_ENABLED"/*; do
-        [ -f "$conf" ] || [ -L "$conf" ] || continue
-        confname=$(basename "$conf")
-        
-        # Check if this config listens on 80 or 443
-        if grep -qE 'listen\s+(80|443)' "$conf" 2>/dev/null; then
-            echo "Disabling $confname (listens on 80/443)..."
-            mv "$conf" "$SITES_DISABLED/$confname"
-        fi
-    done
-fi
-
-# Also remove any leftover .disabled-by-passthrough files from previous runs
-rm -f "$SITES_ENABLED"/*.disabled-by-passthrough 2>/dev/null || true
-
-# Also check sites-available symlinks that might conflict
-# (the above handles symlinks too since we check sites-enabled)
-
-# 2. Create stream.d directory
-mkdir -p /etc/nginx/stream.d
-
-# 3. Check if stream module is available
 STREAM_AVAILABLE=false
 
+if [ "$NEED_STREAM" = "true" ]; then
 # Check if already loaded via modules-enabled
 if [ -f /etc/nginx/modules-enabled/50-mod-stream.conf ] || \
    ls /etc/nginx/modules-enabled/*stream* 2>/dev/null | grep -q .; then
@@ -468,7 +416,6 @@ if [ "$STREAM_AVAILABLE" = false ]; then
     fi
 fi
 
-# 4. Add stream block to nginx.conf if missing
 if ! grep -qE "^stream\s*\{" "$NGINX_CONF"; then
     echo "" >> "$NGINX_CONF"
     echo "# SSL Passthrough configuration (Configuratix)" >> "$NGINX_CONF"
@@ -481,22 +428,18 @@ elif ! grep -q "include /etc/nginx/stream.d" "$NGINX_CONF"; then
     echo "Added stream.d include to existing stream block"
 fi
 
-# 5. Final module test
 if nginx -t 2>&1 | grep -q "unknown directive.*stream"; then
     echo "ERROR: Stream module still not working after setup"
     exit 1
 fi
+fi
 
-echo "Stream setup complete"
-`
+echo "Passthrough setup complete"
+`, needsStream)
 	// Final step: test config and restart nginx (not just reload, in case it's stopped)
 	restartScript := `
 #!/bin/bash
 set -e
-
-# Kill any orphaned nginx processes that might be holding ports
-pkill -9 nginx 2>/dev/null || true
-sleep 1
 
 # Test config
 nginx -t
@@ -520,15 +463,30 @@ fi
 
 echo "Nginx is running successfully"
 `
-	payload := fmt.Sprintf(`{
-		"steps": [
-			{"action": "exec", "command": %q, "timeout": 300},
-			{"action": "file", "op": "write", "path": %q, "content": %q, "mode": "0644"},
-			{"action": "exec", "command": %q, "timeout": 60}
-		],
-		"on_error": "stop"
-	}`, setupScript, configPath, config, restartScript)
-	
+	steps := []map[string]interface{}{
+		{"action": "exec", "command": setupScript, "timeout": 300},
+	}
+	if configs.StreamConfig != "" {
+		steps = append(steps, map[string]interface{}{"action": "file", "op": "write", "path": streamConfigPath, "content": configs.StreamConfig, "mode": "0644"})
+	} else {
+		steps = append(steps, map[string]interface{}{"action": "file", "op": "delete", "path": streamConfigPath})
+	}
+	if configs.HTTPConfig != "" {
+		steps = append(steps, map[string]interface{}{"action": "file", "op": "write", "path": httpConfigPath, "content": configs.HTTPConfig, "mode": "0644"})
+	} else {
+		steps = append(steps, map[string]interface{}{"action": "file", "op": "delete", "path": httpConfigPath})
+	}
+	steps = append(steps, map[string]interface{}{"action": "exec", "command": restartScript, "timeout": 60})
+
+	payloadBytes, err := json.Marshal(map[string]interface{}{
+		"steps":    steps,
+		"on_error": "stop",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to build payload: %w", err)
+	}
+	payload := string(payloadBytes)
+
 	_, err = g.db.Exec(`
 		INSERT INTO jobs (agent_id, type, payload_json, status)
 		VALUES ($1, 'run', $2::jsonb, 'pending')
@@ -583,38 +541,22 @@ func (g *PassthroughNginxGenerator) RemoveFromMachine(machineID uuid.UUID) error
 #!/bin/bash
 set -e
 
-SITES_ENABLED="/etc/nginx/sites-enabled"
-SITES_DISABLED="/etc/nginx/sites-disabled-by-passthrough"
-CONFIG_FILE="/etc/nginx/stream.d/configuratix-passthrough.conf"
+STREAM_CONFIG_FILE="/etc/nginx/stream.d/configuratix-passthrough.conf"
+HTTP_CONFIG_FILE="/etc/nginx/conf.d/configuratix/passthrough-dns-http.conf"
 
 echo "=== Configuratix Passthrough Cleanup ==="
 
-# 1. Remove passthrough config
-if [ -f "$CONFIG_FILE" ]; then
-    echo "Removing passthrough config..."
-    rm -f "$CONFIG_FILE"
+# 1. Remove generated passthrough configs
+if [ -f "$STREAM_CONFIG_FILE" ]; then
+    echo "Removing stream passthrough config..."
+    rm -f "$STREAM_CONFIG_FILE"
+fi
+if [ -f "$HTTP_CONFIG_FILE" ]; then
+    echo "Removing HTTP passthrough config..."
+    rm -f "$HTTP_CONFIG_FILE"
 fi
 
-# 2. Re-enable sites that were disabled by passthrough
-echo "Re-enabling disabled sites..."
-if [ -d "$SITES_DISABLED" ]; then
-    for conf in "$SITES_DISABLED"/*; do
-        [ -f "$conf" ] || continue
-        confname=$(basename "$conf")
-        echo "Re-enabling $confname..."
-        mv "$conf" "$SITES_ENABLED/$confname"
-    done
-    rmdir "$SITES_DISABLED" 2>/dev/null || true
-fi
-
-# Also clean up old-style disabled files if any
-for conf in "$SITES_ENABLED"/*.disabled-by-passthrough; do
-    [ -f "$conf" ] || continue
-    newname="${conf%.disabled-by-passthrough}"
-    mv "$conf" "$newname"
-done
-
-# 3. Restart nginx
+# 2. Restart nginx
 nginx -t
 if systemctl is-active --quiet nginx; then
     systemctl reload nginx
@@ -655,7 +597,7 @@ func (g *PassthroughNginxGenerator) ApplyToAllPoolMembers(poolID uuid.UUID, isWi
 			SELECT machine_id FROM dns_wildcard_pool_members 
 			WHERE pool_id = $1 AND is_enabled = true
 		`, poolID)
-		
+
 		// Also get machines from groups
 		var groupMachineIDs []uuid.UUID
 		g.db.Select(&groupMachineIDs, `
@@ -664,7 +606,7 @@ func (g *PassthroughNginxGenerator) ApplyToAllPoolMembers(poolID uuid.UUID, isWi
 			JOIN machine_group_members gm ON gm.group_id = ANY(wp.group_ids)
 			WHERE wp.id = $1
 		`, poolID)
-		
+
 		// Merge and dedupe
 		seen := make(map[uuid.UUID]bool)
 		for _, id := range machineIDs {
@@ -682,7 +624,7 @@ func (g *PassthroughNginxGenerator) ApplyToAllPoolMembers(poolID uuid.UUID, isWi
 			SELECT machine_id FROM dns_passthrough_members 
 			WHERE pool_id = $1 AND is_enabled = true
 		`, poolID)
-		
+
 		// Also get machines from groups
 		var groupMachineIDs []uuid.UUID
 		g.db.Select(&groupMachineIDs, `
@@ -691,7 +633,7 @@ func (g *PassthroughNginxGenerator) ApplyToAllPoolMembers(poolID uuid.UUID, isWi
 			JOIN machine_group_members gm ON gm.group_id = ANY(pp.group_ids)
 			WHERE pp.id = $1
 		`, poolID)
-		
+
 		// Merge and dedupe
 		seen := make(map[uuid.UUID]bool)
 		for _, id := range machineIDs {
@@ -713,4 +655,3 @@ func (g *PassthroughNginxGenerator) ApplyToAllPoolMembers(poolID uuid.UUID, isWi
 
 	return nil
 }
-

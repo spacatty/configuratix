@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"configuratix/backend/internal/database"
@@ -68,6 +70,59 @@ type InstallPHPRequest struct {
 	Extensions []string `json:"extensions"`
 }
 
+func isValidPHPVersion(version string) bool {
+	for _, v := range models.PHPVersions {
+		if v == version {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeExtensions(extensions []string) []string {
+	seen := make(map[string]struct{}, len(extensions))
+	result := make([]string, 0, len(extensions))
+
+	for _, ext := range extensions {
+		normalized := strings.ToLower(strings.TrimSpace(ext))
+		if normalized == "" {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+
+	sort.Strings(result)
+	return result
+}
+
+func diffExtensions(current, requested []string) (added []string, removed []string) {
+	currentSet := make(map[string]struct{}, len(current))
+	requestedSet := make(map[string]struct{}, len(requested))
+
+	for _, ext := range current {
+		currentSet[ext] = struct{}{}
+	}
+	for _, ext := range requested {
+		requestedSet[ext] = struct{}{}
+		if _, exists := currentSet[ext]; !exists {
+			added = append(added, ext)
+		}
+	}
+	for _, ext := range current {
+		if _, exists := requestedSet[ext]; !exists {
+			removed = append(removed, ext)
+		}
+	}
+
+	sort.Strings(added)
+	sort.Strings(removed)
+	return added, removed
+}
+
 // InstallPHPRuntime installs PHP on a machine
 func (h *PHPRuntimeHandler) InstallPHPRuntime(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -82,16 +137,10 @@ func (h *PHPRuntimeHandler) InstallPHPRuntime(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	req.Extensions = normalizeExtensions(req.Extensions)
 
 	// Validate version
-	validVersion := false
-	for _, v := range models.PHPVersions {
-		if v == req.Version {
-			validVersion = true
-			break
-		}
-	}
-	if !validVersion {
+	if !isValidPHPVersion(req.Version) {
 		http.Error(w, "Invalid PHP version", http.StatusBadRequest)
 		return
 	}
@@ -142,19 +191,10 @@ func (h *PHPRuntimeHandler) InstallPHPRuntime(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Create install job
-	extensionsStr := ""
-	for i, ext := range req.Extensions {
-		if i > 0 {
-			extensionsStr += ","
-		}
-		extensionsStr += ext
-	}
-
 	template := templates.GetCommand("install_php_runtime")
 	payload := template.ToPayload(map[string]string{
 		"version":    req.Version,
-		"extensions": extensionsStr,
+		"extensions": strings.Join(req.Extensions, ","),
 	})
 
 	jobID := uuid.New()
@@ -322,6 +362,12 @@ func (h *PHPRuntimeHandler) UpdatePHPRuntime(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	req.Extensions = normalizeExtensions(req.Extensions)
+
+	if !isValidPHPVersion(req.Version) {
+		http.Error(w, "Invalid PHP version", http.StatusBadRequest)
+		return
+	}
 
 	// Get current runtime
 	var current models.PHPRuntime
@@ -344,48 +390,56 @@ func (h *PHPRuntimeHandler) UpdatePHPRuntime(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// If version changed, need to reinstall
-	if req.Version != current.Version {
-		// Remove old version first
-		removeTemplate := templates.GetCommand("remove_php_runtime")
-		removePayload := removeTemplate.ToPayload(map[string]string{
-			"version": current.Version,
-		})
-
-		removeJobID := uuid.New()
-		h.db.Exec(`
-			INSERT INTO jobs (id, agent_id, type, payload_json, status)
-			VALUES ($1, $2, 'run', $3, 'pending')
-		`, removeJobID, machine.AgentID, removePayload)
-	}
-
-	// Update status and install new version
-	h.db.Exec(`
-		UPDATE php_runtimes 
-		SET version = $1, extensions = $2, status = 'installing', updated_at = NOW()
-		WHERE machine_id = $3
-	`, req.Version, pq.Array(req.Extensions), machineID)
-
-	// Create install job
-	extensionsStr := ""
-	for i, ext := range req.Extensions {
-		if i > 0 {
-			extensionsStr += ","
-		}
-		extensionsStr += ext
-	}
-
-	template := templates.GetCommand("install_php_runtime")
-	payload := template.ToPayload(map[string]string{
+	templateName := "install_php_runtime"
+	payloadVars := map[string]string{
 		"version":    req.Version,
-		"extensions": extensionsStr,
-	})
+		"extensions": strings.Join(req.Extensions, ","),
+	}
+
+	currentExtensions := normalizeExtensions([]string(current.Extensions))
+	if req.Version == current.Version {
+		added, removed := diffExtensions(currentExtensions, req.Extensions)
+		if len(added) == 0 && len(removed) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"message": "No PHP extension changes detected",
+				"job_id":  "",
+			})
+			return
+		}
+
+		templateName = "sync_php_extensions"
+		payloadVars = map[string]string{
+			"version":           req.Version,
+			"extensions":        strings.Join(added, ","),
+			"remove_extensions": strings.Join(removed, ","),
+		}
+	}
+
+	template := templates.GetCommand(templateName)
+	payload := template.ToPayload(payloadVars)
 
 	jobID := uuid.New()
-	h.db.Exec(`
+	_, err = h.db.Exec(`
 		INSERT INTO jobs (id, agent_id, type, payload_json, status)
 		VALUES ($1, $2, 'run', $3, 'pending')
 	`, jobID, machine.AgentID, payload)
+	if err != nil {
+		log.Printf("Failed to create PHP update job: %v", err)
+		http.Error(w, "Failed to create update job", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = h.db.Exec(`
+		UPDATE php_runtimes 
+		SET version = $1, extensions = $2, status = 'installing', error_message = NULL, updated_at = NOW()
+		WHERE machine_id = $3
+	`, req.Version, pq.Array(req.Extensions), machineID)
+	if err != nil {
+		log.Printf("Failed to update PHP runtime status: %v", err)
+		http.Error(w, "Failed to update PHP runtime", http.StatusInternalServerError)
+		return
+	}
 
 	go h.watchJobCompletion(jobID, machineID, req.Version)
 

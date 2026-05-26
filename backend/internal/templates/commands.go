@@ -12,6 +12,73 @@ if [ ! -f /etc/nginx/snippets/configuratix-bans.conf ]; then
 EOF
 fi`
 
+const phpExtensionPackageResolverShell = `
+normalize_php_extension_package() {
+    case "$1" in
+        mysqli|pdo_mysql) echo "mysql" ;;
+        pdo_pgsql) echo "pgsql" ;;
+        pdo_odbc) echo "odbc" ;;
+        xsl) echo "xml" ;;
+        ctype|fileinfo|tokenizer|exif|ffi|opcache|readline|sockets) echo "" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+collect_php_packages() {
+    local ext_list="$1"
+    local pkg_list=""
+    local ext pkg_suffix pkg_name
+
+    for ext in $(echo "$ext_list" | tr ',' ' '); do
+        ext=$(echo "$ext" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+        [ -z "$ext" ] && continue
+
+        pkg_suffix=$(normalize_php_extension_package "$ext")
+        [ -z "$pkg_suffix" ] && continue
+
+        pkg_name="php${VERSION}-${pkg_suffix}"
+        case " $pkg_list " in
+            *" $pkg_name "*) ;;
+            *) pkg_list="$pkg_list $pkg_name" ;;
+        esac
+    done
+
+    echo "$pkg_list"
+}`
+
+const installPhpExtensionsCommand = `VERSION="{{version}}"
+EXTENSIONS="{{extensions}}"` + phpExtensionPackageResolverShell + `
+
+INSTALL_PACKAGES=$(collect_php_packages "$EXTENSIONS")
+if [ -n "$INSTALL_PACKAGES" ]; then
+    echo "Installing extension packages:$INSTALL_PACKAGES"
+    apt-get update
+    apt-get install -y $INSTALL_PACKAGES
+else
+    echo "No installable extension packages requested"
+fi`
+
+const syncPhpExtensionsCommand = `VERSION="{{version}}"
+EXTENSIONS="{{extensions}}"
+REMOVE_EXTENSIONS="{{remove_extensions}}"` + phpExtensionPackageResolverShell + `
+
+INSTALL_PACKAGES=$(collect_php_packages "$EXTENSIONS")
+REMOVE_PACKAGES=$(collect_php_packages "$REMOVE_EXTENSIONS")
+
+if [ -n "$INSTALL_PACKAGES" ]; then
+    echo "Installing extension packages:$INSTALL_PACKAGES"
+    apt-get update
+    apt-get install -y $INSTALL_PACKAGES
+fi
+
+if [ -n "$REMOVE_PACKAGES" ]; then
+    echo "Removing extension packages:$REMOVE_PACKAGES"
+    apt-get remove -y $REMOVE_PACKAGES
+fi
+
+echo "Reloading PHP-FPM service for $VERSION"
+systemctl restart "php${VERSION}-fpm"`
+
 // Step represents a single operation
 type Step struct {
 	Action  string `json:"action"`            // exec, file, service, fetch
@@ -608,12 +675,15 @@ set -e
 
 STREAM_DIR="/etc/nginx/stream.d"
 CONFIG_FILE="$STREAM_DIR/configuratix-passthrough-manual.conf"
+HTTP_CONFIG_FILE="/etc/nginx/conf.d/configuratix/passthrough-manual-http.conf"
 
 echo "=== Regenerating passthrough config ==="
+mkdir -p "$STREAM_DIR" /etc/nginx/conf.d/configuratix
 
 # Collect all domains from marker files
 declare -A HTTPS_TARGETS
 declare -A HTTP_TARGETS
+PROXY_PROTOCOL_ENABLED=false
 
 for marker in "$STREAM_DIR"/passthrough-*.conf; do
     [ -f "$marker" ] || continue
@@ -626,6 +696,7 @@ for marker in "$STREAM_DIR"/passthrough-*.conf; do
     # Extract target from marker file
     target_https=$(grep "^# Target HTTPS:" "$marker" 2>/dev/null | cut -d: -f2- | tr -d ' ')
     target_http=$(grep "^# Target HTTP:" "$marker" 2>/dev/null | cut -d: -f2- | tr -d ' ')
+    marker_proxy_protocol=$(grep "^# PROXY Protocol:" "$marker" 2>/dev/null | cut -d: -f2- | tr -d ' ' | tr '[:upper:]' '[:lower:]')
     
     if [ -n "$target_https" ]; then
         HTTPS_TARGETS["$domain"]="$target_https"
@@ -638,26 +709,16 @@ for marker in "$STREAM_DIR"/passthrough-*.conf; do
     if [ -n "$target_http" ]; then
         HTTP_TARGETS["$domain"]="$target_http"
     fi
+    if [ "$marker_proxy_protocol" = "true" ] || [ "$marker_proxy_protocol" = "enabled" ]; then
+        PROXY_PROTOCOL_ENABLED=true
+    fi
 done
 
-# If no domains left, remove config file and re-enable disabled sites
+# If no domains left, remove generated config files
 if [ ${#HTTPS_TARGETS[@]} -eq 0 ]; then
     echo "No passthrough domains remaining, cleaning up..."
     rm -f "$CONFIG_FILE"
-    
-    # Re-enable sites that were disabled by passthrough
-    SITES_ENABLED="/etc/nginx/sites-enabled"
-    SITES_DISABLED="/etc/nginx/sites-disabled-by-passthrough"
-    if [ -d "$SITES_DISABLED" ]; then
-        echo "Re-enabling disabled sites..."
-        for conf in "$SITES_DISABLED"/*; do
-            [ -f "$conf" ] || continue
-            confname=$(basename "$conf")
-            echo "  Re-enabling $confname"
-            mv "$conf" "$SITES_ENABLED/$confname"
-        done
-        rmdir "$SITES_DISABLED" 2>/dev/null || true
-    fi
+    rm -f "$HTTP_CONFIG_FILE"
     
     # Re-enable DNS Management config if it was disabled
     DNS_MGMT_CONFIG="$STREAM_DIR/configuratix-passthrough.conf"
@@ -671,7 +732,7 @@ if [ ${#HTTPS_TARGETS[@]} -eq 0 ]; then
     exit 0
 fi
 
-# Generate consolidated config
+# Generate consolidated stream config
 cat > "$CONFIG_FILE" << 'HEADER'
 # Configuratix Manual Passthrough Configuration
 # Auto-generated - DO NOT EDIT MANUALLY
@@ -705,35 +766,51 @@ server {
     listen 443;
     ssl_preread on;
     proxy_pass $backend_https;
-    proxy_protocol on;
+HTTPS
+if [ "$PROXY_PROTOCOL_ENABLED" = "true" ]; then
+    echo "    proxy_protocol on;" >> "$CONFIG_FILE"
+fi
+cat >> "$CONFIG_FILE" << 'HTTPS'
     proxy_connect_timeout 10s;
     proxy_timeout 30m;
 }
 
 HTTPS
 
-# HTTP server block - use first target as default (stream can't route by Host header)
-first_http_target=""
-for domain in "${!HTTP_TARGETS[@]}"; do
-    first_http_target="${HTTP_TARGETS[$domain]}"
-    break
-done
+if [ ${#HTTP_TARGETS[@]} -gt 0 ]; then
+    cat > "$HTTP_CONFIG_FILE" << 'HTTPHEADER'
+# Configuratix Manual HTTP Passthrough Configuration
+# Auto-generated - DO NOT EDIT MANUALLY
 
-if [ -n "$first_http_target" ]; then
-    cat >> "$CONFIG_FILE" << EOF
-# HTTP Passthrough (Layer 4 - all traffic to backend)
+HTTPHEADER
+    for domain in "${!HTTP_TARGETS[@]}"; do
+        target="${HTTP_TARGETS[$domain]}"
+        cat >> "$HTTP_CONFIG_FILE" << EOF
 server {
     listen 80;
-    proxy_pass $first_http_target;
-    proxy_protocol on;
-    proxy_connect_timeout 10s;
-    proxy_timeout 30m;
+    server_name $domain;
+
+    location / {
+        proxy_pass http://$target;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30m;
+        proxy_send_timeout 30m;
+    }
 }
+
 EOF
+    done
+else
+    rm -f "$HTTP_CONFIG_FILE"
 fi
 
 echo "Regenerated config with ${#HTTPS_TARGETS[@]} domain(s)"
 cat "$CONFIG_FILE"
+[ -f "$HTTP_CONFIG_FILE" ] && cat "$HTTP_CONFIG_FILE" || true
 
 # Test and reload
 nginx -t
@@ -753,6 +830,7 @@ systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || systemctl
 			{Name: "https_port", Type: "string", Required: false, Default: "443", Description: "Backend HTTPS port"},
 			{Name: "http_port", Type: "string", Required: false, Default: "80", Description: "Backend HTTP port"},
 			{Name: "enable_http", Type: "string", Required: false, Default: "true", Description: "Enable HTTP passthrough marker/listener for port 80"},
+			{Name: "proxy_protocol", Type: "string", Required: false, Default: "false", Description: "Send PROXY protocol to HTTPS backend"},
 		},
 		OnError: "stop",
 		Steps: []Step{
@@ -766,6 +844,7 @@ TARGET="{{target}}"
 HTTPS_PORT="{{https_port}}"
 HTTP_PORT="{{http_port}}"
 ENABLE_HTTP="{{enable_http}}"
+PROXY_PROTOCOL="{{proxy_protocol}}"
 
 # Default ports if not specified or template not substituted
 if [ -z "$HTTPS_PORT" ] || [[ "$HTTPS_PORT" == *"{{"* ]]; then
@@ -777,16 +856,24 @@ fi
 if [ -z "$ENABLE_HTTP" ] || [[ "$ENABLE_HTTP" == *"{{"* ]]; then
     ENABLE_HTTP="true"
 fi
+if [ -z "$PROXY_PROTOCOL" ] || [[ "$PROXY_PROTOCOL" == *"{{"* ]]; then
+    PROXY_PROTOCOL="false"
+fi
 
 # Normalize HTTP toggle values
 case "$(echo "$ENABLE_HTTP" | tr '[:upper:]' '[:lower:]')" in
     true|1|yes|on) ENABLE_HTTP="true" ;;
     *) ENABLE_HTTP="false" ;;
 esac
+case "$(echo "$PROXY_PROTOCOL" | tr '[:upper:]' '[:lower:]')" in
+    true|1|yes|on) PROXY_PROTOCOL="true" ;;
+    *) PROXY_PROTOCOL="false" ;;
+esac
 
 NGINX_CONF="/etc/nginx/nginx.conf"
 STREAM_DIR="/etc/nginx/stream.d"
 CONFIG_FILE="$STREAM_DIR/configuratix-passthrough-manual.conf"
+HTTP_CONFIG_FILE="/etc/nginx/conf.d/configuratix/passthrough-manual-http.conf"
 MARKER_FILE="$STREAM_DIR/passthrough-${DOMAIN}.conf"
 DNS_MGMT_CONFIG="$STREAM_DIR/configuratix-passthrough.conf"
 
@@ -814,30 +901,7 @@ fi
 # 2. Remove any old HTTP-block config for this domain
 rm -f "/etc/nginx/conf.d/configuratix/${DOMAIN}.conf"
 
-# 3. Disable sites-enabled configs that listen on ports 80/443
-# (Stream passthrough needs exclusive access to these ports)
-echo "=== Checking for conflicting site configs ==="
-SITES_ENABLED="/etc/nginx/sites-enabled"
-SITES_DISABLED="/etc/nginx/sites-disabled-by-passthrough"
-mkdir -p "$SITES_DISABLED"
-
-if [ -d "$SITES_ENABLED" ]; then
-    for conf in "$SITES_ENABLED"/*; do
-        [ -f "$conf" ] || [ -L "$conf" ] || continue
-        confname=$(basename "$conf")
-        
-        # Check if this config listens on 80 or 443
-        if grep -qE 'listen\s+(80|443)' "$conf" 2>/dev/null; then
-            echo "Disabling $confname (listens on 80/443)..."
-            mv "$conf" "$SITES_DISABLED/$confname"
-        fi
-    done
-fi
-
-# Also remove any leftover .disabled-by-passthrough files from previous runs
-rm -f "$SITES_ENABLED"/*.disabled-by-passthrough 2>/dev/null || true
-
-# 4. Check and install stream module if needed
+# 3. Check and install stream module if needed
 echo "=== Checking nginx stream module ==="
 
 STREAM_AVAILABLE=false
@@ -879,7 +943,7 @@ if [ "$STREAM_AVAILABLE" = false ]; then
     fi
 fi
 
-# 5. Verify stream module is available BEFORE adding stream block
+# 4. Verify stream module is available BEFORE adding stream block
 echo "=== Verifying stream module availability ==="
 MODULE_OK=false
 
@@ -910,7 +974,7 @@ if [ "$MODULE_OK" = false ]; then
 fi
 echo "Stream module verified OK"
 
-# 6. Add stream block to nginx.conf if missing
+# 5. Add stream block to nginx.conf if missing
 if ! grep -qE "^stream\s*\{" "$NGINX_CONF"; then
     echo "" >> "$NGINX_CONF"
     echo "# SSL Passthrough configuration (Configuratix)" >> "$NGINX_CONF"
@@ -923,12 +987,12 @@ elif ! grep -q "include /etc/nginx/stream.d" "$NGINX_CONF"; then
     echo "Added stream.d include to existing stream block"
 fi
 
-# 7. Write marker file for this domain
+# 6. Write marker file for this domain
 cat > "$MARKER_FILE" << EOF
 # Configuratix Passthrough Marker
 # Domain: $DOMAIN
 # Target HTTPS: ${TARGET}:${HTTPS_PORT}
-# PROXY Protocol: enabled
+# PROXY Protocol: ${PROXY_PROTOCOL}
 # HTTP Passthrough Enabled: ${ENABLE_HTTP}
 # Created: $(date -Iseconds)
 EOF
@@ -939,11 +1003,12 @@ else
 fi
 echo "Created marker: $MARKER_FILE"
 
-# 8. Regenerate consolidated config from all markers
+# 7. Regenerate consolidated config from all markers
 echo "=== Regenerating consolidated config ==="
 
 declare -A HTTPS_TARGETS
 declare -A HTTP_TARGETS
+PROXY_PROTOCOL_ENABLED=false
 
 for marker in "$STREAM_DIR"/passthrough-*.conf; do
     [ -f "$marker" ] || continue
@@ -956,12 +1021,16 @@ for marker in "$STREAM_DIR"/passthrough-*.conf; do
     # Extract targets from marker
     target_https=$(grep "^# Target HTTPS:" "$marker" 2>/dev/null | sed 's/^# Target HTTPS: *//')
     target_http=$(grep "^# Target HTTP:" "$marker" 2>/dev/null | sed 's/^# Target HTTP: *//')
+    marker_proxy_protocol=$(grep "^# PROXY Protocol:" "$marker" 2>/dev/null | sed 's/^# PROXY Protocol: *//' | tr '[:upper:]' '[:lower:]')
     
     if [ -n "$target_https" ]; then
         HTTPS_TARGETS["$dom"]="$target_https"
     fi
     if [ -n "$target_http" ]; then
         HTTP_TARGETS["$dom"]="$target_http"
+    fi
+    if [ "$marker_proxy_protocol" = "true" ] || [ "$marker_proxy_protocol" = "enabled" ]; then
+        PROXY_PROTOCOL_ENABLED=true
     fi
     if [ -n "$target_http" ]; then
         echo "  - $dom -> HTTPS: $target_https, HTTP: $target_http"
@@ -1004,36 +1073,52 @@ server {
     listen 443;
     ssl_preread on;
     proxy_pass $backend_https;
-    proxy_protocol on;
+HTTPS
+if [ "$PROXY_PROTOCOL_ENABLED" = "true" ]; then
+    echo "    proxy_protocol on;" >> "$CONFIG_FILE"
+fi
+cat >> "$CONFIG_FILE" << 'HTTPS'
     proxy_connect_timeout 10s;
     proxy_timeout 30m;
 }
 
 HTTPS
 
-# HTTP server - get first target for default routing
-first_http=""
-for dom in "${!HTTP_TARGETS[@]}"; do
-    first_http="${HTTP_TARGETS[$dom]}"
-    break
-done
+if [ ${#HTTP_TARGETS[@]} -gt 0 ]; then
+    cat > "$HTTP_CONFIG_FILE" << 'HTTPHEADER'
+# Configuratix Manual HTTP Passthrough Configuration
+# Auto-generated - DO NOT EDIT MANUALLY
 
-if [ -n "$first_http" ]; then
-    cat >> "$CONFIG_FILE" << EOF
-# HTTP Passthrough (Layer 4 - all traffic to backend)
+HTTPHEADER
+    for dom in "${!HTTP_TARGETS[@]}"; do
+        target="${HTTP_TARGETS[$dom]}"
+        cat >> "$HTTP_CONFIG_FILE" << EOF
 server {
     listen 80;
-    proxy_pass $first_http;
-    proxy_protocol on;
-    proxy_connect_timeout 10s;
-    proxy_timeout 30m;
+    server_name $dom;
+
+    location / {
+        proxy_pass http://$target;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30m;
+        proxy_send_timeout 30m;
+    }
 }
+
 EOF
+    done
+else
+    rm -f "$HTTP_CONFIG_FILE"
 fi
 
 echo ""
 echo "=== Generated Config ==="
 cat "$CONFIG_FILE"
+[ -f "$HTTP_CONFIG_FILE" ] && cat "$HTTP_CONFIG_FILE" || true
 
 # 9. Test and reload nginx
 echo ""
@@ -1080,24 +1165,28 @@ fi
 			// Install PHP-FPM and CLI
 			{Action: "exec", Command: "apt-get install -y php{{version}}-fpm php{{version}}-cli php{{version}}-common", Timeout: 300},
 			// Install extensions
-			{Action: "exec", Command: `
-VERSION="{{version}}"
-EXTENSIONS="{{extensions}}"
-
-# Parse comma-separated extensions and install
-for ext in $(echo "$EXTENSIONS" | tr ',' ' '); do
-    ext=$(echo "$ext" | tr -d ' ')
-    if [ -n "$ext" ]; then
-        echo "Installing php${VERSION}-${ext}..."
-        apt-get install -y "php${VERSION}-${ext}" 2>/dev/null || echo "Warning: php${VERSION}-${ext} not available"
-    fi
-done
-`, Timeout: 600, Log: "php{{version}} -m"},
+			{Action: "exec", Command: installPhpExtensionsCommand, Timeout: 600, Log: "php{{version}} -m"},
 			// Enable and start PHP-FPM
 			{Action: "exec", Command: "systemctl enable php{{version}}-fpm", Timeout: 30},
 			{Action: "exec", Command: "systemctl restart php{{version}}-fpm", Timeout: 60},
 			// Set as default PHP version
 			{Action: "exec", Command: "update-alternatives --set php /usr/bin/php{{version}} 2>/dev/null || true", Timeout: 30},
+		},
+	},
+
+	"sync_php_extensions": {
+		ID:          "sync_php_extensions",
+		Name:        "Sync PHP Extensions",
+		Description: "Install/remove PHP extension packages for an installed runtime and restart FPM once",
+		Category:    "php",
+		Variables: []VariableDef{
+			{Name: "version", Type: "string", Required: true, Description: "PHP version (8.0, 8.1, 8.2, 8.3, 8.4)"},
+			{Name: "extensions", Type: "text", Required: false, Default: "", Description: "Comma-separated extensions to install"},
+			{Name: "remove_extensions", Type: "text", Required: false, Default: "", Description: "Comma-separated extensions to remove"},
+		},
+		OnError: "stop",
+		Steps: []Step{
+			{Action: "exec", Command: syncPhpExtensionsCommand, Timeout: 600, Log: "php{{version}} -m"},
 		},
 	},
 
