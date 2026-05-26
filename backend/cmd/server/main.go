@@ -237,6 +237,8 @@ func main() {
 	// Domain proxy mode
 	apiRouter.HandleFunc("/dns-domains/{domainId}/proxy-mode", passthroughHandler.GetDomainProxyMode).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/dns-domains/{domainId}/proxy-mode", passthroughHandler.SetDomainProxyMode).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{domainId}/l7-certificates", passthroughHandler.ListDomainL7Certificates).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/dns-domains/{domainId}/l7-certificates/issue", passthroughHandler.TriggerL7CertificateIssue).Methods("POST", "OPTIONS")
 	// Record pools (for separate record mode)
 	apiRouter.HandleFunc("/dns/records/{recordId}/passthrough", passthroughHandler.GetRecordPool).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/dns/records/{recordId}/passthrough", passthroughHandler.CreateOrUpdateRecordPool).Methods("POST", "OPTIONS")
@@ -257,7 +259,7 @@ func main() {
 	apiRouter.HandleFunc("/dns/passthrough/nginx/{machineId}", passthroughHandler.GetNginxConfig).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/dns/passthrough/nginx/{machineId}/apply", passthroughHandler.ApplyNginxConfig).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/dns/passthrough/{poolId}/apply-nginx", passthroughHandler.ApplyPoolNginxConfigs).Methods("POST", "OPTIONS")
-	
+
 	// Wire up nginx generator to machine groups handler for automatic config regeneration
 	machineGroupsHandler.SetNginxGenerator(passthroughHandler.NginxGenerator())
 

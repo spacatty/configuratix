@@ -36,6 +36,100 @@ func NewPassthroughHandler(db *database.DB, dnsHandler *DNSHandler) *Passthrough
 	}
 }
 
+func mergeUUIDLists(lists ...[]uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]bool)
+	merged := make([]uuid.UUID, 0)
+	for _, list := range lists {
+		for _, id := range list {
+			if !seen[id] {
+				seen[id] = true
+				merged = append(merged, id)
+			}
+		}
+	}
+	return merged
+}
+
+func (h *PassthroughHandler) collectRecordPoolMachines(poolID uuid.UUID, groupIDs pq.StringArray) []uuid.UUID {
+	var direct []uuid.UUID
+	h.db.Select(&direct, "SELECT machine_id FROM dns_passthrough_members WHERE pool_id = $1", poolID)
+
+	var groupMachines []uuid.UUID
+	if len(groupIDs) > 0 {
+		h.db.Select(&groupMachines, `
+			SELECT DISTINCT gm.machine_id
+			FROM machine_group_members gm
+			WHERE gm.group_id = ANY($1::uuid[])
+		`, pq.Array(groupIDs))
+	}
+
+	return mergeUUIDLists(direct, groupMachines)
+}
+
+func (h *PassthroughHandler) collectWildcardPoolMachines(poolID uuid.UUID, groupIDs pq.StringArray) []uuid.UUID {
+	var direct []uuid.UUID
+	h.db.Select(&direct, "SELECT machine_id FROM dns_wildcard_pool_members WHERE pool_id = $1", poolID)
+
+	var groupMachines []uuid.UUID
+	if len(groupIDs) > 0 {
+		h.db.Select(&groupMachines, `
+			SELECT DISTINCT gm.machine_id
+			FROM machine_group_members gm
+			WHERE gm.group_id = ANY($1::uuid[])
+		`, pq.Array(groupIDs))
+	}
+
+	return mergeUUIDLists(direct, groupMachines)
+}
+
+func (h *PassthroughHandler) collectDomainProxyMachines(domainID uuid.UUID) []uuid.UUID {
+	var recordMachineIDs []uuid.UUID
+	h.db.Select(&recordMachineIDs, `
+		SELECT DISTINCT machine_id
+		FROM (
+			SELECT pm.machine_id
+			FROM dns_passthrough_members pm
+			JOIN dns_passthrough_pools pp ON pp.id = pm.pool_id
+			JOIN dns_records dr ON dr.id = pp.dns_record_id
+			WHERE dr.dns_domain_id = $1
+			UNION
+			SELECT gm.machine_id
+			FROM dns_passthrough_pools pp
+			JOIN dns_records dr ON dr.id = pp.dns_record_id
+			JOIN machine_group_members gm ON gm.group_id = ANY(pp.group_ids)
+			WHERE dr.dns_domain_id = $1
+		) machines
+	`, domainID)
+
+	var wildcardMachineIDs []uuid.UUID
+	h.db.Select(&wildcardMachineIDs, `
+		SELECT DISTINCT machine_id
+		FROM (
+			SELECT wm.machine_id
+			FROM dns_wildcard_pool_members wm
+			JOIN dns_wildcard_pools wp ON wp.id = wm.pool_id
+			WHERE wp.dns_domain_id = $1
+			UNION
+			SELECT gm.machine_id
+			FROM dns_wildcard_pools wp
+			JOIN machine_group_members gm ON gm.group_id = ANY(wp.group_ids)
+			WHERE wp.dns_domain_id = $1
+		) machines
+	`, domainID)
+
+	return mergeUUIDLists(recordMachineIDs, wildcardMachineIDs)
+}
+
+func (h *PassthroughHandler) applyNginxToMachinesAsync(machineIDs []uuid.UUID, reason string) {
+	go func() {
+		for _, machineID := range machineIDs {
+			if err := h.nginx.ApplyToMachine(machineID); err != nil {
+				log.Printf("Failed to update nginx config for machine %s after %s: %v", machineID, reason, err)
+			}
+		}
+	}()
+}
+
 // NginxGenerator returns the nginx generator for use by other handlers
 func (h *PassthroughHandler) NginxGenerator() *PassthroughNginxGenerator {
 	return h.nginx
@@ -131,8 +225,12 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 
 	var req struct {
 		TargetIP           string   `json:"target_ip"`
+		TargetScheme       string   `json:"target_scheme"`
 		TargetPort         int      `json:"target_port"`      // HTTPS (443) target port
 		TargetPortHTTP     int      `json:"target_port_http"` // HTTP (80) target port
+		PreserveHost       *bool    `json:"preserve_host"`
+		TLSVerifyUpstream  *bool    `json:"tls_verify_upstream"`
+		SSLEmail           string   `json:"ssl_email"`
 		RotationStrategy   string   `json:"rotation_strategy"`
 		RotationMode       string   `json:"rotation_mode"`
 		IntervalMinutes    int      `json:"interval_minutes"`
@@ -157,6 +255,13 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 	if req.TargetPortHTTP == 0 {
 		req.TargetPortHTTP = 80
 	}
+	if req.TargetScheme == "" {
+		req.TargetScheme = "http"
+	}
+	if req.TargetScheme != "http" && req.TargetScheme != "https" {
+		http.Error(w, "target_scheme must be 'http' or 'https'", http.StatusBadRequest)
+		return
+	}
 	if req.RotationStrategy == "" {
 		req.RotationStrategy = "round_robin"
 	}
@@ -171,6 +276,17 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 	if req.ProxyProtocol != nil {
 		proxyProtocol = *req.ProxyProtocol
 	}
+	preserveHost := true
+	if req.PreserveHost != nil {
+		preserveHost = *req.PreserveHost
+	}
+	tlsVerifyUpstream := false
+	if req.TLSVerifyUpstream != nil {
+		tlsVerifyUpstream = *req.TLSVerifyUpstream
+	}
+	if req.SSLEmail == "" {
+		req.SSLEmail = "admin@example.com"
+	}
 
 	scheduledTimesJSON, _ := json.Marshal(req.ScheduledTimes)
 	groupIDsArray := pq.StringArray(req.GroupIDs)
@@ -178,17 +294,27 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 	log.Printf("CreateOrUpdateRecordPool: machine_ids=%v, group_ids=%v, groupIDsArray=%v",
 		req.MachineIDs, req.GroupIDs, groupIDsArray)
 
+	var previousPool models.PassthroughPool
+	previousMachineIDs := []uuid.UUID{}
+	if err := h.db.Get(&previousPool, "SELECT * FROM dns_passthrough_pools WHERE dns_record_id = $1", recordID); err == nil {
+		previousMachineIDs = h.collectRecordPoolMachines(previousPool.ID, previousPool.GroupIDs)
+	}
+
 	// Upsert pool
 	var pool models.PassthroughPool
 	err = h.db.Get(&pool, `
 		INSERT INTO dns_passthrough_pools 
-			(dns_record_id, target_ip, target_port, target_port_http, rotation_strategy, rotation_mode, 
-			 interval_minutes, scheduled_times, health_check_enabled, proxy_protocol, group_ids)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			(dns_record_id, target_ip, target_scheme, target_port, target_port_http, preserve_host, tls_verify_upstream, ssl_email,
+			 rotation_strategy, rotation_mode, interval_minutes, scheduled_times, health_check_enabled, proxy_protocol, group_ids)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT (dns_record_id) DO UPDATE SET
 			target_ip = EXCLUDED.target_ip,
+			target_scheme = EXCLUDED.target_scheme,
 			target_port = EXCLUDED.target_port,
 			target_port_http = EXCLUDED.target_port_http,
+			preserve_host = EXCLUDED.preserve_host,
+			tls_verify_upstream = EXCLUDED.tls_verify_upstream,
+			ssl_email = EXCLUDED.ssl_email,
 			rotation_strategy = EXCLUDED.rotation_strategy,
 			rotation_mode = EXCLUDED.rotation_mode,
 			interval_minutes = EXCLUDED.interval_minutes,
@@ -198,8 +324,8 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 			group_ids = EXCLUDED.group_ids,
 			updated_at = NOW()
 		RETURNING *
-	`, recordID, req.TargetIP, req.TargetPort, req.TargetPortHTTP, req.RotationStrategy, req.RotationMode,
-		req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, proxyProtocol, groupIDsArray)
+	`, recordID, req.TargetIP, req.TargetScheme, req.TargetPort, req.TargetPortHTTP, preserveHost, tlsVerifyUpstream, req.SSLEmail,
+		req.RotationStrategy, req.RotationMode, req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, proxyProtocol, groupIDsArray)
 	if err != nil {
 		log.Printf("Failed to upsert pool: %v", err)
 		http.Error(w, "Failed to save pool", http.StatusInternalServerError)
@@ -273,13 +399,8 @@ func (h *PassthroughHandler) CreateOrUpdateRecordPool(w http.ResponseWriter, r *
 		}
 	}
 
-	// Regenerate and deploy nginx configs to all pool members
-	// This ensures target_ip changes are propagated
-	go func() {
-		if err := h.nginx.ApplyToAllPoolMembers(pool.ID, false); err != nil {
-			log.Printf("Failed to apply nginx configs for pool %s: %v", pool.ID, err)
-		}
-	}()
+	// Regenerate configs on both old and new machines so reassignment removes stale server blocks.
+	h.applyNginxToMachinesAsync(mergeUUIDLists(previousMachineIDs, allMachineIDs), "record pool update")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(pool)
@@ -532,12 +653,22 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
+	var proxyMode string
+	_ = h.db.Get(&proxyMode, "SELECT COALESCE(proxy_mode, 'static') FROM dns_managed_domains WHERE id = $1", domainID)
+	if proxyMode == "layer7" {
+		http.Error(w, "Wildcard pools are not supported in layer7 mode yet (DNS-01 wildcard certificates required)", http.StatusBadRequest)
+		return
+	}
 
 	var req struct {
 		IncludeRoot        bool     `json:"include_root"`
 		TargetIP           string   `json:"target_ip"`
+		TargetScheme       string   `json:"target_scheme"`
 		TargetPort         int      `json:"target_port"`      // HTTPS (443) target port
 		TargetPortHTTP     int      `json:"target_port_http"` // HTTP (80) target port
+		PreserveHost       *bool    `json:"preserve_host"`
+		TLSVerifyUpstream  *bool    `json:"tls_verify_upstream"`
+		SSLEmail           string   `json:"ssl_email"`
 		RotationStrategy   string   `json:"rotation_strategy"`
 		RotationMode       string   `json:"rotation_mode"`
 		IntervalMinutes    int      `json:"interval_minutes"`
@@ -562,6 +693,13 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 	if req.TargetPortHTTP == 0 {
 		req.TargetPortHTTP = 80
 	}
+	if req.TargetScheme == "" {
+		req.TargetScheme = "http"
+	}
+	if req.TargetScheme != "http" && req.TargetScheme != "https" {
+		http.Error(w, "target_scheme must be 'http' or 'https'", http.StatusBadRequest)
+		return
+	}
 	if req.RotationStrategy == "" {
 		req.RotationStrategy = "round_robin"
 	}
@@ -576,21 +714,42 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 	if req.ProxyProtocol != nil {
 		proxyProtocolWild = *req.ProxyProtocol
 	}
+	preserveHostWild := true
+	if req.PreserveHost != nil {
+		preserveHostWild = *req.PreserveHost
+	}
+	tlsVerifyUpstreamWild := false
+	if req.TLSVerifyUpstream != nil {
+		tlsVerifyUpstreamWild = *req.TLSVerifyUpstream
+	}
+	if req.SSLEmail == "" {
+		req.SSLEmail = "admin@example.com"
+	}
 
 	scheduledTimesJSON, _ := json.Marshal(req.ScheduledTimes)
 	groupIDsArray := pq.StringArray(req.GroupIDs)
 
+	var previousPool models.WildcardPool
+	previousMachineIDs := []uuid.UUID{}
+	if err := h.db.Get(&previousPool, "SELECT * FROM dns_wildcard_pools WHERE dns_domain_id = $1", domainID); err == nil {
+		previousMachineIDs = h.collectWildcardPoolMachines(previousPool.ID, previousPool.GroupIDs)
+	}
+
 	var pool models.WildcardPool
 	err = h.db.Get(&pool, `
 		INSERT INTO dns_wildcard_pools 
-			(dns_domain_id, include_root, target_ip, target_port, target_port_http, rotation_strategy, 
-			 rotation_mode, interval_minutes, scheduled_times, health_check_enabled, proxy_protocol, group_ids)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			(dns_domain_id, include_root, target_ip, target_scheme, target_port, target_port_http, preserve_host, tls_verify_upstream, ssl_email,
+			 rotation_strategy, rotation_mode, interval_minutes, scheduled_times, health_check_enabled, proxy_protocol, group_ids)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		ON CONFLICT (dns_domain_id) DO UPDATE SET
 			include_root = EXCLUDED.include_root,
 			target_ip = EXCLUDED.target_ip,
+			target_scheme = EXCLUDED.target_scheme,
 			target_port = EXCLUDED.target_port,
 			target_port_http = EXCLUDED.target_port_http,
+			preserve_host = EXCLUDED.preserve_host,
+			tls_verify_upstream = EXCLUDED.tls_verify_upstream,
+			ssl_email = EXCLUDED.ssl_email,
 			rotation_strategy = EXCLUDED.rotation_strategy,
 			rotation_mode = EXCLUDED.rotation_mode,
 			interval_minutes = EXCLUDED.interval_minutes,
@@ -600,8 +759,8 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 			group_ids = EXCLUDED.group_ids,
 			updated_at = NOW()
 		RETURNING *
-	`, domainID, req.IncludeRoot, req.TargetIP, req.TargetPort, req.TargetPortHTTP, req.RotationStrategy,
-		req.RotationMode, req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, proxyProtocolWild, groupIDsArray)
+	`, domainID, req.IncludeRoot, req.TargetIP, req.TargetScheme, req.TargetPort, req.TargetPortHTTP, preserveHostWild, tlsVerifyUpstreamWild, req.SSLEmail,
+		req.RotationStrategy, req.RotationMode, req.IntervalMinutes, scheduledTimesJSON, req.HealthCheckEnabled, proxyProtocolWild, groupIDsArray)
 	if err != nil {
 		log.Printf("Failed to upsert wildcard pool: %v", err)
 		http.Error(w, "Failed to save pool", http.StatusInternalServerError)
@@ -667,13 +826,8 @@ func (h *PassthroughHandler) CreateOrUpdateWildcardPool(w http.ResponseWriter, r
 		}
 	}
 
-	// Regenerate and deploy nginx configs to all pool members
-	// This ensures target_ip changes are propagated
-	go func() {
-		if err := h.nginx.ApplyToAllPoolMembers(pool.ID, true); err != nil {
-			log.Printf("Failed to apply nginx configs for wildcard pool %s: %v", pool.ID, err)
-		}
-	}()
+	// Regenerate configs on both old and new machines so reassignment removes stale server blocks.
+	h.applyNginxToMachinesAsync(mergeUUIDLists(previousMachineIDs, allMachineIDs), "wildcard pool update")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(pool)
@@ -1333,7 +1487,7 @@ func (h *PassthroughHandler) GetDomainProxyMode(w http.ResponseWriter, r *http.R
 	}
 
 	var proxyMode string
-	err = h.db.Get(&proxyMode, "SELECT COALESCE(proxy_mode, 'separate') FROM dns_managed_domains WHERE id = $1", domainID)
+	err = h.db.Get(&proxyMode, "SELECT COALESCE(proxy_mode, 'static') FROM dns_managed_domains WHERE id = $1", domainID)
 	if err != nil {
 		http.Error(w, "Domain not found", http.StatusNotFound)
 		return
@@ -1359,14 +1513,114 @@ func (h *PassthroughHandler) SetDomainProxyMode(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if req.ProxyMode != "separate" && req.ProxyMode != "wildcard" {
+	if req.ProxyMode != "static" && req.ProxyMode != "separate" && req.ProxyMode != "wildcard" && req.ProxyMode != "layer7" {
 		http.Error(w, "Invalid proxy mode", http.StatusBadRequest)
 		return
 	}
 
+	if req.ProxyMode == "layer7" {
+		var wildcardCount int
+		_ = h.db.Get(&wildcardCount, "SELECT COUNT(*) FROM dns_wildcard_pools WHERE dns_domain_id = $1", domainID)
+		if wildcardCount > 0 {
+			http.Error(w, "Cannot switch to layer7 while wildcard pool exists. Remove wildcard pool first.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	affectedMachineIDs := h.collectDomainProxyMachines(domainID)
 	h.db.Exec("UPDATE dns_managed_domains SET proxy_mode = $1 WHERE id = $2", req.ProxyMode, domainID)
+	h.applyNginxToMachinesAsync(affectedMachineIDs, "domain proxy mode change")
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// ListDomainL7Certificates returns certificate status for one managed domain.
+func (h *PassthroughHandler) ListDomainL7Certificates(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
+	domainID, err := uuid.Parse(mux.Vars(r)["domainId"])
+	if err != nil {
+		http.Error(w, "Invalid domain ID", http.StatusBadRequest)
+		return
+	}
+
+	var domainFQDN string
+	err = h.db.Get(&domainFQDN, "SELECT fqdn FROM dns_managed_domains WHERE id = $1 AND owner_id = $2", domainID, userID)
+	if err != nil {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
+	}
+
+	var rows []struct {
+		ID            uuid.UUID  `db:"id" json:"id"`
+		MachineID     uuid.UUID  `db:"machine_id" json:"machine_id"`
+		Domain        string     `db:"domain" json:"domain"`
+		Status        string     `db:"status" json:"status"`
+		ExpiresAt     *time.Time `db:"expires_at" json:"expires_at"`
+		Issuer        *string    `db:"issuer" json:"issuer"`
+		LastCheckedAt *time.Time `db:"last_checked_at" json:"last_checked_at"`
+		LastJobID     *uuid.UUID `db:"last_job_id" json:"last_job_id"`
+		LastError     *string    `db:"last_error" json:"last_error"`
+		MachineName   string     `db:"machine_name" json:"machine_name"`
+		MachineIP     string     `db:"machine_ip" json:"machine_ip"`
+	}
+	_ = h.db.Select(&rows, `
+		SELECT c.id, c.machine_id, c.domain, c.status, c.expires_at, c.issuer, c.last_checked_at, c.last_job_id, c.last_error,
+		       COALESCE(NULLIF(m.title, ''), m.hostname) AS machine_name,
+		       COALESCE(m.primary_ip, m.ip_address) AS machine_ip
+		FROM dns_l7_certificates c
+		JOIN machines m ON m.id = c.machine_id
+		WHERE c.domain = $1 OR c.domain LIKE $2
+		ORDER BY c.domain, machine_name
+	`, domainFQDN, "%."+domainFQDN)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rows)
+}
+
+// TriggerL7CertificateIssue queues nginx regeneration for all layer7 pools in a domain.
+func (h *PassthroughHandler) TriggerL7CertificateIssue(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
+	domainID, err := uuid.Parse(mux.Vars(r)["domainId"])
+	if err != nil {
+		http.Error(w, "Invalid domain ID", http.StatusBadRequest)
+		return
+	}
+
+	var ownerID uuid.UUID
+	if err := h.db.Get(&ownerID, "SELECT owner_id FROM dns_managed_domains WHERE id = $1", domainID); err != nil {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
+	}
+	if ownerID != userID && !claims.IsSuperAdmin() {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	var poolIDs []uuid.UUID
+	_ = h.db.Select(&poolIDs, `
+		SELECT pp.id
+		FROM dns_passthrough_pools pp
+		JOIN dns_records dr ON dr.id = pp.dns_record_id
+		JOIN dns_managed_domains dmd ON dmd.id = dr.dns_domain_id
+		WHERE dr.dns_domain_id = $1 AND COALESCE(dmd.proxy_mode, 'static') = 'layer7'
+	`, domainID)
+	if len(poolIDs) == 0 {
+		http.Error(w, "No layer7 pools found for this domain", http.StatusBadRequest)
+		return
+	}
+
+	for _, poolID := range poolIDs {
+		if err := h.nginx.ApplyToAllPoolMembers(poolID, false); err != nil {
+			log.Printf("Failed to trigger L7 issuance for pool %s: %v", poolID, err)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
 }
 
 // GetNginxConfig returns the generated nginx passthrough config for a machine
@@ -1388,6 +1642,8 @@ func (h *PassthroughHandler) GetNginxConfig(w http.ResponseWriter, r *http.Reque
 	w.Write([]byte(config.StreamConfig))
 	w.Write([]byte("\n=== /etc/nginx/conf.d/configuratix/passthrough-dns-http.conf ===\n"))
 	w.Write([]byte(config.HTTPConfig))
+	w.Write([]byte("\n=== /etc/nginx/conf.d/configuratix/passthrough-dns-l7.conf ===\n"))
+	w.Write([]byte(config.L7Config))
 }
 
 // ApplyNginxConfig triggers nginx config deployment to a machine

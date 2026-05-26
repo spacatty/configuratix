@@ -662,15 +662,15 @@ export default function NginxConfigsPage() {
       
       {formMode === "auto" ? (
         <>
-          {/* Passthrough Mode Toggle */}
+          {/* Layer 4 Passthrough Mode Toggle */}
           <Card className={`border-2 transition-colors ${formIsPassthrough ? "border-amber-500/50 bg-amber-500/5" : "border-border/50 bg-card/30"}`}>
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-sm font-medium">SSL Passthrough Mode</Label>
+                  <Label className="text-sm font-medium">Layer 4 Passthrough (Advanced)</Label>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Forward raw TCP/TLS traffic to backend without SSL termination. 
-                    Certificate must be configured on the target server.
+                    Forward raw TCP/TLS traffic to backend without SSL termination.
+                    Leave this disabled to use Layer 7 reverse proxy with proxy-managed certificates.
                   </p>
                 </div>
                 <Switch checked={formIsPassthrough} onCheckedChange={setFormIsPassthrough} />
@@ -720,9 +720,9 @@ export default function NginxConfigsPage() {
 
                   <div className="flex items-start justify-between rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5">
                     <div className="pr-3">
-                      <Label className="text-sm">Send PROXY protocol to HTTPS backend</Label>
+                      <Label className="text-sm">Send PROXY protocol to HTTPS backends on this proxy</Label>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Enable only if the backend nginx/OpenResty listener is configured with proxy_protocol.
+                        Nginx stream uses one shared port 443 listener, so all HTTPS backends on the same proxy must use the same setting.
                       </p>
                     </div>
                     <Switch
@@ -732,7 +732,7 @@ export default function NginxConfigsPage() {
                   </div>
                   
                   <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm space-y-3">
-                    <p className="font-medium text-amber-400">⚠️ Backend Configuration Required</p>
+                    <p className="font-medium text-amber-400">⚠️ Layer 4 backend setup required</p>
                     
                     <div>
                       <p className="text-muted-foreground text-xs mb-1">

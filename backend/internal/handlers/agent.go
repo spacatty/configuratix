@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"configuratix/backend/internal/auth"
@@ -33,8 +34,8 @@ type EnrollRequest struct {
 }
 
 type EnrollResponse struct {
-	AgentID  uuid.UUID `json:"agent_id"`
-	APIKey   string    `json:"api_key"`
+	AgentID uuid.UUID `json:"agent_id"`
+	APIKey  string    `json:"api_key"`
 }
 
 // Enroll handles agent enrollment
@@ -318,9 +319,80 @@ func (h *AgentHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to update job", http.StatusInternalServerError)
 		return
 	}
+	if req.Status == "completed" || req.Status == "failed" {
+		h.updateL7CertificateStatuses(req.JobID, req.Status, req.Logs)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (h *AgentHandler) updateL7CertificateStatuses(jobID uuid.UUID, jobStatus, logs string) {
+	if jobStatus == "failed" {
+		lastError := logs
+		if len(lastError) > 4000 {
+			lastError = lastError[len(lastError)-4000:]
+		}
+		_, err := h.db.Exec(`
+			UPDATE dns_l7_certificates
+			SET status = 'failed',
+				last_error = $1,
+				last_checked_at = NOW(),
+				updated_at = NOW()
+			WHERE last_job_id = $2
+		`, lastError, jobID)
+		if err != nil {
+			log.Printf("Failed to mark L7 certificate rows failed for job %s: %v", jobID, err)
+		}
+		return
+	}
+
+	for _, line := range strings.Split(logs, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "CONFIGURATIX_L7_CERT_STATUS|") {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 5)
+		if len(parts) != 5 {
+			continue
+		}
+
+		domain := parts[1]
+		status := parts[2]
+		expiresRaw := parts[3]
+		detail := parts[4]
+
+		var expiresAt *time.Time
+		if expiresRaw != "" {
+			if parsed, err := time.Parse(time.RFC3339, expiresRaw); err == nil {
+				expiresAt = &parsed
+			}
+		}
+
+		var issuer *string
+		var lastError *string
+		if status == "valid" || status == "expiring" {
+			if detail != "" {
+				issuer = &detail
+			}
+		} else if detail != "" {
+			lastError = &detail
+		}
+
+		_, err := h.db.Exec(`
+			UPDATE dns_l7_certificates
+			SET status = $1,
+				expires_at = $2,
+				issuer = $3,
+				last_error = $4,
+				last_checked_at = NOW(),
+				updated_at = NOW()
+			WHERE last_job_id = $5 AND domain = $6
+		`, status, expiresAt, issuer, lastError, jobID, domain)
+		if err != nil {
+			log.Printf("Failed to update L7 certificate status for %s in job %s: %v", domain, jobID, err)
+		}
+	}
 }
 
 // AgentAuthMiddleware validates agent API key
@@ -384,4 +456,3 @@ func AgentAuthMiddleware(db *database.DB) func(http.Handler) http.Handler {
 		})
 	}
 }
-

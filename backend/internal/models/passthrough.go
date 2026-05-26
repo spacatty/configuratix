@@ -42,19 +42,23 @@ type PassthroughPool struct {
 	ID                 uuid.UUID       `db:"id" json:"id"`
 	DNSRecordID        uuid.UUID       `db:"dns_record_id" json:"dns_record_id"`
 	TargetIP           string          `db:"target_ip" json:"target_ip"`
+	TargetScheme       string          `db:"target_scheme" json:"target_scheme"` // http, https
 	TargetPort         int             `db:"target_port" json:"target_port"`
 	TargetPortHTTP     int             `db:"target_port_http" json:"target_port_http"`       // Port for HTTP (80) passthrough
+	PreserveHost       bool            `db:"preserve_host" json:"preserve_host"`             // Preserve original Host header
+	TLSVerifyUpstream  bool            `db:"tls_verify_upstream" json:"tls_verify_upstream"` // Verify upstream TLS certificate
+	SSLEmail           string          `db:"ssl_email" json:"ssl_email"`                     // Email for certbot issuance
 	RotationStrategy   string          `db:"rotation_strategy" json:"rotation_strategy"`     // round_robin, random
 	RotationMode       string          `db:"rotation_mode" json:"rotation_mode"`             // interval, scheduled
 	IntervalMinutes    int             `db:"interval_minutes" json:"interval_minutes"`
-	ScheduledTimes     JSONStringArray `db:"scheduled_times" json:"scheduled_times"`         // JSON array
+	ScheduledTimes     JSONStringArray `db:"scheduled_times" json:"scheduled_times"` // JSON array
 	HealthCheckEnabled bool            `db:"health_check_enabled" json:"health_check_enabled"`
-	ProxyProtocol      bool            `db:"proxy_protocol" json:"proxy_protocol"`           // Send PROXY protocol to backend
+	ProxyProtocol      bool            `db:"proxy_protocol" json:"proxy_protocol"` // Send PROXY protocol to backend
 	CurrentMachineID   *uuid.UUID      `db:"current_machine_id" json:"current_machine_id"`
 	CurrentIndex       int             `db:"current_index" json:"current_index"`
 	IsPaused           bool            `db:"is_paused" json:"is_paused"`
 	LastRotatedAt      *time.Time      `db:"last_rotated_at" json:"last_rotated_at"`
-	GroupIDs           pq.StringArray  `db:"group_ids" json:"group_ids"`                     // Machine groups for dynamic membership (UUID[])
+	GroupIDs           pq.StringArray  `db:"group_ids" json:"group_ids"` // Machine groups for dynamic membership (UUID[])
 	CreatedAt          time.Time       `db:"created_at" json:"created_at"`
 	UpdatedAt          time.Time       `db:"updated_at" json:"updated_at"`
 }
@@ -85,19 +89,23 @@ type WildcardPool struct {
 	DNSDomainID        uuid.UUID       `db:"dns_domain_id" json:"dns_domain_id"`
 	IncludeRoot        bool            `db:"include_root" json:"include_root"`
 	TargetIP           string          `db:"target_ip" json:"target_ip"`
+	TargetScheme       string          `db:"target_scheme" json:"target_scheme"` // http, https
 	TargetPort         int             `db:"target_port" json:"target_port"`
-	TargetPortHTTP     int             `db:"target_port_http" json:"target_port_http"`   // Port for HTTP (80) passthrough
+	TargetPortHTTP     int             `db:"target_port_http" json:"target_port_http"`       // Port for HTTP (80) passthrough
+	PreserveHost       bool            `db:"preserve_host" json:"preserve_host"`             // Preserve original Host header
+	TLSVerifyUpstream  bool            `db:"tls_verify_upstream" json:"tls_verify_upstream"` // Verify upstream TLS certificate
+	SSLEmail           string          `db:"ssl_email" json:"ssl_email"`                     // Email for certbot issuance
 	RotationStrategy   string          `db:"rotation_strategy" json:"rotation_strategy"`
 	RotationMode       string          `db:"rotation_mode" json:"rotation_mode"`
 	IntervalMinutes    int             `db:"interval_minutes" json:"interval_minutes"`
 	ScheduledTimes     JSONStringArray `db:"scheduled_times" json:"scheduled_times"`
 	HealthCheckEnabled bool            `db:"health_check_enabled" json:"health_check_enabled"`
-	ProxyProtocol      bool            `db:"proxy_protocol" json:"proxy_protocol"`       // Send PROXY protocol to backend
+	ProxyProtocol      bool            `db:"proxy_protocol" json:"proxy_protocol"` // Send PROXY protocol to backend
 	CurrentMachineID   *uuid.UUID      `db:"current_machine_id" json:"current_machine_id"`
 	CurrentIndex       int             `db:"current_index" json:"current_index"`
 	IsPaused           bool            `db:"is_paused" json:"is_paused"`
 	LastRotatedAt      *time.Time      `db:"last_rotated_at" json:"last_rotated_at"`
-	GroupIDs           pq.StringArray  `db:"group_ids" json:"group_ids"`               // Machine groups for dynamic membership (UUID[])
+	GroupIDs           pq.StringArray  `db:"group_ids" json:"group_ids"` // Machine groups for dynamic membership (UUID[])
 	CreatedAt          time.Time       `db:"created_at" json:"created_at"`
 	UpdatedAt          time.Time       `db:"updated_at" json:"updated_at"`
 }
@@ -125,7 +133,7 @@ type WildcardMemberWithMachine struct {
 // RotationHistory logs each rotation event
 type RotationHistory struct {
 	ID            uuid.UUID  `db:"id" json:"id"`
-	PoolType      string     `db:"pool_type" json:"pool_type"`       // 'record' or 'wildcard'
+	PoolType      string     `db:"pool_type" json:"pool_type"` // 'record' or 'wildcard'
 	PoolID        uuid.UUID  `db:"pool_id" json:"pool_id"`
 	DNSDomainID   *uuid.UUID `db:"dns_domain_id" json:"dns_domain_id"`
 	RecordName    *string    `db:"record_name" json:"record_name"`
@@ -133,7 +141,7 @@ type RotationHistory struct {
 	FromIP        string     `db:"from_ip" json:"from_ip"`
 	ToMachineID   *uuid.UUID `db:"to_machine_id" json:"to_machine_id"`
 	ToIP          string     `db:"to_ip" json:"to_ip"`
-	Trigger       string     `db:"trigger" json:"trigger"`           // 'scheduled', 'manual', 'health'
+	Trigger       string     `db:"trigger" json:"trigger"` // 'scheduled', 'manual', 'health'
 	RotatedAt     time.Time  `db:"rotated_at" json:"rotated_at"`
 }
 
@@ -164,3 +172,18 @@ type WildcardPoolWithDetails struct {
 	MemberCount        int    `db:"member_count" json:"member_count"`
 }
 
+// L7CertificateStatus tracks certificate status for a routed domain on one proxy machine.
+type L7CertificateStatus struct {
+	ID               uuid.UUID  `db:"id" json:"id"`
+	MachineID        uuid.UUID  `db:"machine_id" json:"machine_id"`
+	Domain           string     `db:"domain" json:"domain"`
+	Status           string     `db:"status" json:"status"`
+	ExpiresAt        *time.Time `db:"expires_at" json:"expires_at"`
+	Issuer           *string    `db:"issuer" json:"issuer"`
+	LastCheckedAt    *time.Time `db:"last_checked_at" json:"last_checked_at"`
+	LastJobID        *uuid.UUID `db:"last_job_id" json:"last_job_id"`
+	LastError        *string    `db:"last_error" json:"last_error"`
+	AutoRenewEnabled bool       `db:"auto_renew_enabled" json:"auto_renew_enabled"`
+	CreatedAt        time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt        time.Time  `db:"updated_at" json:"updated_at"`
+}

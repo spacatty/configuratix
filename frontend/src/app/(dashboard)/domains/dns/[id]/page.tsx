@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, DNSManagedDomain, DNSAccount, DNSRecord, NSStatus, DNSSyncResult, Machine, PassthroughPoolResponse, WildcardPoolResponse, RotationHistory, MachineGroupWithCount } from "@/lib/api";
+import { api, DNSManagedDomain, DNSAccount, DNSRecord, NSStatus, DNSSyncResult, Machine, PassthroughPoolResponse, WildcardPoolResponse, RotationHistory, MachineGroupWithCount, L7CertificateStatus } from "@/lib/api";
 import { copyToClipboard } from "@/lib/clipboard";
 import { Globe, CheckCircle, XCircle, AlertTriangle, RefreshCw, Copy, Trash, Settings2, Play, Pause, RotateCcw, Server, History, Zap, MoreHorizontal, ArrowLeft, X, Plus } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -92,7 +92,7 @@ function PassthroughRecordRow({
       </td>
       <td className="py-3 px-4">
         <code className="text-xs bg-muted/50 px-1.5 py-0.5 rounded">
-          {poolData?.pool.target_ip}:{poolData?.pool.target_port}/{poolData?.pool.target_port_http || 80}
+          {(poolData?.pool.target_scheme || "http").toUpperCase()} {poolData?.pool.target_ip}:{poolData?.pool.target_port}/{poolData?.pool.target_port_http || 80}
         </code>
       </td>
       <td className="py-3 px-4">
@@ -254,8 +254,12 @@ export default function DomainDNSSettingsPage() {
   const [showPoolConfig, setShowPoolConfig] = useState(false);
   const [poolForm, setPoolForm] = useState({
     target_ip: "",
+    target_scheme: "http",
     target_port: 443,
     target_port_http: 80,
+    preserve_host: true,
+    tls_verify_upstream: false,
+    ssl_email: "admin@example.com",
     rotation_strategy: "round_robin",
     rotation_mode: "interval",
     interval_minutes: 60,
@@ -273,8 +277,12 @@ export default function DomainDNSSettingsPage() {
   const [passthroughForm, setPassthroughForm] = useState({
     name: "",
     target_ip: "",
+    target_scheme: "http",
     target_port: 443,
     target_port_http: 80,
+    preserve_host: true,
+    tls_verify_upstream: false,
+    ssl_email: "admin@example.com",
     rotation_strategy: "round_robin",
     interval_minutes: 60,
     health_check_enabled: true,
@@ -282,6 +290,7 @@ export default function DomainDNSSettingsPage() {
     machine_ids: [] as string[],
     group_ids: [] as string[],
   });
+  const [l7Certificates, setL7Certificates] = useState<L7CertificateStatus[]>([]);
   const [groups, setGroups] = useState<MachineGroupWithCount[]>([]);
   
   // Rotation history dialog
@@ -300,6 +309,7 @@ export default function DomainDNSSettingsPage() {
   const isDeSEC = selectedAccount?.provider === "desec";
   const isNjalla = selectedAccount?.provider === "njalla";
   const isClouDNS = selectedAccount?.provider === "cloudns";
+  const isLayer7Mode = proxyMode === "layer7";
 
   // New record form
   const [newRecord, setNewRecord] = useState({
@@ -351,6 +361,7 @@ export default function DomainDNSSettingsPage() {
       loadRecords();
       loadMachines();
       loadGroups();
+      loadL7Certificates();
       if (domain.proxy_mode === "wildcard") {
         loadWildcardPool();
       }
@@ -375,6 +386,17 @@ export default function DomainDNSSettingsPage() {
     }
   };
 
+  const loadL7Certificates = async () => {
+    if (!domain) return;
+    try {
+      const data = await api.listDomainL7Certificates(domain.id);
+      setL7Certificates(data);
+    } catch (err) {
+      console.error("Failed to load L7 certificates:", err);
+      setL7Certificates([]);
+    }
+  };
+
   const loadWildcardPool = async () => {
     if (!domain) return;
     try {
@@ -382,8 +404,12 @@ export default function DomainDNSSettingsPage() {
       setWildcardPool(data);
       setPoolForm({
         target_ip: data.pool.target_ip,
+        target_scheme: data.pool.target_scheme || "http",
         target_port: data.pool.target_port,
         target_port_http: data.pool.target_port_http || 80,
+        preserve_host: data.pool.preserve_host ?? true,
+        tls_verify_upstream: data.pool.tls_verify_upstream ?? false,
+        ssl_email: data.pool.ssl_email || "admin@example.com",
         rotation_strategy: data.pool.rotation_strategy,
         rotation_mode: data.pool.rotation_mode,
         interval_minutes: data.pool.interval_minutes,
@@ -405,8 +431,12 @@ export default function DomainDNSSettingsPage() {
       setRecordPool(data);
       setPoolForm({
         target_ip: data.pool.target_ip,
+        target_scheme: data.pool.target_scheme || "http",
         target_port: data.pool.target_port,
         target_port_http: data.pool.target_port_http || 80,
+        preserve_host: data.pool.preserve_host ?? true,
+        tls_verify_upstream: data.pool.tls_verify_upstream ?? false,
+        ssl_email: data.pool.ssl_email || "admin@example.com",
         rotation_strategy: data.pool.rotation_strategy,
         rotation_mode: data.pool.rotation_mode,
         interval_minutes: data.pool.interval_minutes,
@@ -423,8 +453,12 @@ export default function DomainDNSSettingsPage() {
       setRecordPool(null);
       setPoolForm({
         target_ip: "",
+        target_scheme: "http",
         target_port: 443,
         target_port_http: 80,
+        preserve_host: true,
+        tls_verify_upstream: false,
+        ssl_email: "admin@example.com",
         rotation_strategy: "round_robin",
         rotation_mode: "interval",
         interval_minutes: 60,
@@ -510,8 +544,12 @@ export default function DomainDNSSettingsPage() {
       await api.createOrUpdateWildcardPool(domain.id, {
         include_root: poolForm.include_root,
         target_ip: poolForm.target_ip,
+        target_scheme: poolForm.target_scheme as "http" | "https",
         target_port: poolForm.target_port,
         target_port_http: poolForm.target_port_http,
+        preserve_host: poolForm.preserve_host,
+        tls_verify_upstream: poolForm.tls_verify_upstream,
+        ssl_email: poolForm.ssl_email,
         rotation_strategy: poolForm.rotation_strategy,
         rotation_mode: poolForm.rotation_mode,
         interval_minutes: poolForm.interval_minutes,
@@ -552,6 +590,16 @@ export default function DomainDNSSettingsPage() {
     }
     setSaving(true);
     try {
+      if (isLayer7Mode && domain.proxy_mode !== "layer7") {
+        await api.updateDNSManagedDomain(domain.id, {
+          dns_account_id: dnsAccountId || null,
+          listener_protocol: listenerProtocol as 'http_only' | 'http_and_https' | 'https_only',
+        });
+        await api.setDomainProxyMode(domain.id, "layer7");
+        const updated = await api.getDNSManagedDomain(domain.id);
+        setDomain(updated);
+      }
+
       let recordId = editingPassthrough?.id;
       
       if (!editingPassthrough) {
@@ -580,8 +628,12 @@ export default function DomainDNSSettingsPage() {
       
       await api.createOrUpdateRecordPool(recordId!, {
         target_ip: passthroughForm.target_ip,
+        target_scheme: passthroughForm.target_scheme as "http" | "https",
         target_port: passthroughForm.target_port,
         target_port_http: passthroughForm.target_port_http,
+        preserve_host: passthroughForm.preserve_host,
+        tls_verify_upstream: passthroughForm.tls_verify_upstream,
+        ssl_email: passthroughForm.ssl_email,
         rotation_strategy: passthroughForm.rotation_strategy,
         rotation_mode: "interval",
         interval_minutes: passthroughForm.interval_minutes,
@@ -591,11 +643,14 @@ export default function DomainDNSSettingsPage() {
         group_ids: passthroughForm.group_ids,
       });
       
-      toast.success(editingPassthrough ? "Passthrough record updated" : "Passthrough record created");
+      toast.success(editingPassthrough ? `${isLayer7Mode ? "Layer 7" : "Passthrough"} record updated` : `${isLayer7Mode ? "Layer 7" : "Passthrough"} record created`);
       setShowAddPassthrough(false);
       setEditingPassthrough(null);
       resetPassthroughForm();
       loadRecords();
+      if (isLayer7Mode) {
+        loadL7Certificates();
+      }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to save passthrough record");
     } finally {
@@ -623,8 +678,12 @@ export default function DomainDNSSettingsPage() {
       setPassthroughForm({
         name: record.name,
         target_ip: poolData.pool.target_ip,
+        target_scheme: poolData.pool.target_scheme || "http",
         target_port: poolData.pool.target_port,
         target_port_http: poolData.pool.target_port_http || 80,
+        preserve_host: poolData.pool.preserve_host ?? true,
+        tls_verify_upstream: poolData.pool.tls_verify_upstream ?? false,
+        ssl_email: poolData.pool.ssl_email || "admin@example.com",
         rotation_strategy: poolData.pool.rotation_strategy,
         interval_minutes: poolData.pool.interval_minutes,
         health_check_enabled: poolData.pool.health_check_enabled,
@@ -633,7 +692,17 @@ export default function DomainDNSSettingsPage() {
         group_ids: poolData.pool.group_ids || [],
       });
     } catch {
-      setPassthroughForm(f => ({ ...f, name: record.name, group_ids: [], target_port_http: 80, proxy_protocol: true }));
+      setPassthroughForm(f => ({
+        ...f,
+        name: record.name,
+        group_ids: [],
+        target_scheme: "http",
+        target_port_http: 80,
+        preserve_host: true,
+        tls_verify_upstream: false,
+        ssl_email: "admin@example.com",
+        proxy_protocol: true,
+      }));
     }
   };
 
@@ -641,8 +710,12 @@ export default function DomainDNSSettingsPage() {
     setPassthroughForm({
       name: "",
       target_ip: "",
+      target_scheme: "http",
       target_port: 443,
       target_port_http: 80,
+      preserve_host: true,
+      tls_verify_upstream: false,
+      ssl_email: "admin@example.com",
       rotation_strategy: "round_robin",
       interval_minutes: 60,
       health_check_enabled: true,
@@ -978,7 +1051,7 @@ export default function DomainDNSSettingsPage() {
                     <Label className="text-sm font-medium">Proxy Mode</Label>
                     <p className="text-xs text-muted-foreground mt-0.5">How DNS records are routed</p>
                   </div>
-                  <div className="flex gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "static" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30"}`}>
                       <input
                         type="radio"
@@ -994,26 +1067,43 @@ export default function DomainDNSSettingsPage() {
                       </div>
                       <p className="text-xs text-muted-foreground">Manage DNS records directly with your provider.</p>
                     </label>
-                    <label className={`flex-1 p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode !== "static" ? "border-purple-500 bg-purple-500/10" : "border-border hover:bg-muted/30"}`}>
+                    <label className={`p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "layer7" ? "border-green-500 bg-green-500/10" : "border-border hover:bg-muted/30"}`}>
                       <input
                         type="radio"
                         name="proxy_mode"
-                        value="passthrough"
-                        checked={proxyMode !== "static"}
+                        value="layer7"
+                        checked={proxyMode === "layer7"}
+                        onChange={() => setProxyMode("layer7")}
+                        className="sr-only"
+                      />
+                      <div className="flex items-center gap-2 mb-1">
+                        <Zap className="h-4 w-4" />
+                        <span className="font-medium text-sm">Layer 7 Reverse Proxy</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Proxy terminates TLS/certs and forwards HTTP(S) to target upstream.</p>
+                    </label>
+                    <label className={`p-3 rounded-lg border cursor-pointer transition-colors ${proxyMode === "separate" || proxyMode === "wildcard" ? "border-purple-500 bg-purple-500/10" : "border-border hover:bg-muted/30"}`}>
+                      <input
+                        type="radio"
+                        name="proxy_mode"
+                        value="separate"
+                        checked={proxyMode === "separate" || proxyMode === "wildcard"}
                         onChange={() => setProxyMode("separate")}
                         className="sr-only"
                       />
                       <div className="flex items-center gap-2 mb-1">
                         <Zap className="h-4 w-4" />
-                        <span className="font-medium text-sm">Passthrough (Dynamic)</span>
+                        <span className="font-medium text-sm">Layer 4 Passthrough</span>
                       </div>
-                      <p className="text-xs text-muted-foreground">Route traffic through rotating proxy pools.</p>
+                      <p className="text-xs text-muted-foreground">Raw TLS passthrough (advanced); PROXY protocol constraints apply.</p>
                     </label>
                   </div>
                   {proxyMode !== "static" && (
                     <>
-                      <p className="text-xs text-muted-foreground bg-purple-500/10 p-2 rounded">
-                        ⚡ Passthrough mode enabled. Configure pools in the <strong>Passthrough</strong> tab.
+                      <p className={`text-xs text-muted-foreground p-2 rounded ${isLayer7Mode ? "bg-green-500/10" : "bg-purple-500/10"}`}>
+                        {isLayer7Mode
+                          ? "Layer 7 mode enabled. Proxy machine will manage certificates and terminate TLS."
+                          : "Layer 4 passthrough mode enabled. Configure pools in the Passthrough tab."}
                       </p>
                       <div className="pt-3 border-t border-border/50">
                         <Label className="text-sm font-medium">Listener ports</Label>
@@ -1210,6 +1300,55 @@ export default function DomainDNSSettingsPage() {
             </TabsContent>
 
             <TabsContent value="passthrough" className="space-y-6 mt-6">
+              {isLayer7Mode && (
+                <Card className="border-green-500/30 bg-green-500/5">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">Layer 7 Certificate Status</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            await api.issueDomainL7Certificates(domain.id);
+                            toast.success("Certificate issue/renew jobs queued");
+                            await loadL7Certificates();
+                          } catch (err: unknown) {
+                            toast.error(err instanceof Error ? err.message : "Failed to queue issuance");
+                          }
+                        }}
+                      >
+                        Issue / Renew Certificates
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={loadL7Certificates}>
+                        Refresh Status
+                      </Button>
+                    </div>
+                    {l7Certificates.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No certificate status rows yet. Save/apply an L7 pool to create tracking records.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {l7Certificates.map((cert) => (
+                          <div key={cert.id} className="flex items-center justify-between border rounded-md px-3 py-2 text-sm">
+                            <div>
+                              <div className="font-mono">{cert.domain}</div>
+                              <div className="text-xs text-muted-foreground">{cert.machine_name} - {cert.machine_ip}</div>
+                            </div>
+                            <div className="text-right">
+                              <Badge variant="outline">{cert.status}</Badge>
+                              {cert.expires_at && (
+                                <div className="text-xs text-muted-foreground mt-1">exp: {new Date(cert.expires_at).toLocaleDateString()}</div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
               {proxyMode === "wildcard" ? (
                 /* Wildcard Mode Configuration */
                 <div className="space-y-6">
@@ -1314,7 +1453,7 @@ export default function DomainDNSSettingsPage() {
                             checked={poolForm.proxy_protocol}
                             onCheckedChange={(c) => setPoolForm(f => ({ ...f, proxy_protocol: !!c }))}
                           />
-                          <Label htmlFor="proxy_protocol_wild" className="cursor-pointer text-sm" title="Send PROXY protocol headers to backend for real client IP">PROXY protocol</Label>
+                          <Label htmlFor="proxy_protocol_wild" className="cursor-pointer text-sm" title="Nginx stream uses one shared port 443 listener, so all HTTPS backends on the same proxy must use the same PROXY protocol setting">PROXY protocol</Label>
                         </div>
                       </div>
                     </div>
@@ -1406,8 +1545,10 @@ export default function DomainDNSSettingsPage() {
                 <div className="space-y-6">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="font-medium">Passthrough Records</h3>
-                      <p className="text-sm text-muted-foreground">Configure individual A record pools</p>
+                      <h3 className="font-medium">{isLayer7Mode ? "Layer 7 Routing Records" : "Passthrough Records"}</h3>
+                      <p className="text-sm text-muted-foreground">
+                        {isLayer7Mode ? "Configure per-record reverse proxy upstreams and cert-managed TLS." : "Configure individual A record pools"}
+                      </p>
                     </div>
                     <div className="flex gap-2">
                       {passthroughRecords.length > 0 && (
@@ -1469,7 +1610,7 @@ export default function DomainDNSSettingsPage() {
                   ) : (
                     <div className="p-12 text-center border rounded-lg bg-muted/10">
                       <Zap className="h-12 w-12 mx-auto mb-4 opacity-30" />
-                      <p className="text-muted-foreground">No passthrough records configured yet.</p>
+                      <p className="text-muted-foreground">{isLayer7Mode ? "No Layer 7 records configured yet." : "No passthrough records configured yet."}</p>
                       <p className="text-sm text-muted-foreground mt-1">
                         Add a record to start routing traffic through proxy pools.
                       </p>
@@ -1480,7 +1621,7 @@ export default function DomainDNSSettingsPage() {
                   {showAddPassthrough && (
                     <div className="p-4 border rounded-lg bg-muted/10 space-y-4">
                       <div className="flex items-center justify-between">
-                        <h4 className="font-medium">{editingPassthrough ? "Edit" : "New"} Passthrough Record</h4>
+                        <h4 className="font-medium">{editingPassthrough ? "Edit" : "New"} {isLayer7Mode ? "Layer 7" : "Passthrough"} Record</h4>
                         <Button variant="ghost" size="sm" onClick={() => { setShowAddPassthrough(false); setEditingPassthrough(null); }}>
                           <X className="h-4 w-4" />
                         </Button>
@@ -1522,6 +1663,53 @@ export default function DomainDNSSettingsPage() {
                         </div>
                       </div>
 
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="space-y-2">
+                          <Label>Upstream Scheme</Label>
+                          <Select value={passthroughForm.target_scheme} onValueChange={(v) => setPassthroughForm(f => ({ ...f, target_scheme: v }))}>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="http">HTTP</SelectItem>
+                              <SelectItem value="https">HTTPS</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Preserve Host Header</Label>
+                          <div className="h-10 px-3 border rounded-md flex items-center">
+                            <Checkbox
+                              id="preserve_host_sep"
+                              checked={passthroughForm.preserve_host}
+                              onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, preserve_host: !!c }))}
+                            />
+                            <Label htmlFor="preserve_host_sep" className="ml-2 cursor-pointer text-sm">Pass original Host to upstream</Label>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Verify Upstream TLS</Label>
+                          <div className="h-10 px-3 border rounded-md flex items-center">
+                            <Checkbox
+                              id="tls_verify_sep"
+                              checked={passthroughForm.tls_verify_upstream}
+                              onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, tls_verify_upstream: !!c }))}
+                            />
+                            <Label htmlFor="tls_verify_sep" className="ml-2 cursor-pointer text-sm">Enable cert verification</Label>
+                          </div>
+                        </div>
+                      </div>
+
+                      {isLayer7Mode && (
+                        <div className="space-y-2">
+                          <Label>SSL Email (for cert issuance)</Label>
+                          <Input
+                            type="email"
+                            placeholder="admin@example.com"
+                            value={passthroughForm.ssl_email}
+                            onChange={(e) => setPassthroughForm(f => ({ ...f, ssl_email: e.target.value }))}
+                          />
+                        </div>
+                      )}
+
                       <div className="grid grid-cols-3 gap-4">
                         <div className="space-y-2">
                           <Label>Strategy</Label>
@@ -1552,14 +1740,16 @@ export default function DomainDNSSettingsPage() {
                               />
                               <Label htmlFor="health_sep" className="cursor-pointer text-sm">Skip offline</Label>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <Checkbox
-                                id="proxy_protocol_sep"
-                                checked={passthroughForm.proxy_protocol}
-                                onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, proxy_protocol: !!c }))}
-                              />
-                              <Label htmlFor="proxy_protocol_sep" className="cursor-pointer text-sm" title="Send PROXY protocol to backend">PROXY protocol</Label>
-                            </div>
+                            {!isLayer7Mode && (
+                              <div className="flex items-center gap-2">
+                                <Checkbox
+                                  id="proxy_protocol_sep"
+                                  checked={passthroughForm.proxy_protocol}
+                                  onCheckedChange={(c) => setPassthroughForm(f => ({ ...f, proxy_protocol: !!c }))}
+                                />
+                                <Label htmlFor="proxy_protocol_sep" className="cursor-pointer text-sm" title="Nginx stream uses one shared port 443 listener, so all HTTPS backends on the same proxy must use the same PROXY protocol setting">PROXY protocol</Label>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>

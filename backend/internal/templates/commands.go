@@ -684,6 +684,7 @@ mkdir -p "$STREAM_DIR" /etc/nginx/conf.d/configuratix
 declare -A HTTPS_TARGETS
 declare -A HTTP_TARGETS
 PROXY_PROTOCOL_ENABLED=false
+PROXY_PROTOCOL_DISABLED=false
 
 for marker in "$STREAM_DIR"/passthrough-*.conf; do
     [ -f "$marker" ] || continue
@@ -700,17 +701,21 @@ for marker in "$STREAM_DIR"/passthrough-*.conf; do
     
     if [ -n "$target_https" ]; then
         HTTPS_TARGETS["$domain"]="$target_https"
-        if [ -n "$target_http" ]; then
-            echo "Found: $domain -> HTTPS: $target_https, HTTP: $target_http"
+        if [ "$marker_proxy_protocol" = "true" ] || [ "$marker_proxy_protocol" = "enabled" ]; then
+            PROXY_PROTOCOL_ENABLED=true
+            proxy_status="enabled"
         else
-            echo "Found: $domain -> HTTPS: $target_https, HTTP: disabled"
+            PROXY_PROTOCOL_DISABLED=true
+            proxy_status="disabled"
+        fi
+        if [ -n "$target_http" ]; then
+            echo "Found: $domain -> HTTPS: $target_https, HTTP: $target_http, HTTPS PROXY protocol: $proxy_status"
+        else
+            echo "Found: $domain -> HTTPS: $target_https, HTTP: disabled, HTTPS PROXY protocol: $proxy_status"
         fi
     fi
     if [ -n "$target_http" ]; then
         HTTP_TARGETS["$domain"]="$target_http"
-    fi
-    if [ "$marker_proxy_protocol" = "true" ] || [ "$marker_proxy_protocol" = "enabled" ]; then
-        PROXY_PROTOCOL_ENABLED=true
     fi
 done
 
@@ -722,14 +727,26 @@ if [ ${#HTTPS_TARGETS[@]} -eq 0 ]; then
     
     # Re-enable DNS Management config if it was disabled
     DNS_MGMT_CONFIG="$STREAM_DIR/configuratix-passthrough.conf"
+    DNS_MGMT_HTTP_CONFIG="/etc/nginx/conf.d/configuratix/passthrough-dns-http.conf"
     if [ -f "${DNS_MGMT_CONFIG}.disabled-by-manual" ]; then
-        echo "Re-enabling DNS Management passthrough config..."
+        echo "Re-enabling DNS Management stream passthrough config..."
         mv "${DNS_MGMT_CONFIG}.disabled-by-manual" "$DNS_MGMT_CONFIG"
+    fi
+    if [ -f "${DNS_MGMT_HTTP_CONFIG}.disabled-by-manual" ]; then
+        echo "Re-enabling DNS Management HTTP passthrough config..."
+        mv "${DNS_MGMT_HTTP_CONFIG}.disabled-by-manual" "$DNS_MGMT_HTTP_CONFIG"
     fi
     
     nginx -t && (systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || true)
     echo "Passthrough removed, original sites restored"
     exit 0
+fi
+
+if [ "$PROXY_PROTOCOL_ENABLED" = "true" ] && [ "$PROXY_PROTOCOL_DISABLED" = "true" ]; then
+    echo "ERROR: Mixed HTTPS PROXY protocol settings detected in manual passthrough markers."
+    echo "Nginx stream uses one shared listen 443 server, so PROXY protocol cannot be enabled for only some SNI domains."
+    echo "Set all passthrough domains on this proxy to the same HTTPS PROXY protocol setting, or split them across different proxy machines/IPs."
+    exit 1
 fi
 
 # Generate consolidated stream config
@@ -876,6 +893,7 @@ CONFIG_FILE="$STREAM_DIR/configuratix-passthrough-manual.conf"
 HTTP_CONFIG_FILE="/etc/nginx/conf.d/configuratix/passthrough-manual-http.conf"
 MARKER_FILE="$STREAM_DIR/passthrough-${DOMAIN}.conf"
 DNS_MGMT_CONFIG="$STREAM_DIR/configuratix-passthrough.conf"
+DNS_MGMT_HTTP_CONFIG="/etc/nginx/conf.d/configuratix/passthrough-dns-http.conf"
 
 echo "=== Configuratix Passthrough Setup for $DOMAIN ==="
 if [ "$ENABLE_HTTP" = "true" ]; then
@@ -888,14 +906,20 @@ fi
 mkdir -p "$STREAM_DIR" /etc/nginx/conf.d/configuratix
 
 # 1.5. Check for DNS Management config conflict
-# If configuratix-passthrough.conf exists (DNS Management), we need to disable it
-# as manual passthrough will take over these ports
+# If DNS Management passthrough configs exist, disable them as manual passthrough takes over these ports
 if [ -f "$DNS_MGMT_CONFIG" ]; then
-    echo "=== Detected DNS Management passthrough config ==="
-    echo "Disabling DNS Management config to avoid port conflict..."
+    echo "=== Detected DNS Management stream passthrough config ==="
+    echo "Disabling DNS Management stream config to avoid port conflict..."
     mv "$DNS_MGMT_CONFIG" "$DNS_MGMT_CONFIG.disabled-by-manual"
+fi
+if [ -f "$DNS_MGMT_HTTP_CONFIG" ]; then
+    echo "=== Detected DNS Management HTTP passthrough config ==="
+    echo "Disabling DNS Management HTTP config to avoid duplicate server_name routing..."
+    mv "$DNS_MGMT_HTTP_CONFIG" "$DNS_MGMT_HTTP_CONFIG.disabled-by-manual"
+fi
+if [ -f "${DNS_MGMT_CONFIG}.disabled-by-manual" ] || [ -f "${DNS_MGMT_HTTP_CONFIG}.disabled-by-manual" ]; then
     echo "NOTE: DNS Management passthrough has been disabled."
-    echo "      To re-enable, remove this domain from manual passthrough first."
+    echo "      To re-enable, remove all manual passthrough domains first."
 fi
 
 # 2. Remove any old HTTP-block config for this domain
@@ -1009,6 +1033,7 @@ echo "=== Regenerating consolidated config ==="
 declare -A HTTPS_TARGETS
 declare -A HTTP_TARGETS
 PROXY_PROTOCOL_ENABLED=false
+PROXY_PROTOCOL_DISABLED=false
 
 for marker in "$STREAM_DIR"/passthrough-*.conf; do
     [ -f "$marker" ] || continue
@@ -1025,19 +1050,30 @@ for marker in "$STREAM_DIR"/passthrough-*.conf; do
     
     if [ -n "$target_https" ]; then
         HTTPS_TARGETS["$dom"]="$target_https"
+        if [ "$marker_proxy_protocol" = "true" ] || [ "$marker_proxy_protocol" = "enabled" ]; then
+            PROXY_PROTOCOL_ENABLED=true
+            proxy_status="enabled"
+        else
+            PROXY_PROTOCOL_DISABLED=true
+            proxy_status="disabled"
+        fi
     fi
     if [ -n "$target_http" ]; then
         HTTP_TARGETS["$dom"]="$target_http"
     fi
-    if [ "$marker_proxy_protocol" = "true" ] || [ "$marker_proxy_protocol" = "enabled" ]; then
-        PROXY_PROTOCOL_ENABLED=true
-    fi
     if [ -n "$target_http" ]; then
-        echo "  - $dom -> HTTPS: $target_https, HTTP: $target_http"
+        echo "  - $dom -> HTTPS: $target_https, HTTP: $target_http, HTTPS PROXY protocol: $proxy_status"
     else
-        echo "  - $dom -> HTTPS: $target_https, HTTP: disabled"
+        echo "  - $dom -> HTTPS: $target_https, HTTP: disabled, HTTPS PROXY protocol: $proxy_status"
     fi
 done
+
+if [ "$PROXY_PROTOCOL_ENABLED" = "true" ] && [ "$PROXY_PROTOCOL_DISABLED" = "true" ]; then
+    echo "ERROR: Mixed HTTPS PROXY protocol settings detected in manual passthrough markers."
+    echo "Nginx stream uses one shared listen 443 server, so PROXY protocol cannot be enabled for only some SNI domains."
+    echo "Set all passthrough domains on this proxy to the same HTTPS PROXY protocol setting, or split them across different proxy machines/IPs."
+    exit 1
+fi
 
 # Generate config
 cat > "$CONFIG_FILE" << 'HEADER'

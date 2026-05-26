@@ -282,7 +282,7 @@ export interface DNSManagedDomain {
   owner_id: string;
   fqdn: string;
   dns_account_id: string | null;
-  proxy_mode: string; // 'separate' or 'wildcard'
+  proxy_mode: string; // 'static' | 'separate' | 'wildcard' | 'layer7'
   listener_protocol?: string; // 'http_only' | 'http_and_https' | 'https_only'
   ns_status: string; // unknown, pending, valid, invalid
   ns_last_check: string | null;
@@ -332,8 +332,12 @@ export interface PassthroughPool {
   id: string;
   dns_record_id: string;
   target_ip: string;
+  target_scheme: "http" | "https";
   target_port: number;       // HTTPS (443) target port
   target_port_http: number;  // HTTP (80) target port
+  preserve_host: boolean;
+  tls_verify_upstream: boolean;
+  ssl_email: string;
   rotation_strategy: string; // 'round_robin' or 'random'
   rotation_mode: string; // 'interval' or 'scheduled'
   interval_minutes: number;
@@ -372,8 +376,12 @@ export interface PassthroughPoolResponse {
 
 export interface PassthroughPoolRequest {
   target_ip: string;
+  target_scheme?: "http" | "https";
   target_port?: number;       // HTTPS (443) target port
   target_port_http?: number;  // HTTP (80) target port
+  preserve_host?: boolean;
+  tls_verify_upstream?: boolean;
+  ssl_email?: string;
   rotation_strategy?: string;
   rotation_mode?: string;
   interval_minutes?: number;
@@ -389,8 +397,12 @@ export interface WildcardPool {
   dns_domain_id: string;
   include_root: boolean;
   target_ip: string;
+  target_scheme: "http" | "https";
   target_port: number;       // HTTPS (443) target port
   target_port_http: number;  // HTTP (80) target port
+  preserve_host: boolean;
+  tls_verify_upstream: boolean;
+  ssl_email: string;
   rotation_strategy: string;
   rotation_mode: string;
   interval_minutes: number;
@@ -429,8 +441,12 @@ export interface WildcardPoolResponse {
 export interface WildcardPoolRequest {
   include_root?: boolean;
   target_ip: string;
+  target_scheme?: "http" | "https";
   target_port?: number;       // HTTPS (443) target port
   target_port_http?: number;  // HTTP (80) target port
+  preserve_host?: boolean;
+  tls_verify_upstream?: boolean;
+  ssl_email?: string;
   rotation_strategy?: string;
   rotation_mode?: string;
   interval_minutes?: number;
@@ -455,6 +471,20 @@ export interface RotationHistory {
   rotated_at: string;
   from_machine_name?: string;
   to_machine_name?: string;
+}
+
+export interface L7CertificateStatus {
+  id: string;
+  machine_id: string;
+  domain: string;
+  status: string;
+  expires_at: string | null;
+  issuer: string | null;
+  last_checked_at: string | null;
+  last_job_id: string | null;
+  last_error: string | null;
+  machine_name: string;
+  machine_ip: string;
 }
 
 export interface NSStatus {
@@ -1358,6 +1388,16 @@ class ApiClient {
     return this.request(`/api/dns-domains/${domainId}/proxy-mode`, {
       method: "PUT",
       body: JSON.stringify({ proxy_mode: proxyMode }),
+    });
+  }
+
+  async listDomainL7Certificates(domainId: string): Promise<L7CertificateStatus[]> {
+    return this.request(`/api/dns-domains/${domainId}/l7-certificates`);
+  }
+
+  async issueDomainL7Certificates(domainId: string): Promise<{ status: string }> {
+    return this.request(`/api/dns-domains/${domainId}/l7-certificates/issue`, {
+      method: "POST",
     });
   }
 

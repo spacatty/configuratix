@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	"configuratix/backend/internal/database"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // PassthroughNginxGenerator generates nginx stream passthrough configs
@@ -17,8 +19,20 @@ type PassthroughNginxGenerator struct {
 }
 
 type PassthroughNginxConfigBundle struct {
-	StreamConfig string
-	HTTPConfig   string
+	StreamConfig   string
+	HTTPConfig     string
+	L7Config       string
+	L7Domains      []string
+	L7DomainEmails map[string]string
+}
+
+type passthroughProxyProtocolState struct {
+	Domain  string
+	Enabled bool
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 // NewPassthroughNginxGenerator creates a new generator
@@ -30,24 +44,34 @@ func NewPassthroughNginxGenerator(db *database.DB) *PassthroughNginxGenerator {
 func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (PassthroughNginxConfigBundle, error) {
 	// Get all record pools this machine is a member of (with domain listener_protocol)
 	var recordPools []struct {
-		PoolID           uuid.UUID `db:"pool_id"`
-		TargetIP         string    `db:"target_ip"`
-		TargetPort       int       `db:"target_port"`
-		TargetPortHTTP   int       `db:"target_port_http"`
-		RecordName       string    `db:"record_name"`
-		DomainFQDN       string    `db:"domain_fqdn"`
-		IsCurrent        bool      `db:"is_current"`
-		ListenerProtocol string    `db:"listener_protocol"`
+		PoolID            uuid.UUID `db:"pool_id"`
+		TargetIP          string    `db:"target_ip"`
+		TargetScheme      string    `db:"target_scheme"`
+		TargetPort        int       `db:"target_port"`
+		TargetPortHTTP    int       `db:"target_port_http"`
+		PreserveHost      bool      `db:"preserve_host"`
+		TLSVerifyUpstream bool      `db:"tls_verify_upstream"`
+		SSLEmail          string    `db:"ssl_email"`
+		RecordName        string    `db:"record_name"`
+		DomainFQDN        string    `db:"domain_fqdn"`
+		IsCurrent         bool      `db:"is_current"`
+		ProxyMode         string    `db:"proxy_mode"`
+		ListenerProtocol  string    `db:"listener_protocol"`
 	}
 	g.db.Select(&recordPools, `
 		SELECT 
 			pp.id as pool_id,
 			pp.target_ip,
+			COALESCE(pp.target_scheme, 'http') as target_scheme,
 			pp.target_port,
 			COALESCE(pp.target_port_http, 80) as target_port_http,
+			COALESCE(pp.preserve_host, true) as preserve_host,
+			COALESCE(pp.tls_verify_upstream, false) as tls_verify_upstream,
+			COALESCE(pp.ssl_email, 'admin@example.com') as ssl_email,
 			dr.name as record_name,
 			dmd.fqdn as domain_fqdn,
 			(pp.current_machine_id = $1) as is_current,
+			COALESCE(dmd.proxy_mode, 'static') as proxy_mode,
 			COALESCE(dmd.listener_protocol, 'http_and_https') as listener_protocol
 		FROM dns_passthrough_members pm
 		JOIN dns_passthrough_pools pp ON pm.pool_id = pp.id
@@ -58,22 +82,32 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (Pas
 
 	// Also get pools where this machine is in a group
 	var groupRecordPools []struct {
-		PoolID           uuid.UUID `db:"pool_id"`
-		TargetIP         string    `db:"target_ip"`
-		TargetPort       int       `db:"target_port"`
-		TargetPortHTTP   int       `db:"target_port_http"`
-		RecordName       string    `db:"record_name"`
-		DomainFQDN       string    `db:"domain_fqdn"`
-		ListenerProtocol string    `db:"listener_protocol"`
+		PoolID            uuid.UUID `db:"pool_id"`
+		TargetIP          string    `db:"target_ip"`
+		TargetScheme      string    `db:"target_scheme"`
+		TargetPort        int       `db:"target_port"`
+		TargetPortHTTP    int       `db:"target_port_http"`
+		PreserveHost      bool      `db:"preserve_host"`
+		TLSVerifyUpstream bool      `db:"tls_verify_upstream"`
+		SSLEmail          string    `db:"ssl_email"`
+		RecordName        string    `db:"record_name"`
+		DomainFQDN        string    `db:"domain_fqdn"`
+		ProxyMode         string    `db:"proxy_mode"`
+		ListenerProtocol  string    `db:"listener_protocol"`
 	}
 	g.db.Select(&groupRecordPools, `
 		SELECT DISTINCT
 			pp.id as pool_id,
 			pp.target_ip,
+			COALESCE(pp.target_scheme, 'http') as target_scheme,
 			pp.target_port,
 			COALESCE(pp.target_port_http, 80) as target_port_http,
+			COALESCE(pp.preserve_host, true) as preserve_host,
+			COALESCE(pp.tls_verify_upstream, false) as tls_verify_upstream,
+			COALESCE(pp.ssl_email, 'admin@example.com') as ssl_email,
 			dr.name as record_name,
 			dmd.fqdn as domain_fqdn,
+			COALESCE(dmd.proxy_mode, 'static') as proxy_mode,
 			COALESCE(dmd.listener_protocol, 'http_and_https') as listener_protocol
 		FROM dns_passthrough_pools pp
 		JOIN dns_records dr ON pp.dns_record_id = dr.id
@@ -90,46 +124,66 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (Pas
 	for _, p := range groupRecordPools {
 		if !poolIDs[p.PoolID] {
 			recordPools = append(recordPools, struct {
-				PoolID           uuid.UUID `db:"pool_id"`
-				TargetIP         string    `db:"target_ip"`
-				TargetPort       int       `db:"target_port"`
-				TargetPortHTTP   int       `db:"target_port_http"`
-				RecordName       string    `db:"record_name"`
-				DomainFQDN       string    `db:"domain_fqdn"`
-				IsCurrent        bool      `db:"is_current"`
-				ListenerProtocol string    `db:"listener_protocol"`
+				PoolID            uuid.UUID `db:"pool_id"`
+				TargetIP          string    `db:"target_ip"`
+				TargetScheme      string    `db:"target_scheme"`
+				TargetPort        int       `db:"target_port"`
+				TargetPortHTTP    int       `db:"target_port_http"`
+				PreserveHost      bool      `db:"preserve_host"`
+				TLSVerifyUpstream bool      `db:"tls_verify_upstream"`
+				SSLEmail          string    `db:"ssl_email"`
+				RecordName        string    `db:"record_name"`
+				DomainFQDN        string    `db:"domain_fqdn"`
+				IsCurrent         bool      `db:"is_current"`
+				ProxyMode         string    `db:"proxy_mode"`
+				ListenerProtocol  string    `db:"listener_protocol"`
 			}{
-				PoolID:           p.PoolID,
-				TargetIP:         p.TargetIP,
-				TargetPort:       p.TargetPort,
-				TargetPortHTTP:   p.TargetPortHTTP,
-				RecordName:       p.RecordName,
-				DomainFQDN:       p.DomainFQDN,
-				IsCurrent:        false,
-				ListenerProtocol: p.ListenerProtocol,
+				PoolID:            p.PoolID,
+				TargetIP:          p.TargetIP,
+				TargetScheme:      p.TargetScheme,
+				TargetPort:        p.TargetPort,
+				TargetPortHTTP:    p.TargetPortHTTP,
+				PreserveHost:      p.PreserveHost,
+				TLSVerifyUpstream: p.TLSVerifyUpstream,
+				SSLEmail:          p.SSLEmail,
+				RecordName:        p.RecordName,
+				DomainFQDN:        p.DomainFQDN,
+				IsCurrent:         false,
+				ProxyMode:         p.ProxyMode,
+				ListenerProtocol:  p.ListenerProtocol,
 			})
 		}
 	}
 
 	var wildcardPools []struct {
-		PoolID           uuid.UUID `db:"pool_id"`
-		TargetIP         string    `db:"target_ip"`
-		TargetPort       int       `db:"target_port"`
-		TargetPortHTTP   int       `db:"target_port_http"`
-		DomainFQDN       string    `db:"domain_fqdn"`
-		IncludeRoot      bool      `db:"include_root"`
-		IsCurrent        bool      `db:"is_current"`
-		ListenerProtocol string    `db:"listener_protocol"`
+		PoolID            uuid.UUID `db:"pool_id"`
+		TargetIP          string    `db:"target_ip"`
+		TargetScheme      string    `db:"target_scheme"`
+		TargetPort        int       `db:"target_port"`
+		TargetPortHTTP    int       `db:"target_port_http"`
+		PreserveHost      bool      `db:"preserve_host"`
+		TLSVerifyUpstream bool      `db:"tls_verify_upstream"`
+		SSLEmail          string    `db:"ssl_email"`
+		DomainFQDN        string    `db:"domain_fqdn"`
+		IncludeRoot       bool      `db:"include_root"`
+		IsCurrent         bool      `db:"is_current"`
+		ProxyMode         string    `db:"proxy_mode"`
+		ListenerProtocol  string    `db:"listener_protocol"`
 	}
 	g.db.Select(&wildcardPools, `
 		SELECT 
 			wp.id as pool_id,
 			wp.target_ip,
+			COALESCE(wp.target_scheme, 'http') as target_scheme,
 			wp.target_port,
 			COALESCE(wp.target_port_http, 80) as target_port_http,
+			COALESCE(wp.preserve_host, true) as preserve_host,
+			COALESCE(wp.tls_verify_upstream, false) as tls_verify_upstream,
+			COALESCE(wp.ssl_email, 'admin@example.com') as ssl_email,
 			dmd.fqdn as domain_fqdn,
 			wp.include_root,
 			(wp.current_machine_id = $1) as is_current,
+			COALESCE(dmd.proxy_mode, 'static') as proxy_mode,
 			COALESCE(dmd.listener_protocol, 'http_and_https') as listener_protocol
 		FROM dns_wildcard_pool_members wm
 		JOIN dns_wildcard_pools wp ON wm.pool_id = wp.id
@@ -139,22 +193,32 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (Pas
 
 	// Also get wildcard pools where this machine is in a group
 	var groupWildcardPools []struct {
-		PoolID           uuid.UUID `db:"pool_id"`
-		TargetIP         string    `db:"target_ip"`
-		TargetPort       int       `db:"target_port"`
-		TargetPortHTTP   int       `db:"target_port_http"`
-		DomainFQDN       string    `db:"domain_fqdn"`
-		IncludeRoot      bool      `db:"include_root"`
-		ListenerProtocol string    `db:"listener_protocol"`
+		PoolID            uuid.UUID `db:"pool_id"`
+		TargetIP          string    `db:"target_ip"`
+		TargetScheme      string    `db:"target_scheme"`
+		TargetPort        int       `db:"target_port"`
+		TargetPortHTTP    int       `db:"target_port_http"`
+		PreserveHost      bool      `db:"preserve_host"`
+		TLSVerifyUpstream bool      `db:"tls_verify_upstream"`
+		SSLEmail          string    `db:"ssl_email"`
+		DomainFQDN        string    `db:"domain_fqdn"`
+		IncludeRoot       bool      `db:"include_root"`
+		ProxyMode         string    `db:"proxy_mode"`
+		ListenerProtocol  string    `db:"listener_protocol"`
 	}
 	g.db.Select(&groupWildcardPools, `
 		SELECT DISTINCT
 			wp.id as pool_id,
 			wp.target_ip,
+			COALESCE(wp.target_scheme, 'http') as target_scheme,
 			wp.target_port,
 			COALESCE(wp.target_port_http, 80) as target_port_http,
+			COALESCE(wp.preserve_host, true) as preserve_host,
+			COALESCE(wp.tls_verify_upstream, false) as tls_verify_upstream,
+			COALESCE(wp.ssl_email, 'admin@example.com') as ssl_email,
 			dmd.fqdn as domain_fqdn,
 			wp.include_root,
+			COALESCE(dmd.proxy_mode, 'static') as proxy_mode,
 			COALESCE(dmd.listener_protocol, 'http_and_https') as listener_protocol
 		FROM dns_wildcard_pools wp
 		JOIN dns_managed_domains dmd ON wp.dns_domain_id = dmd.id
@@ -170,23 +234,33 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (Pas
 	for _, p := range groupWildcardPools {
 		if !wildcardPoolIDs[p.PoolID] {
 			wildcardPools = append(wildcardPools, struct {
-				PoolID           uuid.UUID `db:"pool_id"`
-				TargetIP         string    `db:"target_ip"`
-				TargetPort       int       `db:"target_port"`
-				TargetPortHTTP   int       `db:"target_port_http"`
-				DomainFQDN       string    `db:"domain_fqdn"`
-				IncludeRoot      bool      `db:"include_root"`
-				IsCurrent        bool      `db:"is_current"`
-				ListenerProtocol string    `db:"listener_protocol"`
+				PoolID            uuid.UUID `db:"pool_id"`
+				TargetIP          string    `db:"target_ip"`
+				TargetScheme      string    `db:"target_scheme"`
+				TargetPort        int       `db:"target_port"`
+				TargetPortHTTP    int       `db:"target_port_http"`
+				PreserveHost      bool      `db:"preserve_host"`
+				TLSVerifyUpstream bool      `db:"tls_verify_upstream"`
+				SSLEmail          string    `db:"ssl_email"`
+				DomainFQDN        string    `db:"domain_fqdn"`
+				IncludeRoot       bool      `db:"include_root"`
+				IsCurrent         bool      `db:"is_current"`
+				ProxyMode         string    `db:"proxy_mode"`
+				ListenerProtocol  string    `db:"listener_protocol"`
 			}{
-				PoolID:           p.PoolID,
-				TargetIP:         p.TargetIP,
-				TargetPort:       p.TargetPort,
-				TargetPortHTTP:   p.TargetPortHTTP,
-				DomainFQDN:       p.DomainFQDN,
-				IncludeRoot:      p.IncludeRoot,
-				IsCurrent:        false,
-				ListenerProtocol: p.ListenerProtocol,
+				PoolID:            p.PoolID,
+				TargetIP:          p.TargetIP,
+				TargetScheme:      p.TargetScheme,
+				TargetPort:        p.TargetPort,
+				TargetPortHTTP:    p.TargetPortHTTP,
+				PreserveHost:      p.PreserveHost,
+				TLSVerifyUpstream: p.TLSVerifyUpstream,
+				SSLEmail:          p.SSLEmail,
+				DomainFQDN:        p.DomainFQDN,
+				IncludeRoot:       p.IncludeRoot,
+				IsCurrent:         false,
+				ProxyMode:         p.ProxyMode,
+				ListenerProtocol:  p.ListenerProtocol,
 			})
 		}
 	}
@@ -195,55 +269,109 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (Pas
 		return PassthroughNginxConfigBundle{}, nil // No passthrough config needed
 	}
 
-	// Check if any pool has proxy_protocol enabled (direct members + group members)
-	var proxyProtocolEnabled bool
-	var proxyProtocolCount int
-	g.db.Get(&proxyProtocolCount, `
-		SELECT COUNT(*) FROM (
-			-- Direct record pool members
-			SELECT 1 FROM dns_passthrough_pools pp
+	var proxyStates []passthroughProxyProtocolState
+	g.db.Select(&proxyStates, `
+		SELECT domain, BOOL_OR(enabled) AS enabled
+		FROM (
+			SELECT CASE WHEN dr.name = '@' THEN dmd.fqdn ELSE dr.name || '.' || dmd.fqdn END AS domain,
+			       COALESCE(pp.proxy_protocol, true) AS enabled
+			FROM dns_passthrough_pools pp
+			JOIN dns_records dr ON pp.dns_record_id = dr.id
+			JOIN dns_managed_domains dmd ON dr.dns_domain_id = dmd.id
 			JOIN dns_passthrough_members pm ON pm.pool_id = pp.id
-			WHERE pm.machine_id = $1 AND pm.is_enabled = true AND COALESCE(pp.proxy_protocol, true) = true
+			WHERE pm.machine_id = $1 AND pm.is_enabled = true AND COALESCE(dmd.listener_protocol, 'http_and_https') != 'http_only' AND COALESCE(dmd.proxy_mode, 'static') = 'separate'
 			UNION ALL
-			-- Record pool members via groups
-			SELECT 1 FROM dns_passthrough_pools pp
+			SELECT CASE WHEN dr.name = '@' THEN dmd.fqdn ELSE dr.name || '.' || dmd.fqdn END AS domain,
+			       COALESCE(pp.proxy_protocol, true) AS enabled
+			FROM dns_passthrough_pools pp
+			JOIN dns_records dr ON pp.dns_record_id = dr.id
+			JOIN dns_managed_domains dmd ON dr.dns_domain_id = dmd.id
 			JOIN machine_group_members gm ON gm.group_id = ANY(pp.group_ids)
-			WHERE gm.machine_id = $1 AND COALESCE(pp.proxy_protocol, true) = true
+			WHERE gm.machine_id = $1 AND COALESCE(dmd.listener_protocol, 'http_and_https') != 'http_only' AND COALESCE(dmd.proxy_mode, 'static') = 'separate'
 			UNION ALL
-			-- Direct wildcard pool members
-			SELECT 1 FROM dns_wildcard_pools wp
+			SELECT dmd.fqdn AS domain,
+			       COALESCE(wp.proxy_protocol, true) AS enabled
+			FROM dns_wildcard_pools wp
+			JOIN dns_managed_domains dmd ON wp.dns_domain_id = dmd.id
 			JOIN dns_wildcard_pool_members wm ON wm.pool_id = wp.id
-			WHERE wm.machine_id = $1 AND wm.is_enabled = true AND COALESCE(wp.proxy_protocol, true) = true
+			WHERE wm.machine_id = $1 AND wm.is_enabled = true AND COALESCE(dmd.listener_protocol, 'http_and_https') != 'http_only' AND COALESCE(dmd.proxy_mode, 'static') = 'wildcard'
 			UNION ALL
-			-- Wildcard pool members via groups
-			SELECT 1 FROM dns_wildcard_pools wp
+			SELECT dmd.fqdn AS domain,
+			       COALESCE(wp.proxy_protocol, true) AS enabled
+			FROM dns_wildcard_pools wp
+			JOIN dns_managed_domains dmd ON wp.dns_domain_id = dmd.id
 			JOIN machine_group_members gm ON gm.group_id = ANY(wp.group_ids)
-			WHERE gm.machine_id = $1 AND COALESCE(wp.proxy_protocol, true) = true
+			WHERE gm.machine_id = $1 AND COALESCE(dmd.listener_protocol, 'http_and_https') != 'http_only' AND COALESCE(dmd.proxy_mode, 'static') = 'wildcard'
 		) t
+		GROUP BY domain
+		ORDER BY domain
 	`, machineID)
-	proxyProtocolEnabled = proxyProtocolCount > 0
+	proxyProtocolEnabled := false
+	hasProxyProtocolEnabled := false
+	hasProxyProtocolDisabled := false
+	var proxyEnabledDomains []string
+	var proxyDisabledDomains []string
+	for _, state := range proxyStates {
+		if state.Enabled {
+			hasProxyProtocolEnabled = true
+			proxyProtocolEnabled = true
+			proxyEnabledDomains = append(proxyEnabledDomains, state.Domain)
+		} else {
+			hasProxyProtocolDisabled = true
+			proxyDisabledDomains = append(proxyDisabledDomains, state.Domain)
+		}
+	}
+	if hasProxyProtocolEnabled && hasProxyProtocolDisabled {
+		return PassthroughNginxConfigBundle{}, fmt.Errorf("mixed HTTPS PROXY protocol settings for machine %s: nginx stream uses one shared listen 443 server, so PROXY protocol cannot be enabled per SNI domain; enabled=%s disabled=%s", machineID, strings.Join(proxyEnabledDomains, ", "), strings.Join(proxyDisabledDomains, ", "))
+	}
 
 	var streamConfig strings.Builder
 	var httpConfig strings.Builder
+	var l7Config strings.Builder
+	l7DomainsSet := make(map[string]bool)
+	l7DomainEmails := make(map[string]string)
+	var l7Domains []string
 
-	// Emit HTTPS (port 443) only when at least one domain allows HTTPS (not http_only)
-	hasHTTPS := false
+	// Detect L4/L7 composition on this proxy machine.
+	hasL4HTTPS := false
+	hasL7 := false
+	for _, pool := range wildcardPools {
+		if pool.ProxyMode != "wildcard" && pool.ProxyMode != "layer7" {
+			continue
+		}
+		if pool.ProxyMode == "layer7" {
+			return PassthroughNginxConfigBundle{}, fmt.Errorf("layer7 proxy mode is currently unsupported for wildcard pools on machine %s; wildcard domain=%s requires DNS-01 wildcard certificate support", machineID, pool.DomainFQDN)
+		}
+	}
 	for _, pool := range recordPools {
+		if pool.ProxyMode == "static" {
+			continue
+		}
+		if pool.ProxyMode == "layer7" {
+			hasL7 = true
+			continue
+		}
 		if pool.ListenerProtocol != "http_only" {
-			hasHTTPS = true
+			hasL4HTTPS = true
 			break
 		}
 	}
-	if !hasHTTPS {
+	if !hasL4HTTPS {
 		for _, pool := range wildcardPools {
+			if pool.ProxyMode != "wildcard" {
+				continue
+			}
 			if pool.ListenerProtocol != "http_only" {
-				hasHTTPS = true
+				hasL4HTTPS = true
 				break
 			}
 		}
 	}
+	if hasL4HTTPS && hasL7 {
+		return PassthroughNginxConfigBundle{}, fmt.Errorf("cannot mix layer4 passthrough and layer7 reverse proxy on machine %s: both require shared 443 listener ownership", machineID)
+	}
 
-	if hasHTTPS {
+	if hasL4HTTPS {
 		streamConfig.WriteString("# Configuratix Passthrough Configuration\n")
 		streamConfig.WriteString("# Auto-generated - DO NOT EDIT MANUALLY\n")
 		streamConfig.WriteString("# Included from stream{} block in nginx.conf\n\n")
@@ -253,6 +381,9 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (Pas
 		streamConfig.WriteString("    default reject;\n")
 
 		for _, pool := range recordPools {
+			if pool.ProxyMode != "separate" {
+				continue
+			}
 			if pool.ListenerProtocol == "http_only" {
 				continue
 			}
@@ -264,6 +395,9 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (Pas
 		}
 
 		for _, pool := range wildcardPools {
+			if pool.ProxyMode != "wildcard" {
+				continue
+			}
 			if pool.ListenerProtocol == "http_only" {
 				continue
 			}
@@ -304,6 +438,9 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (Pas
 
 	httpTargets := make(map[string]string) // domain -> target:port
 	for _, pool := range recordPools {
+		if pool.ProxyMode != "separate" {
+			continue
+		}
 		if pool.ListenerProtocol == "https_only" {
 			continue
 		}
@@ -314,6 +451,9 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (Pas
 		httpTargets[fullDomain] = fmt.Sprintf("%s:%d", pool.TargetIP, pool.TargetPortHTTP)
 	}
 	for _, pool := range wildcardPools {
+		if pool.ProxyMode != "wildcard" {
+			continue
+		}
 		if pool.ListenerProtocol == "https_only" {
 			continue
 		}
@@ -344,9 +484,110 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (Pas
 		}
 	}
 
+	// Layer 7 reverse proxy config (TLS termination on proxy machine).
+	if hasL7 {
+		l7Config.WriteString("# Configuratix Layer7 Reverse Proxy Configuration\n")
+		l7Config.WriteString("# Auto-generated - DO NOT EDIT MANUALLY\n\n")
+
+		for _, pool := range recordPools {
+			if pool.ProxyMode != "layer7" {
+				continue
+			}
+			fullDomain := pool.DomainFQDN
+			if pool.RecordName != "@" {
+				fullDomain = pool.RecordName + "." + pool.DomainFQDN
+			}
+
+			targetScheme := strings.ToLower(pool.TargetScheme)
+			if targetScheme != "https" {
+				targetScheme = "http"
+			}
+			targetPort := pool.TargetPortHTTP
+			if targetScheme == "https" {
+				targetPort = pool.TargetPort
+			}
+			upstream := fmt.Sprintf("%s://%s:%d", targetScheme, pool.TargetIP, targetPort)
+
+			// HTTP listener (always needed for ACME challenge).
+			l7Config.WriteString("server {\n")
+			l7Config.WriteString("    listen 80;\n")
+			l7Config.WriteString(fmt.Sprintf("    server_name %s;\n\n", fullDomain))
+			l7Config.WriteString("    location /.well-known/acme-challenge/ {\n")
+			l7Config.WriteString("        root /var/www/configuratix-acme;\n")
+			l7Config.WriteString("    }\n\n")
+			if pool.ListenerProtocol == "http_only" {
+				l7Config.WriteString("    location / {\n")
+				l7Config.WriteString(fmt.Sprintf("        proxy_pass %s;\n", upstream))
+				if pool.PreserveHost {
+					l7Config.WriteString("        proxy_set_header Host $host;\n")
+				}
+				l7Config.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
+				l7Config.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
+				l7Config.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
+				l7Config.WriteString("        proxy_set_header X-Forwarded-Host $host;\n")
+				l7Config.WriteString("        proxy_set_header X-Forwarded-Port $server_port;\n")
+				l7Config.WriteString("        proxy_connect_timeout 10s;\n")
+				l7Config.WriteString("        proxy_read_timeout 30m;\n")
+				l7Config.WriteString("        proxy_send_timeout 30m;\n")
+				if targetScheme == "https" {
+					l7Config.WriteString("        proxy_ssl_server_name on;\n")
+					if !pool.TLSVerifyUpstream {
+						l7Config.WriteString("        proxy_ssl_verify off;\n")
+					}
+				}
+				l7Config.WriteString("    }\n")
+			} else {
+				l7Config.WriteString("    location / {\n")
+				l7Config.WriteString("        return 301 https://$host$request_uri;\n")
+				l7Config.WriteString("    }\n")
+			}
+			l7Config.WriteString("}\n\n")
+
+			if pool.ListenerProtocol != "http_only" {
+				l7Config.WriteString("server {\n")
+				l7Config.WriteString("    listen 443 ssl http2;\n")
+				l7Config.WriteString(fmt.Sprintf("    server_name %s;\n\n", fullDomain))
+				l7Config.WriteString(fmt.Sprintf("    ssl_certificate /etc/letsencrypt/live/%s/fullchain.pem;\n", fullDomain))
+				l7Config.WriteString(fmt.Sprintf("    ssl_certificate_key /etc/letsencrypt/live/%s/privkey.pem;\n", fullDomain))
+				l7Config.WriteString("    ssl_protocols TLSv1.2 TLSv1.3;\n\n")
+				l7Config.WriteString("    location / {\n")
+				l7Config.WriteString(fmt.Sprintf("        proxy_pass %s;\n", upstream))
+				if pool.PreserveHost {
+					l7Config.WriteString("        proxy_set_header Host $host;\n")
+				}
+				l7Config.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
+				l7Config.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
+				l7Config.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
+				l7Config.WriteString("        proxy_set_header X-Forwarded-Host $host;\n")
+				l7Config.WriteString("        proxy_set_header X-Forwarded-Port $server_port;\n")
+				l7Config.WriteString("        proxy_connect_timeout 10s;\n")
+				l7Config.WriteString("        proxy_read_timeout 30m;\n")
+				l7Config.WriteString("        proxy_send_timeout 30m;\n")
+				if targetScheme == "https" {
+					l7Config.WriteString("        proxy_ssl_server_name on;\n")
+					if !pool.TLSVerifyUpstream {
+						l7Config.WriteString("        proxy_ssl_verify off;\n")
+					}
+				}
+				l7Config.WriteString("    }\n")
+				l7Config.WriteString("}\n\n")
+
+				if !l7DomainsSet[fullDomain] {
+					l7DomainsSet[fullDomain] = true
+					l7DomainEmails[fullDomain] = pool.SSLEmail
+					l7Domains = append(l7Domains, fullDomain)
+				}
+			}
+		}
+	}
+	sort.Strings(l7Domains)
+
 	return PassthroughNginxConfigBundle{
-		StreamConfig: streamConfig.String(),
-		HTTPConfig:   httpConfig.String(),
+		StreamConfig:   streamConfig.String(),
+		HTTPConfig:     httpConfig.String(),
+		L7Config:       l7Config.String(),
+		L7Domains:      l7Domains,
+		L7DomainEmails: l7DomainEmails,
 	}, nil
 }
 
@@ -362,6 +603,8 @@ func (g *PassthroughNginxGenerator) ApplyToMachine(machineID uuid.UUID) error {
 	// The config goes to /etc/nginx/stream.d/ or /etc/nginx/conf.d/stream/
 	streamConfigPath := "/etc/nginx/stream.d/configuratix-passthrough.conf"
 	httpConfigPath := "/etc/nginx/conf.d/configuratix/passthrough-dns-http.conf"
+	l7ConfigPath := "/etc/nginx/conf.d/configuratix/passthrough-dns-l7.conf"
+	l7BootstrapPath := "/etc/nginx/conf.d/configuratix/passthrough-l7-bootstrap.conf"
 
 	// Get agent_id for this machine
 	var agentID *uuid.UUID
@@ -371,6 +614,20 @@ func (g *PassthroughNginxGenerator) ApplyToMachine(machineID uuid.UUID) error {
 	}
 
 	needsStream := configs.StreamConfig != ""
+	needsL7 := configs.L7Config != ""
+	var certEmailFunc strings.Builder
+	certEmailFunc.WriteString("cert_email() {\n")
+	certEmailFunc.WriteString("  case \"$1\" in\n")
+	for _, domain := range configs.L7Domains {
+		email := configs.L7DomainEmails[domain]
+		if email == "" {
+			email = "admin@example.com"
+		}
+		certEmailFunc.WriteString(fmt.Sprintf("    %s) printf '%%s\\n' %s ;;\n", shellQuote(domain), shellQuote(email)))
+	}
+	certEmailFunc.WriteString("    *) printf '%s\\n' 'admin@example.com' ;;\n")
+	certEmailFunc.WriteString("  esac\n")
+	certEmailFunc.WriteString("}\n")
 	setupScript := fmt.Sprintf(`
 #!/bin/bash
 set -e
@@ -436,10 +693,178 @@ fi
 
 echo "Passthrough setup complete"
 `, needsStream)
-	// Final step: test config and restart nginx (not just reload, in case it's stopped)
-	restartScript := `
+	ensureL7CertsScript := fmt.Sprintf(`
 #!/bin/bash
 set -e
+
+DOMAINS="%s"
+BOOTSTRAP_FILE="%s"
+ACME_ROOT="/var/www/configuratix-acme"
+STREAM_CONFIG_FILE="%s"
+HTTP_CONFIG_FILE="%s"
+L7_CONFIG_FILE="%s"
+BACKUP_DIR="$(mktemp -d)"
+
+%s
+
+backup_config() {
+  local file="$1"
+  local name
+  name="$(basename "$file")"
+  if [ -f "$file" ]; then
+    mv "$file" "$BACKUP_DIR/$name"
+  fi
+}
+
+restore_config() {
+  local file="$1"
+  local name
+  name="$(basename "$file")"
+  if [ -f "$BACKUP_DIR/$name" ]; then
+    mv "$BACKUP_DIR/$name" "$file"
+  fi
+}
+
+restore_on_error() {
+  echo "ERROR: L7 certificate bootstrap failed; restoring previous nginx configs"
+  rm -f "$BOOTSTRAP_FILE"
+  restore_config "$STREAM_CONFIG_FILE"
+  restore_config "$HTTP_CONFIG_FILE"
+  restore_config "$L7_CONFIG_FILE"
+  rmdir "$BACKUP_DIR" 2>/dev/null || true
+  if nginx -t; then
+    if systemctl is-active --quiet nginx; then
+      systemctl reload nginx || true
+    else
+      systemctl start nginx || true
+    fi
+  fi
+  exit 1
+}
+
+trap restore_on_error ERR
+
+echo "Preparing L7 proxy runtime"
+mkdir -p /etc/nginx/conf.d/configuratix "$ACME_ROOT"
+
+APT_UPDATED=false
+ensure_package() {
+  local binary="$1"
+  local package="$2"
+  if command -v "$binary" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$APT_UPDATED" = "false" ]; then
+    apt-get update -qq
+    APT_UPDATED=true
+  fi
+  DEBIAN_FRONTEND=noninteractive apt-get install -y "$package"
+}
+
+ensure_package nginx nginx
+ensure_package certbot certbot
+ensure_package curl curl
+ensure_package openssl openssl
+
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
+  ufw allow 80/tcp >/dev/null || true
+  ufw allow 443/tcp >/dev/null || true
+fi
+
+mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+cat > /etc/letsencrypt/renewal-hooks/deploy/configuratix-nginx-reload <<'HOOK'
+#!/bin/bash
+set -e
+if systemctl is-active --quiet nginx; then
+  systemctl reload nginx
+fi
+HOOK
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/configuratix-nginx-reload
+
+# Generated L4 configs own the same ports as L7. Remove them before ACME bootstrap
+# so nginx cannot route HTTP-01 challenges through stale passthrough servers.
+backup_config "$STREAM_CONFIG_FILE"
+backup_config "$HTTP_CONFIG_FILE"
+backup_config "$L7_CONFIG_FILE"
+
+if [ -z "$DOMAINS" ]; then
+  echo "No L7 domains require certificates"
+  if nginx -t; then
+    if systemctl is-active --quiet nginx; then
+      systemctl reload nginx
+    else
+      systemctl start nginx
+    fi
+  fi
+  trap - ERR
+  rm -rf "$BACKUP_DIR"
+  exit 0
+fi
+
+echo "Preparing HTTP-01 bootstrap for L7 domains: $DOMAINS"
+
+cat > "$BOOTSTRAP_FILE" <<'HEADER'
+# Configuratix L7 ACME bootstrap
+# Auto-generated - temporary file
+
+HEADER
+
+for DOMAIN in $DOMAINS; do
+cat >> "$BOOTSTRAP_FILE" <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN;
+
+    location /.well-known/acme-challenge/ {
+        root $ACME_ROOT;
+    }
+
+    location / {
+        return 200 "Configuratix ACME bootstrap\\n";
+    }
+}
+
+EOF
+done
+
+nginx -t
+if systemctl is-active --quiet nginx; then
+  systemctl reload nginx
+else
+  systemctl start nginx
+fi
+
+for DOMAIN in $DOMAINS; do
+  SSL_EMAIL="$(cert_email "$DOMAIN")"
+  echo "Ensuring certificate for $DOMAIN with contact $SSL_EMAIL"
+  certbot certonly \
+    --webroot -w "$ACME_ROOT" \
+    -d "$DOMAIN" \
+    --non-interactive \
+    --agree-tos \
+    --no-eff-email \
+    --email "$SSL_EMAIL" \
+    --keep-until-expiring \
+    --cert-name "$DOMAIN"
+done
+
+trap - ERR
+rm -rf "$BACKUP_DIR"
+echo "L7 certificate bootstrap complete"
+`, strings.Join(configs.L7Domains, " "), l7BootstrapPath, streamConfigPath, httpConfigPath, l7ConfigPath, certEmailFunc.String())
+	// Final step: test config and restart nginx (not just reload, in case it's stopped)
+	restartScript := fmt.Sprintf(`
+#!/bin/bash
+set -e
+
+L7_CONFIG_FILE="%s"
+L7_BOOTSTRAP_FILE="%s"
+CLEAN_L7_BOOTSTRAP="%t"
+
+# Remove temporary ACME bootstrap after final L7 config exists
+if [ "$CLEAN_L7_BOOTSTRAP" = "true" ] && [ -f "$L7_CONFIG_FILE" ] && [ -f "$L7_BOOTSTRAP_FILE" ]; then
+    rm -f "$L7_BOOTSTRAP_FILE"
+fi
 
 # Test config
 nginx -t
@@ -462,9 +887,46 @@ if ! systemctl is-active --quiet nginx; then
 fi
 
 echo "Nginx is running successfully"
-`
+`, l7ConfigPath, l7BootstrapPath, needsL7)
+	l7StatusScript := fmt.Sprintf(`
+#!/bin/bash
+set -e
+
+DOMAINS="%s"
+
+if [ -z "$DOMAINS" ]; then
+  echo "No L7 certificate statuses to report"
+  exit 0
+fi
+
+for DOMAIN in $DOMAINS; do
+  CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+  if [ ! -f "$CERT_PATH" ]; then
+    echo "CONFIGURATIX_L7_CERT_STATUS|$DOMAIN|missing||certificate file not found"
+    continue
+  fi
+
+  END_DATE="$(openssl x509 -enddate -noout -in "$CERT_PATH" | cut -d= -f2-)"
+  EXPIRES_AT="$(date -u -d "$END_DATE" +"%%Y-%%m-%%dT%%H:%%M:%%SZ" 2>/dev/null || true)"
+  ISSUER="$(openssl x509 -issuer -noout -in "$CERT_PATH" | sed 's/^issuer=//' | tr '|' '/')"
+  if openssl x509 -checkend 2592000 -noout -in "$CERT_PATH" >/dev/null 2>&1; then
+    STATUS="valid"
+  else
+    STATUS="expiring"
+  fi
+
+  echo "CONFIGURATIX_L7_CERT_STATUS|$DOMAIN|$STATUS|$EXPIRES_AT|$ISSUER"
+done
+`, strings.Join(configs.L7Domains, " "))
+	l7CertTimeout := 300 + len(configs.L7Domains)*120
+	if l7CertTimeout < 420 {
+		l7CertTimeout = 420
+	}
 	steps := []map[string]interface{}{
 		{"action": "exec", "command": setupScript, "timeout": 300},
+	}
+	if needsL7 {
+		steps = append(steps, map[string]interface{}{"action": "exec", "command": ensureL7CertsScript, "timeout": l7CertTimeout})
 	}
 	if configs.StreamConfig != "" {
 		steps = append(steps, map[string]interface{}{"action": "file", "op": "write", "path": streamConfigPath, "content": configs.StreamConfig, "mode": "0644"})
@@ -476,7 +938,16 @@ echo "Nginx is running successfully"
 	} else {
 		steps = append(steps, map[string]interface{}{"action": "file", "op": "delete", "path": httpConfigPath})
 	}
+	if configs.L7Config != "" {
+		steps = append(steps, map[string]interface{}{"action": "file", "op": "write", "path": l7ConfigPath, "content": configs.L7Config, "mode": "0644"})
+	} else {
+		steps = append(steps, map[string]interface{}{"action": "file", "op": "delete", "path": l7ConfigPath})
+		steps = append(steps, map[string]interface{}{"action": "file", "op": "delete", "path": l7BootstrapPath})
+	}
 	steps = append(steps, map[string]interface{}{"action": "exec", "command": restartScript, "timeout": 60})
+	if needsL7 {
+		steps = append(steps, map[string]interface{}{"action": "exec", "command": l7StatusScript, "timeout": 60})
+	}
 
 	payloadBytes, err := json.Marshal(map[string]interface{}{
 		"steps":    steps,
@@ -487,13 +958,36 @@ echo "Nginx is running successfully"
 	}
 	payload := string(payloadBytes)
 
-	_, err = g.db.Exec(`
+	var jobID uuid.UUID
+	err = g.db.Get(&jobID, `
 		INSERT INTO jobs (agent_id, type, payload_json, status)
 		VALUES ($1, 'run', $2::jsonb, 'pending')
+		RETURNING id
 	`, agentID, payload)
 
 	if err != nil {
 		return fmt.Errorf("failed to create job: %w", err)
+	}
+
+	if len(configs.L7Domains) > 0 {
+		_, _ = g.db.Exec(`
+			DELETE FROM dns_l7_certificates
+			WHERE machine_id = $1 AND NOT (domain = ANY($2::text[]))
+		`, machineID, pq.Array(configs.L7Domains))
+		for _, domain := range configs.L7Domains {
+			_, _ = g.db.Exec(`
+				INSERT INTO dns_l7_certificates (machine_id, domain, status, last_job_id, last_checked_at, updated_at)
+				VALUES ($1, $2, 'issuing', $3, NOW(), NOW())
+				ON CONFLICT (machine_id, domain) DO UPDATE SET
+					status = EXCLUDED.status,
+					last_job_id = EXCLUDED.last_job_id,
+					last_error = NULL,
+					last_checked_at = NOW(),
+					updated_at = NOW()
+			`, machineID, domain, jobID)
+		}
+	} else {
+		_, _ = g.db.Exec("DELETE FROM dns_l7_certificates WHERE machine_id = $1", machineID)
 	}
 
 	// Mark nginx config as applied for this machine in all its pools
@@ -543,6 +1037,8 @@ set -e
 
 STREAM_CONFIG_FILE="/etc/nginx/stream.d/configuratix-passthrough.conf"
 HTTP_CONFIG_FILE="/etc/nginx/conf.d/configuratix/passthrough-dns-http.conf"
+L7_CONFIG_FILE="/etc/nginx/conf.d/configuratix/passthrough-dns-l7.conf"
+L7_BOOTSTRAP_FILE="/etc/nginx/conf.d/configuratix/passthrough-l7-bootstrap.conf"
 
 echo "=== Configuratix Passthrough Cleanup ==="
 
@@ -554,6 +1050,14 @@ fi
 if [ -f "$HTTP_CONFIG_FILE" ]; then
     echo "Removing HTTP passthrough config..."
     rm -f "$HTTP_CONFIG_FILE"
+fi
+if [ -f "$L7_CONFIG_FILE" ]; then
+    echo "Removing L7 passthrough config..."
+    rm -f "$L7_CONFIG_FILE"
+fi
+if [ -f "$L7_BOOTSTRAP_FILE" ]; then
+    echo "Removing L7 bootstrap config..."
+    rm -f "$L7_BOOTSTRAP_FILE"
 fi
 
 # 2. Restart nginx
@@ -582,6 +1086,8 @@ echo "Passthrough cleanup complete"
 	if err != nil {
 		return fmt.Errorf("failed to create cleanup job: %w", err)
 	}
+
+	g.db.Exec("DELETE FROM dns_l7_certificates WHERE machine_id = $1", machineID)
 
 	log.Printf("Created passthrough cleanup job for machine %s", machineID)
 	return nil
