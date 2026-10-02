@@ -540,6 +540,8 @@ export interface NginxConfigStructured {
   passthrough_http_enabled?: boolean; // Enable manual passthrough listener/marker for port 80 (default: true)
   passthrough_http_port?: number; // Backend HTTP port for Host-based HTTP routing
   passthrough_proxy_protocol?: boolean; // Send PROXY protocol to HTTPS backend
+  passthrough_http_client_max_body_size?: string; // client_max_body_size for the port 80 block (default: 100M, 0 = unlimited)
+  passthrough_http_extra_directives?: string; // Extra raw directives inside location / of the port 80 block
 
   // Standard HTTP mode settings
   ssl_mode: string;

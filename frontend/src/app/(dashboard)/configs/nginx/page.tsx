@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -37,6 +38,8 @@ export default function NginxConfigsPage() {
   const [formPassthroughHttpEnabled, setFormPassthroughHttpEnabled] = useState(true);
   const [formPassthroughHttpPort, setFormPassthroughHttpPort] = useState(80);
   const [formPassthroughProxyProtocol, setFormPassthroughProxyProtocol] = useState(false);
+  const [formPassthroughHttpBodySize, setFormPassthroughHttpBodySize] = useState("");
+  const [formPassthroughHttpExtra, setFormPassthroughHttpExtra] = useState("");
   const [formSslMode, setFormSslMode] = useState("allow_http");
   const [formSslEmail, setFormSslEmail] = useState("");
   const [formCorsEnabled, setFormCorsEnabled] = useState(true);
@@ -88,6 +91,8 @@ export default function NginxConfigsPage() {
     setFormPassthroughHttpEnabled(true);
     setFormPassthroughHttpPort(80);
     setFormPassthroughProxyProtocol(false);
+    setFormPassthroughHttpBodySize("");
+    setFormPassthroughHttpExtra("");
     setFormSslMode("allow_http");
     setFormSslEmail("");
     setFormCorsEnabled(true);
@@ -125,6 +130,8 @@ export default function NginxConfigsPage() {
         passthrough_http_enabled: formIsPassthrough ? formPassthroughHttpEnabled : undefined,
         passthrough_http_port: formIsPassthrough ? formPassthroughHttpPort : undefined,
         passthrough_proxy_protocol: formIsPassthrough ? formPassthroughProxyProtocol : undefined,
+        passthrough_http_client_max_body_size: formIsPassthrough ? formPassthroughHttpBodySize.trim() || undefined : undefined,
+        passthrough_http_extra_directives: formIsPassthrough ? formPassthroughHttpExtra.trim() || undefined : undefined,
         ssl_mode: formSslMode,
         ssl_email: formSslEmail || undefined,
         locations: formIsPassthrough ? [] : locationsWithPHP,
@@ -173,6 +180,8 @@ export default function NginxConfigsPage() {
         passthrough_http_enabled: formIsPassthrough ? formPassthroughHttpEnabled : undefined,
         passthrough_http_port: formIsPassthrough ? formPassthroughHttpPort : undefined,
         passthrough_proxy_protocol: formIsPassthrough ? formPassthroughProxyProtocol : undefined,
+        passthrough_http_client_max_body_size: formIsPassthrough ? formPassthroughHttpBodySize.trim() || undefined : undefined,
+        passthrough_http_extra_directives: formIsPassthrough ? formPassthroughHttpExtra.trim() || undefined : undefined,
         ssl_mode: formSslMode,
         ssl_email: formSslEmail || undefined,
         locations: formIsPassthrough ? [] : locationsWithPHP,
@@ -232,6 +241,8 @@ export default function NginxConfigsPage() {
     setFormPassthroughHttpEnabled(true);
     setFormPassthroughHttpPort(80);
     setFormPassthroughProxyProtocol(false);
+    setFormPassthroughHttpBodySize("");
+    setFormPassthroughHttpExtra("");
     if (config.structured_json) {
       const structured = config.structured_json as NginxConfigStructured;
       // Passthrough settings
@@ -240,6 +251,8 @@ export default function NginxConfigsPage() {
       setFormPassthroughHttpEnabled(structured.passthrough_http_enabled ?? true);
       setFormPassthroughHttpPort(structured.passthrough_http_port ?? 80);
       setFormPassthroughProxyProtocol(structured.passthrough_proxy_protocol ?? false);
+      setFormPassthroughHttpBodySize(structured.passthrough_http_client_max_body_size || "");
+      setFormPassthroughHttpExtra(structured.passthrough_http_extra_directives || "");
       // Standard settings
       setFormSslMode(structured.ssl_mode || "allow_http");
       setFormSslEmail(structured.ssl_email || "");
@@ -715,6 +728,53 @@ export default function NginxConfigsPage() {
                         onChange={(e) => setFormPassthroughHttpPort(Number(e.target.value) || 80)}
                         className="h-9 font-mono"
                       />
+                    </div>
+                  )}
+
+                  {formPassthroughHttpEnabled && (
+                    <div className="space-y-3 rounded-lg border border-border/60 bg-muted/30 px-3 py-3">
+                      <div className="p-2.5 rounded-md bg-sky-500/10 border border-sky-500/20 text-xs text-muted-foreground space-y-1">
+                        <p className="font-medium text-sky-400">Port 80 is a real nginx HTTP proxy</p>
+                        <p>
+                          When the domain is proxied through Cloudflare (or any CDN) to this proxy over HTTP
+                          (for example with &quot;Allow direct HTTP requests&quot; on the backend), all requests hit this port 80 block.
+                          Its limits (body size, timeouts) apply before the request reaches the backend, so errors like
+                          413 Request Entity Too Large come from this proxy, not from the backend.
+                          Port 443 passthrough is raw TCP and is not affected.
+                        </p>
+                        <p>Changes apply when the domain is (re)assigned to the proxy.</p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-sm">Max request body size (port 80)</Label>
+                        <Input
+                          placeholder="100M"
+                          value={formPassthroughHttpBodySize}
+                          onChange={(e) => setFormPassthroughHttpBodySize(e.target.value)}
+                          className="h-9 font-mono"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          nginx <code className="bg-black/30 px-1 rounded">client_max_body_size</code>. Empty uses 100M, 0 disables the limit. Format: number with optional k/m/g suffix.
+                        </p>
+                        {formPassthroughHttpBodySize.trim() !== "" && !/^\d+[kKmMgG]?$/.test(formPassthroughHttpBodySize.trim()) && (
+                          <p className="text-xs text-destructive">Invalid size, 100M will be used.</p>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-sm">Extra port 80 directives (optional)</Label>
+                        <Textarea
+                          placeholder={"proxy_buffering off;\nproxy_request_buffering off;"}
+                          value={formPassthroughHttpExtra}
+                          onChange={(e) => setFormPassthroughHttpExtra(e.target.value)}
+                          className="min-h-[90px] font-mono text-xs"
+                          spellCheck={false}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Raw nginx directives inserted inside <code className="bg-black/30 px-1 rounded">location /</code> of the port 80 server block.
+                          Invalid directives make <code className="bg-black/30 px-1 rounded">nginx -t</code> fail; the apply job then stops and the previous proxy config is restored.
+                        </p>
+                      </div>
                     </div>
                   )}
 

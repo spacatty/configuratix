@@ -26,6 +26,9 @@ type NginxConfigStructured struct {
 	PassthroughHTTPEnabled   *bool  `json:"passthrough_http_enabled,omitempty"`   // Enable manual passthrough listener/marker for port 80 (defaults true when omitted)
 	PassthroughHTTPPort      int    `json:"passthrough_http_port,omitempty"`      // Backend HTTP port for Host-based HTTP routing
 	PassthroughProxyProtocol *bool  `json:"passthrough_proxy_protocol,omitempty"` // Send PROXY protocol to HTTPS backend
+	// Port 80 HTTP block settings (real nginx HTTP proxy, e.g. when Cloudflare reaches the proxy over HTTP)
+	PassthroughHTTPClientMaxBodySize string `json:"passthrough_http_client_max_body_size,omitempty"` // Empty = 100M, "0" = unlimited
+	PassthroughHTTPExtraDirectives   string `json:"passthrough_http_extra_directives,omitempty"`     // Raw directives inserted into location /
 
 	// Standard HTTP mode settings
 	SSLMode         string           `json:"ssl_mode"`            // disabled, allow_http, redirect_https

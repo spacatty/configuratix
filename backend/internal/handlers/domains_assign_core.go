@@ -161,6 +161,8 @@ func (h *DomainsHandler) assignDomainCore(id uuid.UUID, req AssignDomainRequest)
 						"http_port":      passthroughValues["http_port"],
 						"enable_http":    httpEnabledValue,
 						"proxy_protocol": passthroughValues["proxy_protocol"],
+						"http_client_max_body_size": passthroughValues["http_client_max_body_size"],
+						"http_extra_b64":            passthroughValues["http_extra_b64"],
 					})
 					tx.Exec(`
 						INSERT INTO jobs (agent_id, type, payload_json, status)

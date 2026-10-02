@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,6 +34,8 @@ type structuredConfig struct {
 	PassthroughHTTPEnabled   *bool  `json:"passthrough_http_enabled"`
 	PassthroughHTTPPort      int    `json:"passthrough_http_port"`
 	PassthroughProxyProtocol *bool  `json:"passthrough_proxy_protocol"`
+	PassthroughHTTPClientMaxBodySize string `json:"passthrough_http_client_max_body_size"`
+	PassthroughHTTPExtraDirectives   string `json:"passthrough_http_extra_directives"`
 	SSLMode                  string `json:"ssl_mode"`
 	AutoindexOff             *bool  `json:"autoindex_off"`
 	DenyAllCatchall          *bool  `json:"deny_all_catchall"`
@@ -137,13 +141,29 @@ func getPassthroughApplyValues(structuredJSON json.RawMessage) map[string]string
 		proxyProtocol = "true"
 	}
 
+	bodySize := strings.TrimSpace(cfg.PassthroughHTTPClientMaxBodySize)
+	if !nginxSizeRegex.MatchString(bodySize) {
+		bodySize = defaultPassthroughHTTPBodySize
+	}
+
+	extraB64 := ""
+	if extra := strings.TrimSpace(cfg.PassthroughHTTPExtraDirectives); extra != "" {
+		extraB64 = base64.StdEncoding.EncodeToString([]byte(extra))
+	}
+
 	return map[string]string{
-		"target":         target,
-		"https_port":     httpsPort,
-		"http_port":      httpPort,
-		"proxy_protocol": proxyProtocol,
+		"target":                    target,
+		"https_port":                httpsPort,
+		"http_port":                 httpPort,
+		"proxy_protocol":            proxyProtocol,
+		"http_client_max_body_size": bodySize,
+		"http_extra_b64":            extraB64,
 	}
 }
+
+const defaultPassthroughHTTPBodySize = "100M"
+
+var nginxSizeRegex = regexp.MustCompile(`^\d+[kKmMgG]?$`)
 
 func isNumericPort(value string) bool {
 	for _, r := range value {

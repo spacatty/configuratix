@@ -79,6 +79,209 @@ fi
 echo "Reloading PHP-FPM service for $VERSION"
 systemctl restart "php${VERSION}-fpm"`
 
+// passthroughRegenerateShell rebuilds the manual passthrough stream (443) and HTTP (80) configs
+// from all passthrough-*.conf marker files. Expects STREAM_DIR, CONFIG_FILE and HTTP_CONFIG_FILE.
+// If no markers remain, it cleans up, restores DNS Management configs, reloads nginx and exits.
+const passthroughRegenerateShell = `
+echo "=== Regenerating passthrough config ==="
+mkdir -p "$STREAM_DIR" /etc/nginx/conf.d/configuratix
+
+declare -A HTTPS_TARGETS
+declare -A HTTP_TARGETS
+declare -A HTTP_BODY_SIZES
+declare -A HTTP_EXTRAS_B64
+PROXY_PROTOCOL_ENABLED=false
+PROXY_PROTOCOL_DISABLED=false
+
+for marker in "$STREAM_DIR"/passthrough-*.conf; do
+    [ -f "$marker" ] || continue
+
+    # passthrough-domain.com.conf -> domain.com
+    filename=$(basename "$marker")
+    dom="${filename#passthrough-}"
+    dom="${dom%.conf}"
+
+    target_https=$(grep "^# Target HTTPS:" "$marker" 2>/dev/null | sed 's/^# Target HTTPS: *//' | tr -d ' ')
+    target_http=$(grep "^# Target HTTP:" "$marker" 2>/dev/null | sed 's/^# Target HTTP: *//' | tr -d ' ')
+    marker_proxy_protocol=$(grep "^# PROXY Protocol:" "$marker" 2>/dev/null | sed 's/^# PROXY Protocol: *//' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+    body_size=$(grep "^# HTTP Client Max Body Size:" "$marker" 2>/dev/null | sed 's/^# HTTP Client Max Body Size: *//' | tr -d ' ')
+    extra_b64=$(grep "^# HTTP Extra B64:" "$marker" 2>/dev/null | sed 's/^# HTTP Extra B64: *//' | tr -d ' ')
+
+    # Older markers have no body size; invalid values fall back to the default too
+    if ! [[ "$body_size" =~ ^[0-9]+[kKmMgG]?$ ]]; then
+        body_size="100M"
+    fi
+
+    proxy_status="disabled"
+    if [ -n "$target_https" ]; then
+        HTTPS_TARGETS["$dom"]="$target_https"
+        if [ "$marker_proxy_protocol" = "true" ] || [ "$marker_proxy_protocol" = "enabled" ]; then
+            PROXY_PROTOCOL_ENABLED=true
+            proxy_status="enabled"
+        else
+            PROXY_PROTOCOL_DISABLED=true
+        fi
+    fi
+    if [ -n "$target_http" ]; then
+        HTTP_TARGETS["$dom"]="$target_http"
+        HTTP_BODY_SIZES["$dom"]="$body_size"
+        HTTP_EXTRAS_B64["$dom"]="$extra_b64"
+        echo "  - $dom -> HTTPS: $target_https, HTTP: $target_http (client_max_body_size $body_size), HTTPS PROXY protocol: $proxy_status"
+    else
+        echo "  - $dom -> HTTPS: $target_https, HTTP: disabled, HTTPS PROXY protocol: $proxy_status"
+    fi
+done
+
+if [ ${#HTTPS_TARGETS[@]} -eq 0 ]; then
+    echo "No passthrough domains remaining, cleaning up..."
+    rm -f "$CONFIG_FILE"
+    rm -f "$HTTP_CONFIG_FILE"
+
+    DNS_MGMT_CONFIG="$STREAM_DIR/configuratix-passthrough.conf"
+    DNS_MGMT_HTTP_CONFIG="/etc/nginx/conf.d/configuratix/passthrough-dns-http.conf"
+    if [ -f "${DNS_MGMT_CONFIG}.disabled-by-manual" ]; then
+        echo "Re-enabling DNS Management stream passthrough config..."
+        mv "${DNS_MGMT_CONFIG}.disabled-by-manual" "$DNS_MGMT_CONFIG"
+    fi
+    if [ -f "${DNS_MGMT_HTTP_CONFIG}.disabled-by-manual" ]; then
+        echo "Re-enabling DNS Management HTTP passthrough config..."
+        mv "${DNS_MGMT_HTTP_CONFIG}.disabled-by-manual" "$DNS_MGMT_HTTP_CONFIG"
+    fi
+
+    nginx -t && (systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || true)
+    echo "Passthrough removed, original sites restored"
+    exit 0
+fi
+
+if [ "$PROXY_PROTOCOL_ENABLED" = "true" ] && [ "$PROXY_PROTOCOL_DISABLED" = "true" ]; then
+    echo "ERROR: Mixed HTTPS PROXY protocol settings detected in manual passthrough markers."
+    echo "Nginx stream uses one shared listen 443 server, so PROXY protocol cannot be enabled for only some SNI domains."
+    echo "Set all passthrough domains on this proxy to the same HTTPS PROXY protocol setting, or split them across different proxy machines/IPs."
+    exit 1
+fi
+
+PT_BACKUP_DIR=$(mktemp -d)
+[ -f "$CONFIG_FILE" ] && cp "$CONFIG_FILE" "$PT_BACKUP_DIR/stream.conf"
+[ -f "$HTTP_CONFIG_FILE" ] && cp "$HTTP_CONFIG_FILE" "$PT_BACKUP_DIR/http.conf"
+
+cat > "$CONFIG_FILE" << 'HEADER'
+# Configuratix Manual Passthrough Configuration
+# Auto-generated - DO NOT EDIT MANUALLY
+# Domains are tracked via passthrough-*.conf marker files
+
+HEADER
+
+echo "# SNI-based backend routing for HTTPS" >> "$CONFIG_FILE"
+echo "map \$ssl_preread_server_name \$backend_https {" >> "$CONFIG_FILE"
+echo "    default reject;" >> "$CONFIG_FILE"
+for dom in "${!HTTPS_TARGETS[@]}"; do
+    echo "    $dom ${HTTPS_TARGETS[$dom]};" >> "$CONFIG_FILE"
+done
+echo "}" >> "$CONFIG_FILE"
+echo "" >> "$CONFIG_FILE"
+
+cat >> "$CONFIG_FILE" << 'REJECT'
+# Reject upstream (closed connection)
+upstream reject {
+    server 127.0.0.1:1 down;
+}
+
+REJECT
+
+cat >> "$CONFIG_FILE" << 'HTTPS'
+# HTTPS Passthrough (TLS SNI-based routing)
+server {
+    listen 443;
+    ssl_preread on;
+    proxy_pass $backend_https;
+HTTPS
+if [ "$PROXY_PROTOCOL_ENABLED" = "true" ]; then
+    echo "    proxy_protocol on;" >> "$CONFIG_FILE"
+fi
+cat >> "$CONFIG_FILE" << 'HTTPS'
+    proxy_connect_timeout 10s;
+    proxy_timeout 30m;
+}
+
+HTTPS
+
+if [ ${#HTTP_TARGETS[@]} -gt 0 ]; then
+    # Port 80 is a real HTTP proxy (e.g. Cloudflare -> proxy over HTTP), so HTTP limits apply here.
+    # Keep the client's X-Forwarded-Proto (Cloudflare sends https) instead of overwriting it with $scheme.
+    cat > "$HTTP_CONFIG_FILE" << 'HTTPHEADER'
+# Configuratix Manual HTTP Passthrough Configuration
+# Auto-generated - DO NOT EDIT MANUALLY
+
+map $http_x_forwarded_proto $cfx_pt_forwarded_proto {
+    default $http_x_forwarded_proto;
+    ""      $scheme;
+}
+
+HTTPHEADER
+    for dom in "${!HTTP_TARGETS[@]}"; do
+        target="${HTTP_TARGETS[$dom]}"
+        body_size="${HTTP_BODY_SIZES[$dom]}"
+        cat >> "$HTTP_CONFIG_FILE" << EOF
+server {
+    listen 80;
+    server_name $dom;
+    client_max_body_size $body_size;
+
+    location / {
+        proxy_pass http://$target;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$cfx_pt_forwarded_proto;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30m;
+        proxy_send_timeout 30m;
+EOF
+        extra_b64="${HTTP_EXTRAS_B64[$dom]}"
+        if [ -n "$extra_b64" ]; then
+            echo "" >> "$HTTP_CONFIG_FILE"
+            echo "        # Extra directives (Configuratix Nginx Configuration)" >> "$HTTP_CONFIG_FILE"
+            if ! echo "$extra_b64" | base64 -d 2>/dev/null | sed 's/^/        /' >> "$HTTP_CONFIG_FILE"; then
+                echo "WARNING: Failed to decode extra directives for $dom, skipping"
+            fi
+            echo "" >> "$HTTP_CONFIG_FILE"
+        fi
+        cat >> "$HTTP_CONFIG_FILE" << 'EOF'
+    }
+}
+
+EOF
+    done
+else
+    rm -f "$HTTP_CONFIG_FILE"
+fi
+
+echo "Regenerated config with ${#HTTPS_TARGETS[@]} domain(s)"
+echo ""
+echo "=== Generated Config ==="
+cat "$CONFIG_FILE"
+[ -f "$HTTP_CONFIG_FILE" ] && cat "$HTTP_CONFIG_FILE" || true
+
+# Roll back on a failed test so a bad config (e.g. invalid extra directives) does not break later reloads.
+# PT_ROLLBACK_MARKER / PT_MARKER_BACKUP are optionally set by the caller that just wrote a marker.
+if ! nginx -t; then
+    echo "ERROR: nginx config test failed, restoring previous passthrough configs"
+    rm -f "$CONFIG_FILE" "$HTTP_CONFIG_FILE"
+    [ -f "$PT_BACKUP_DIR/stream.conf" ] && cp "$PT_BACKUP_DIR/stream.conf" "$CONFIG_FILE"
+    [ -f "$PT_BACKUP_DIR/http.conf" ] && cp "$PT_BACKUP_DIR/http.conf" "$HTTP_CONFIG_FILE"
+    if [ -n "${PT_ROLLBACK_MARKER:-}" ]; then
+        if [ -n "${PT_MARKER_BACKUP:-}" ] && [ -f "$PT_MARKER_BACKUP" ]; then
+            cp "$PT_MARKER_BACKUP" "$PT_ROLLBACK_MARKER"
+        else
+            rm -f "$PT_ROLLBACK_MARKER"
+        fi
+    fi
+    rm -rf "$PT_BACKUP_DIR"
+    exit 1
+fi
+rm -rf "$PT_BACKUP_DIR"
+`
+
 // Step represents a single operation
 type Step struct {
 	Action  string `json:"action"`            // exec, file, service, fetch
@@ -677,157 +880,7 @@ STREAM_DIR="/etc/nginx/stream.d"
 CONFIG_FILE="$STREAM_DIR/configuratix-passthrough-manual.conf"
 HTTP_CONFIG_FILE="/etc/nginx/conf.d/configuratix/passthrough-manual-http.conf"
 
-echo "=== Regenerating passthrough config ==="
-mkdir -p "$STREAM_DIR" /etc/nginx/conf.d/configuratix
-
-# Collect all domains from marker files
-declare -A HTTPS_TARGETS
-declare -A HTTP_TARGETS
-PROXY_PROTOCOL_ENABLED=false
-PROXY_PROTOCOL_DISABLED=false
-
-for marker in "$STREAM_DIR"/passthrough-*.conf; do
-    [ -f "$marker" ] || continue
-    
-    # Extract domain from filename (passthrough-domain.com.conf -> domain.com)
-    filename=$(basename "$marker")
-    domain="${filename#passthrough-}"
-    domain="${domain%.conf}"
-    
-    # Extract target from marker file
-    target_https=$(grep "^# Target HTTPS:" "$marker" 2>/dev/null | cut -d: -f2- | tr -d ' ')
-    target_http=$(grep "^# Target HTTP:" "$marker" 2>/dev/null | cut -d: -f2- | tr -d ' ')
-    marker_proxy_protocol=$(grep "^# PROXY Protocol:" "$marker" 2>/dev/null | cut -d: -f2- | tr -d ' ' | tr '[:upper:]' '[:lower:]')
-    
-    if [ -n "$target_https" ]; then
-        HTTPS_TARGETS["$domain"]="$target_https"
-        if [ "$marker_proxy_protocol" = "true" ] || [ "$marker_proxy_protocol" = "enabled" ]; then
-            PROXY_PROTOCOL_ENABLED=true
-            proxy_status="enabled"
-        else
-            PROXY_PROTOCOL_DISABLED=true
-            proxy_status="disabled"
-        fi
-        if [ -n "$target_http" ]; then
-            echo "Found: $domain -> HTTPS: $target_https, HTTP: $target_http, HTTPS PROXY protocol: $proxy_status"
-        else
-            echo "Found: $domain -> HTTPS: $target_https, HTTP: disabled, HTTPS PROXY protocol: $proxy_status"
-        fi
-    fi
-    if [ -n "$target_http" ]; then
-        HTTP_TARGETS["$domain"]="$target_http"
-    fi
-done
-
-# If no domains left, remove generated config files
-if [ ${#HTTPS_TARGETS[@]} -eq 0 ]; then
-    echo "No passthrough domains remaining, cleaning up..."
-    rm -f "$CONFIG_FILE"
-    rm -f "$HTTP_CONFIG_FILE"
-    
-    # Re-enable DNS Management config if it was disabled
-    DNS_MGMT_CONFIG="$STREAM_DIR/configuratix-passthrough.conf"
-    DNS_MGMT_HTTP_CONFIG="/etc/nginx/conf.d/configuratix/passthrough-dns-http.conf"
-    if [ -f "${DNS_MGMT_CONFIG}.disabled-by-manual" ]; then
-        echo "Re-enabling DNS Management stream passthrough config..."
-        mv "${DNS_MGMT_CONFIG}.disabled-by-manual" "$DNS_MGMT_CONFIG"
-    fi
-    if [ -f "${DNS_MGMT_HTTP_CONFIG}.disabled-by-manual" ]; then
-        echo "Re-enabling DNS Management HTTP passthrough config..."
-        mv "${DNS_MGMT_HTTP_CONFIG}.disabled-by-manual" "$DNS_MGMT_HTTP_CONFIG"
-    fi
-    
-    nginx -t && (systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || true)
-    echo "Passthrough removed, original sites restored"
-    exit 0
-fi
-
-if [ "$PROXY_PROTOCOL_ENABLED" = "true" ] && [ "$PROXY_PROTOCOL_DISABLED" = "true" ]; then
-    echo "ERROR: Mixed HTTPS PROXY protocol settings detected in manual passthrough markers."
-    echo "Nginx stream uses one shared listen 443 server, so PROXY protocol cannot be enabled for only some SNI domains."
-    echo "Set all passthrough domains on this proxy to the same HTTPS PROXY protocol setting, or split them across different proxy machines/IPs."
-    exit 1
-fi
-
-# Generate consolidated stream config
-cat > "$CONFIG_FILE" << 'HEADER'
-# Configuratix Manual Passthrough Configuration
-# Auto-generated - DO NOT EDIT MANUALLY
-# Domains are tracked via passthrough-*.conf marker files
-
-HEADER
-
-# SNI map for HTTPS
-echo "# SNI-based backend routing for HTTPS" >> "$CONFIG_FILE"
-echo "map \$ssl_preread_server_name \$backend_https {" >> "$CONFIG_FILE"
-echo "    default reject;" >> "$CONFIG_FILE"
-for domain in "${!HTTPS_TARGETS[@]}"; do
-    echo "    $domain ${HTTPS_TARGETS[$domain]};" >> "$CONFIG_FILE"
-done
-echo "}" >> "$CONFIG_FILE"
-echo "" >> "$CONFIG_FILE"
-
-# Reject upstream
-cat >> "$CONFIG_FILE" << 'REJECT'
-# Reject upstream (closed connection)
-upstream reject {
-    server 127.0.0.1:1 down;
-}
-
-REJECT
-
-# HTTPS server block
-cat >> "$CONFIG_FILE" << 'HTTPS'
-# HTTPS Passthrough (TLS SNI-based routing)
-server {
-    listen 443;
-    ssl_preread on;
-    proxy_pass $backend_https;
-HTTPS
-if [ "$PROXY_PROTOCOL_ENABLED" = "true" ]; then
-    echo "    proxy_protocol on;" >> "$CONFIG_FILE"
-fi
-cat >> "$CONFIG_FILE" << 'HTTPS'
-    proxy_connect_timeout 10s;
-    proxy_timeout 30m;
-}
-
-HTTPS
-
-if [ ${#HTTP_TARGETS[@]} -gt 0 ]; then
-    cat > "$HTTP_CONFIG_FILE" << 'HTTPHEADER'
-# Configuratix Manual HTTP Passthrough Configuration
-# Auto-generated - DO NOT EDIT MANUALLY
-
-HTTPHEADER
-    for domain in "${!HTTP_TARGETS[@]}"; do
-        target="${HTTP_TARGETS[$domain]}"
-        cat >> "$HTTP_CONFIG_FILE" << EOF
-server {
-    listen 80;
-    server_name $domain;
-
-    location / {
-        proxy_pass http://$target;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_connect_timeout 10s;
-        proxy_read_timeout 30m;
-        proxy_send_timeout 30m;
-    }
-}
-
-EOF
-    done
-else
-    rm -f "$HTTP_CONFIG_FILE"
-fi
-
-echo "Regenerated config with ${#HTTPS_TARGETS[@]} domain(s)"
-cat "$CONFIG_FILE"
-[ -f "$HTTP_CONFIG_FILE" ] && cat "$HTTP_CONFIG_FILE" || true
+`+ passthroughRegenerateShell + `
 
 # Test and reload
 nginx -t
@@ -848,6 +901,8 @@ systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || systemctl
 			{Name: "http_port", Type: "string", Required: false, Default: "80", Description: "Backend HTTP port"},
 			{Name: "enable_http", Type: "string", Required: false, Default: "true", Description: "Enable HTTP passthrough marker/listener for port 80"},
 			{Name: "proxy_protocol", Type: "string", Required: false, Default: "false", Description: "Send PROXY protocol to HTTPS backend"},
+			{Name: "http_client_max_body_size", Type: "string", Required: false, Default: "100M", Description: "client_max_body_size for the port 80 HTTP block"},
+			{Name: "http_extra_b64", Type: "string", Required: false, Default: "", Description: "Base64-encoded extra directives for location / of the port 80 HTTP block"},
 		},
 		OnError: "stop",
 		Steps: []Step{
@@ -862,6 +917,8 @@ HTTPS_PORT="{{https_port}}"
 HTTP_PORT="{{http_port}}"
 ENABLE_HTTP="{{enable_http}}"
 PROXY_PROTOCOL="{{proxy_protocol}}"
+HTTP_BODY_SIZE="{{http_client_max_body_size}}"
+HTTP_EXTRA_B64="{{http_extra_b64}}"
 
 # Default ports if not specified or template not substituted
 if [ -z "$HTTPS_PORT" ] || [[ "$HTTPS_PORT" == *"{{"* ]]; then
@@ -875,6 +932,12 @@ if [ -z "$ENABLE_HTTP" ] || [[ "$ENABLE_HTTP" == *"{{"* ]]; then
 fi
 if [ -z "$PROXY_PROTOCOL" ] || [[ "$PROXY_PROTOCOL" == *"{{"* ]]; then
     PROXY_PROTOCOL="false"
+fi
+if ! [[ "$HTTP_BODY_SIZE" =~ ^[0-9]+[kKmMgG]?$ ]]; then
+    HTTP_BODY_SIZE="100M"
+fi
+if [[ "$HTTP_EXTRA_B64" == *"{{"* ]] || ! [[ "$HTTP_EXTRA_B64" =~ ^[A-Za-z0-9+/=]*$ ]]; then
+    HTTP_EXTRA_B64=""
 fi
 
 # Normalize HTTP toggle values
@@ -1011,7 +1074,13 @@ elif ! grep -q "include /etc/nginx/stream.d" "$NGINX_CONF"; then
     echo "Added stream.d include to existing stream block"
 fi
 
-# 6. Write marker file for this domain
+# 6. Write marker file for this domain (keep the previous one for rollback)
+PT_ROLLBACK_MARKER="$MARKER_FILE"
+PT_MARKER_BACKUP=""
+if [ -f "$MARKER_FILE" ]; then
+    PT_MARKER_BACKUP=$(mktemp)
+    cp "$MARKER_FILE" "$PT_MARKER_BACKUP"
+fi
 cat > "$MARKER_FILE" << EOF
 # Configuratix Passthrough Marker
 # Domain: $DOMAIN
@@ -1022,139 +1091,17 @@ cat > "$MARKER_FILE" << EOF
 EOF
 if [ "$ENABLE_HTTP" = "true" ]; then
     echo "# Target HTTP: ${TARGET}:${HTTP_PORT}" >> "$MARKER_FILE"
+    echo "# HTTP Client Max Body Size: ${HTTP_BODY_SIZE}" >> "$MARKER_FILE"
+    if [ -n "$HTTP_EXTRA_B64" ]; then
+        echo "# HTTP Extra B64: ${HTTP_EXTRA_B64}" >> "$MARKER_FILE"
+    fi
 else
     echo "# HTTP Passthrough: disabled" >> "$MARKER_FILE"
 fi
 echo "Created marker: $MARKER_FILE"
 
 # 7. Regenerate consolidated config from all markers
-echo "=== Regenerating consolidated config ==="
-
-declare -A HTTPS_TARGETS
-declare -A HTTP_TARGETS
-PROXY_PROTOCOL_ENABLED=false
-PROXY_PROTOCOL_DISABLED=false
-
-for marker in "$STREAM_DIR"/passthrough-*.conf; do
-    [ -f "$marker" ] || continue
-    
-    # Extract domain from filename
-    filename=$(basename "$marker")
-    dom="${filename#passthrough-}"
-    dom="${dom%.conf}"
-    
-    # Extract targets from marker
-    target_https=$(grep "^# Target HTTPS:" "$marker" 2>/dev/null | sed 's/^# Target HTTPS: *//')
-    target_http=$(grep "^# Target HTTP:" "$marker" 2>/dev/null | sed 's/^# Target HTTP: *//')
-    marker_proxy_protocol=$(grep "^# PROXY Protocol:" "$marker" 2>/dev/null | sed 's/^# PROXY Protocol: *//' | tr '[:upper:]' '[:lower:]')
-    
-    if [ -n "$target_https" ]; then
-        HTTPS_TARGETS["$dom"]="$target_https"
-        if [ "$marker_proxy_protocol" = "true" ] || [ "$marker_proxy_protocol" = "enabled" ]; then
-            PROXY_PROTOCOL_ENABLED=true
-            proxy_status="enabled"
-        else
-            PROXY_PROTOCOL_DISABLED=true
-            proxy_status="disabled"
-        fi
-    fi
-    if [ -n "$target_http" ]; then
-        HTTP_TARGETS["$dom"]="$target_http"
-    fi
-    if [ -n "$target_http" ]; then
-        echo "  - $dom -> HTTPS: $target_https, HTTP: $target_http, HTTPS PROXY protocol: $proxy_status"
-    else
-        echo "  - $dom -> HTTPS: $target_https, HTTP: disabled, HTTPS PROXY protocol: $proxy_status"
-    fi
-done
-
-if [ "$PROXY_PROTOCOL_ENABLED" = "true" ] && [ "$PROXY_PROTOCOL_DISABLED" = "true" ]; then
-    echo "ERROR: Mixed HTTPS PROXY protocol settings detected in manual passthrough markers."
-    echo "Nginx stream uses one shared listen 443 server, so PROXY protocol cannot be enabled for only some SNI domains."
-    echo "Set all passthrough domains on this proxy to the same HTTPS PROXY protocol setting, or split them across different proxy machines/IPs."
-    exit 1
-fi
-
-# Generate config
-cat > "$CONFIG_FILE" << 'HEADER'
-# Configuratix Manual Passthrough Configuration
-# Auto-generated - DO NOT EDIT MANUALLY
-# Domains are tracked via passthrough-*.conf marker files
-
-HEADER
-
-# SNI map
-echo "# SNI-based backend routing for HTTPS" >> "$CONFIG_FILE"
-echo "map \$ssl_preread_server_name \$backend_https {" >> "$CONFIG_FILE"
-echo "    default reject;" >> "$CONFIG_FILE"
-for dom in "${!HTTPS_TARGETS[@]}"; do
-    echo "    $dom ${HTTPS_TARGETS[$dom]};" >> "$CONFIG_FILE"
-done
-echo "}" >> "$CONFIG_FILE"
-echo "" >> "$CONFIG_FILE"
-
-# Reject upstream
-cat >> "$CONFIG_FILE" << 'REJECT'
-# Reject upstream (closed connection)
-upstream reject {
-    server 127.0.0.1:1 down;
-}
-
-REJECT
-
-# HTTPS server
-cat >> "$CONFIG_FILE" << 'HTTPS'
-# HTTPS Passthrough (TLS SNI-based routing)
-server {
-    listen 443;
-    ssl_preread on;
-    proxy_pass $backend_https;
-HTTPS
-if [ "$PROXY_PROTOCOL_ENABLED" = "true" ]; then
-    echo "    proxy_protocol on;" >> "$CONFIG_FILE"
-fi
-cat >> "$CONFIG_FILE" << 'HTTPS'
-    proxy_connect_timeout 10s;
-    proxy_timeout 30m;
-}
-
-HTTPS
-
-if [ ${#HTTP_TARGETS[@]} -gt 0 ]; then
-    cat > "$HTTP_CONFIG_FILE" << 'HTTPHEADER'
-# Configuratix Manual HTTP Passthrough Configuration
-# Auto-generated - DO NOT EDIT MANUALLY
-
-HTTPHEADER
-    for dom in "${!HTTP_TARGETS[@]}"; do
-        target="${HTTP_TARGETS[$dom]}"
-        cat >> "$HTTP_CONFIG_FILE" << EOF
-server {
-    listen 80;
-    server_name $dom;
-
-    location / {
-        proxy_pass http://$target;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_connect_timeout 10s;
-        proxy_read_timeout 30m;
-        proxy_send_timeout 30m;
-    }
-}
-
-EOF
-    done
-else
-    rm -f "$HTTP_CONFIG_FILE"
-fi
-
-echo ""
-echo "=== Generated Config ==="
-cat "$CONFIG_FILE"
-[ -f "$HTTP_CONFIG_FILE" ] && cat "$HTTP_CONFIG_FILE" || true
+`+ passthroughRegenerateShell + `
 
 # 9. Test and reload nginx
 echo ""
