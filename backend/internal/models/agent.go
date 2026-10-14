@@ -11,6 +11,7 @@ type Agent struct {
 	Name        string     `db:"name" json:"name"`
 	TokenHash   string     `db:"token_hash" json:"-"`
 	APIKeyHash  *string    `db:"api_key_hash" json:"-"`
+	APIKeyLookup *string   `db:"api_key_lookup" json:"-"`
 	Version     *string    `db:"version" json:"version"`
 	LastSeen    *time.Time `db:"last_seen" json:"last_seen"`
 	CreatedAt   time.Time  `db:"created_at" json:"created_at"`

@@ -3,11 +3,15 @@ package handlers
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"configuratix/backend/internal/auth"
@@ -99,10 +103,10 @@ func (h *AgentHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 	// Create agent
 	var agent models.Agent
 	err = tx.Get(&agent, `
-		INSERT INTO agents (name, token_hash, api_key_hash, last_seen)
-		VALUES ($1, $2, $3, NOW())
+		INSERT INTO agents (name, token_hash, api_key_hash, api_key_lookup, last_seen)
+		VALUES ($1, $2, $3, $4, NOW())
 		RETURNING *
-	`, req.Hostname, tokenHash, apiKeyHash)
+	`, req.Hostname, tokenHash, apiKeyHash, apiKeyLookup(apiKey))
 	if err != nil {
 		log.Printf("Failed to create agent: %v", err)
 		http.Error(w, "Failed to enroll agent", http.StatusInternalServerError)
@@ -395,9 +399,57 @@ func (h *AgentHandler) updateL7CertificateStatuses(jobID uuid.UUID, jobStatus, l
 	}
 }
 
-// AgentAuthMiddleware validates agent API key
-// Note: API keys are stored as bcrypt hashes, so we need to iterate through agents
-// For production with many agents, consider adding a key prefix/identifier
+// apiKeyLookup returns the indexed lookup digest for an agent API key.
+// Keys are 256-bit random values, so an unsalted SHA-256 is safe to store and index.
+func apiKeyLookup(apiKey string) string {
+	sum := sha256.Sum256([]byte(apiKey))
+	return hex.EncodeToString(sum[:])
+}
+
+// invalidAgentKeys remembers recently rejected keys (by lookup digest) so that
+// agents of deleted machines retrying every few seconds don't trigger repeated
+// bcrypt sweeps over legacy agents.
+var invalidAgentKeys = struct {
+	sync.Mutex
+	m map[string]time.Time
+}{m: make(map[string]time.Time)}
+
+const (
+	invalidAgentKeyTTL    = 10 * time.Minute
+	invalidAgentKeyMaxLen = 10000
+)
+
+func isKnownInvalidAgentKey(lookup string) bool {
+	invalidAgentKeys.Lock()
+	defer invalidAgentKeys.Unlock()
+	exp, ok := invalidAgentKeys.m[lookup]
+	if ok && time.Now().After(exp) {
+		delete(invalidAgentKeys.m, lookup)
+		return false
+	}
+	return ok
+}
+
+func rememberInvalidAgentKey(lookup string) {
+	invalidAgentKeys.Lock()
+	defer invalidAgentKeys.Unlock()
+	now := time.Now()
+	if len(invalidAgentKeys.m) >= invalidAgentKeyMaxLen {
+		for k, exp := range invalidAgentKeys.m {
+			if now.After(exp) {
+				delete(invalidAgentKeys.m, k)
+			}
+		}
+		if len(invalidAgentKeys.m) >= invalidAgentKeyMaxLen {
+			invalidAgentKeys.m = make(map[string]time.Time)
+		}
+	}
+	invalidAgentKeys.m[lookup] = now.Add(invalidAgentKeyTTL)
+}
+
+// AgentAuthMiddleware validates agent API key.
+// Keys are matched by an indexed SHA-256 lookup column. Agents enrolled before
+// that column existed are matched once via bcrypt and then backfilled.
 func AgentAuthMiddleware(db *database.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -417,41 +469,54 @@ func AgentAuthMiddleware(db *database.DB) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Find agent by checking API key hash
-			// Only get active agents (seen in last 30 days) to reduce iteration
-			var agents []models.Agent
-			err := db.Select(&agents, `
-				SELECT id, api_key_hash FROM agents 
-				WHERE api_key_hash IS NOT NULL 
-				AND (last_seen IS NULL OR last_seen > NOW() - INTERVAL '30 days')
-			`)
-			if err != nil {
+			lookup := apiKeyLookup(apiKey)
+
+			// Fast path: indexed lookup
+			var agentID uuid.UUID
+			err := db.Get(&agentID, `SELECT id FROM agents WHERE api_key_lookup = $1`, lookup)
+			if err != nil && err != sql.ErrNoRows {
 				log.Printf("Agent auth DB error: %v", err)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
+			matched := err == nil
 
-			var matchedAgent *models.Agent
-			for i := range agents {
-				agent := &agents[i]
-				if agent.APIKeyHash != nil {
-					if err := bcrypt.CompareHashAndPassword([]byte(*agent.APIKeyHash), []byte(apiKey)); err == nil {
-						matchedAgent = agent
+			// Slow path: legacy agents without a lookup digest yet (bcrypt, once per agent)
+			if !matched && !isKnownInvalidAgentKey(lookup) {
+				var agents []models.Agent
+				err := db.Select(&agents, `
+					SELECT id, api_key_hash FROM agents
+					WHERE api_key_hash IS NOT NULL AND api_key_lookup IS NULL
+					AND (last_seen IS NULL OR last_seen > NOW() - INTERVAL '30 days')
+				`)
+				if err != nil {
+					log.Printf("Agent auth DB error: %v", err)
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+					return
+				}
+				for i := range agents {
+					if bcrypt.CompareHashAndPassword([]byte(*agents[i].APIKeyHash), []byte(apiKey)) == nil {
+						agentID = agents[i].ID
+						matched = true
+						if _, err := db.Exec(`UPDATE agents SET api_key_lookup = $1 WHERE id = $2`, lookup, agentID); err != nil {
+							log.Printf("Failed to backfill agent API key lookup for %s: %v", agentID, err)
+						}
 						break
 					}
 				}
+				if !matched {
+					rememberInvalidAgentKey(lookup)
+				}
 			}
 
-			if matchedAgent == nil {
-				// Log failed attempts (rate limit this in production)
-				log.Printf("Invalid agent API key attempt")
+			if !matched {
 				http.Error(w, "Invalid API key", http.StatusUnauthorized)
 				return
 			}
 
 			// Add agent ID to context
 			ctx := r.Context()
-			ctx = context.WithValue(ctx, "agent_id", matchedAgent.ID)
+			ctx = context.WithValue(ctx, "agent_id", agentID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

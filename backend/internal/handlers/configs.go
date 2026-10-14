@@ -388,10 +388,8 @@ func (h *ConfigsHandler) waitForJobResult(jobID uuid.UUID, timeout time.Duration
 			return nullStringToString(job.Logs), nil
 		case "failed":
 			return "", &ConfigError{Message: "Job failed: " + nullStringToString(job.Logs)}
-		case "pending", "running":
-			time.Sleep(500 * time.Millisecond)
-			continue
 		}
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	return "", &ConfigError{Message: "Job timeout"}
