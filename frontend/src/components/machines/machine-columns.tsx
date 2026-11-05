@@ -1,0 +1,294 @@
+"use client";
+
+import * as React from "react";
+import Link from "next/link";
+import type { ColumnDef } from "@tanstack/react-table";
+import { Copy, ExternalLink, MoreHorizontal, RefreshCw, Tags, TerminalSquare, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { copyToClipboard } from "@/lib/clipboard";
+import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { DataTableColumnHeader } from "@/components/ui/data-table";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { RelativeTime, StatusDot, getStatusMeta, machineDisplayName, machineIp } from "@/components/app";
+import { GroupChips } from "./group-chips";
+import { MachineMeters } from "./resource-meter";
+import { cpuPct, diskPct, groupRefs, isAgentOutdated, isAgentUpdating, liveness, memPct, LIVENESS_LABEL, type FleetMachine } from "./utils";
+
+export interface MachineColumnHandlers {
+  latestAgent?: string | null;
+  groupsByMachine: Record<string, { id: string; name: string; color?: string | null; emoji?: string | null }[]>;
+  onUpdateAgent: (m: FleetMachine) => void;
+  onAssignGroups: (m: FleetMachine) => void;
+  onDelete: (m: FleetMachine) => void;
+}
+
+export function agentFacet(m: FleetMachine, latest?: string | null): string {
+  if (isAgentUpdating(m)) return "Updating";
+  if (!m.agent_version) return "Not enrolled";
+  if (isAgentOutdated(m, latest)) return "Outdated";
+  return "Current";
+}
+
+export function machineGroups(m: FleetMachine, map: MachineColumnHandlers["groupsByMachine"]) {
+  const refs = groupRefs(m);
+  return refs.length || Array.isArray(m.group_names) ? refs : (map[m.id] ?? []);
+}
+
+function DomainsCell({ m }: { m: FleetMachine }) {
+  const total = m.assigned_domains_count ?? 0;
+  const healthy = m.healthy_domains_count ?? 0;
+  const unhealthy = m.unhealthy_domains_count ?? 0;
+  const unknown = Math.max(0, total - healthy - unhealthy);
+  if (!total) return <span className="font-data text-xs text-subtle-foreground">0</span>;
+  const summary = m.assigned_domains_summary ?? [];
+  const body = (
+    <div className="flex items-center justify-end gap-2">
+      <div className="flex h-1.5 w-12 overflow-hidden rounded-full bg-white/[0.07]" aria-hidden>
+        {healthy > 0 && <div className="h-full bg-success" style={{ width: `${(healthy / total) * 100}%` }} />}
+        {unhealthy > 0 && <div className="h-full bg-destructive" style={{ width: `${(unhealthy / total) * 100}%` }} />}
+        {unknown > 0 && <div className="h-full bg-muted-foreground/40" style={{ width: `${(unknown / total) * 100}%` }} />}
+      </div>
+      <span className="font-data min-w-6 text-right text-[12.5px]">{total}</span>
+      {unhealthy > 0 && <span className="font-data text-[11px] text-destructive">{unhealthy}↓</span>}
+    </div>
+  );
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{body}</TooltipTrigger>
+      <TooltipContent side="left" className="max-w-xs">
+        <div className="font-data mb-1 text-[11px]">
+          {healthy} healthy · {unhealthy} unhealthy · {unknown} unknown
+        </div>
+        {summary.slice(0, 8).map((d) => (
+          <div key={d.fqdn} className="flex items-center gap-1.5 text-[11px]">
+            <StatusDot status={d.status} pulse={false} size="xs" />
+            <span className="font-data truncate">{d.fqdn}</span>
+          </div>
+        ))}
+        {summary.length > 8 && <div className="text-[11px] text-muted-foreground">+{summary.length - 8} more</div>}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function AgentCell({ m, latest }: { m: FleetMachine; latest?: string | null }) {
+  if (!m.agent_version) return <span className="text-xs text-subtle-foreground">—</span>;
+  const updating = isAgentUpdating(m);
+  const outdated = !updating && isAgentOutdated(m, latest);
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="font-data text-[12px] text-muted-foreground">{m.agent_version}</span>
+      {updating ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="info" className="gap-1">
+              <RefreshCw className="size-3 animate-spin" />
+              {m.agent_update_state}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent>Updating to {m.agent_update_target_version ?? latest ?? "latest"}</TooltipContent>
+        </Tooltip>
+      ) : outdated ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="warning">outdated</Badge>
+          </TooltipTrigger>
+          <TooltipContent>{latest ? `Latest is ${latest}` : "A newer agent is available"}</TooltipContent>
+        </Tooltip>
+      ) : m.agent_update_state === "failed" ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="destructive">update failed</Badge>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs">{m.agent_last_update_error ?? "Last update failed"}</TooltipContent>
+        </Tooltip>
+      ) : null}
+    </div>
+  );
+}
+
+export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMachine>[] {
+  return [
+    {
+      id: "name",
+      accessorFn: (m) => machineDisplayName(m),
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Machine" />,
+      meta: { label: "Machine" },
+      enableHiding: false,
+      cell: ({ row }) => {
+        const m = row.original;
+        const live = liveness(m);
+        const name = machineDisplayName(m);
+        const ip = machineIp(m);
+        return (
+          <div className="flex min-w-[200px] items-center gap-2.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="flex size-4 items-center justify-center">
+                  <StatusDot status={live} />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{LIVENESS_LABEL[live]}</TooltipContent>
+            </Tooltip>
+            <div className="min-w-0">
+              <Link href={`/machines/${m.id}`} className="block truncate text-[13px] font-semibold hover:underline underline-offset-4">
+                {name}
+              </Link>
+              <div className="flex min-w-0 items-center gap-2 text-[11.5px] text-muted-foreground">
+                {m.hostname && m.hostname !== name && <span className="font-data truncate">{m.hostname}</span>}
+                {ip && <span className="font-data shrink-0 text-subtle-foreground">{ip}</span>}
+                {!ip && !m.hostname && <span className="text-subtle-foreground">awaiting first heartbeat</span>}
+              </div>
+            </div>
+          </div>
+        );
+      },
+    },
+    // Hidden facet columns
+    {
+      id: "status",
+      accessorFn: (m) => liveness(m),
+      header: "Status",
+      enableHiding: false,
+      enableSorting: false,
+    },
+    {
+      id: "project",
+      accessorFn: (m) => m.project_name || "No project",
+      header: "Project",
+      enableHiding: false,
+    },
+    {
+      id: "agent",
+      accessorFn: (m) => agentFacet(m, h.latestAgent),
+      header: "Agent",
+      enableHiding: false,
+    },
+    {
+      id: "php",
+      accessorFn: (m) => (m.php_version ? `PHP ${m.php_version}` : m.php_installed ? "PHP" : "No PHP"),
+      header: "PHP",
+      enableHiding: false,
+    },
+    {
+      id: "groups",
+      accessorFn: (m) => machineGroups(m, h.groupsByMachine).map((g) => g.name),
+      header: "Groups",
+      meta: { label: "Groups" },
+      enableSorting: false,
+      cell: ({ row }) => <GroupChips groups={machineGroups(row.original, h.groupsByMachine)} />,
+    },
+    {
+      id: "resources",
+      accessorFn: (m) => Math.max(cpuPct(m) ?? -1, memPct(m) ?? -1, diskPct(m) ?? -1),
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Resources" />,
+      meta: { label: "Resources" },
+      sortDescFirst: true,
+      cell: ({ row }) => <MachineMeters machine={row.original} />,
+    },
+    {
+      id: "domains",
+      accessorFn: (m) => m.assigned_domains_count ?? 0,
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Domains" align="right" />,
+      meta: { label: "Domains", align: "right" },
+      sortDescFirst: true,
+      cell: ({ row }) => <DomainsCell m={row.original} />,
+    },
+    {
+      id: "agent_version",
+      accessorFn: (m) => m.agent_version ?? "",
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Agent" />,
+      meta: { label: "Agent" },
+      cell: ({ row }) => <AgentCell m={row.original} latest={h.latestAgent} />,
+    },
+    {
+      id: "last_seen",
+      accessorFn: (m) => (m.last_seen ? new Date(m.last_seen).getTime() : 0),
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Last seen" align="right" />,
+      meta: { label: "Last seen", align: "right" },
+      sortDescFirst: true,
+      cell: ({ row }) => (
+        <span className={cn("text-xs", liveness(row.original) === "online" ? "text-muted-foreground" : "text-foreground")}>
+          <RelativeTime date={row.original.last_seen} fallback="never" />
+        </span>
+      ),
+    },
+    {
+      id: "actions",
+      header: "",
+      enableHiding: false,
+      enableSorting: false,
+      meta: { align: "right", className: "w-10" },
+      cell: ({ row }) => <RowActions m={row.original} h={h} />,
+    },
+  ];
+}
+
+function RowActions({ m, h }: { m: FleetMachine; h: MachineColumnHandlers }) {
+  const ip = machineIp(m);
+  const updating = isAgentUpdating(m);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label="Machine actions">
+          <MoreHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuLabel className="truncate">{machineDisplayName(m)}</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href={`/machines/${m.id}`}>
+            <ExternalLink />
+            Open
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href={`/machines/${m.id}?tab=terminal`}>
+            <TerminalSquare />
+            Terminal
+          </Link>
+        </DropdownMenuItem>
+        {ip && (
+          <DropdownMenuItem
+            onSelect={async () => {
+              if (await copyToClipboard(ip)) toast.success("IP copied", { description: ip });
+            }}
+          >
+            <Copy />
+            Copy IP
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => h.onUpdateAgent(m)} disabled={updating || !m.agent_id}>
+          <RefreshCw />
+          {updating ? "Updating agent…" : "Update agent"}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => h.onAssignGroups(m)}>
+          <Tags />
+          Assign groups
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant="destructive" onSelect={() => h.onDelete(m)}>
+          <Trash2 />
+          Delete
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+export const HIDDEN_FACET_COLUMNS = { status: false, project: false, agent: false, php: false };
+
+/** Sort helper for unknown statuses in the facet list. */
+export const STATUS_FACET_OPTIONS = (["online", "stale", "offline"] as const).map((s) => ({ value: s, label: getStatusMeta(s).label }));

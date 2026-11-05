@@ -4,13 +4,15 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/domainhealth"
+	"configuratix/backend/internal/jobs"
+	"configuratix/backend/internal/models"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
-	"github.com/lib/pq"
 )
 
 func (h *DomainsHandler) domainAccessible(claims *auth.Claims, userID uuid.UUID, domainID uuid.UUID) bool {
@@ -50,6 +52,7 @@ func (h *DomainsHandler) BulkAssignDomains(w http.ResponseWriter, r *http.Reques
 		Error string `json:"error"`
 	}
 	var errors []itemErr
+	var allJobs []*models.Job
 	okCount := 0
 
 	for _, sid := range req.DomainIDs {
@@ -63,18 +66,20 @@ func (h *DomainsHandler) BulkAssignDomains(w http.ResponseWriter, r *http.Reques
 			continue
 		}
 		assignReq := AssignDomainRequest{MachineID: req.MachineID, ConfigID: req.ConfigID}
-		if err := h.assignDomainCore(id, assignReq); err != nil {
+		created, err := h.assignDomainCore(id, assignReq, jobs.UserID(r))
+		if err != nil {
 			log.Printf("bulk assign %s: %v", id, err)
 			errors = append(errors, itemErr{ID: sid, Error: err.Error()})
 			continue
 		}
+		allJobs = append(allJobs, created...)
 		okCount++
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"ok":     okCount,
 		"errors": errors,
+		"jobs":   jobsResponse(allJobs),
 	})
 }
 
@@ -105,18 +110,13 @@ func (h *DomainsHandler) BulkDeleteDomains(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	res, err := h.db.Exec(`
-		DELETE FROM domains d
-		WHERE d.id = ANY($1)
-	`, pq.Array(ids))
+	n, created, warnings, err := deleteDomainsWithCleanup(r.Context(), h.db, ids, &userID)
 	if err != nil {
 		log.Printf("bulk delete domains: %v", err)
 		http.Error(w, "Failed to delete domains", http.StatusInternalServerError)
 		return
 	}
-	n, _ := res.RowsAffected()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int64{"deleted": n})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"deleted": n, "jobs": jobsResponse(created), "warnings": warnings})
 }
 
 // BulkCheckDomains runs an immediate health check for each domain.
@@ -160,7 +160,8 @@ func (h *DomainsHandler) BulkCheckDomains(w http.ResponseWriter, r *http.Request
 }
 
 type updateHealthCheckRequest struct {
-	ExpectedHTTPStatus int `json:"expected_http_status"`
+	ExpectedHTTPStatus int     `json:"expected_http_status"` // 0 = keep current
+	Path               *string `json:"path"`                 // optional; "" or "/" resets to "/"
 }
 
 // UpdateDomainHealthCheck sets the expected HTTP status for health checks (default 200).
@@ -185,14 +186,33 @@ func (h *DomainsHandler) UpdateDomainHealthCheck(w http.ResponseWriter, r *http.
 		return
 	}
 	code := req.ExpectedHTTPStatus
-	if code < 100 || code > 599 {
+	if code != 0 && (code < 100 || code > 599) {
 		http.Error(w, "expected_http_status must be between 100 and 599", http.StatusBadRequest)
+		return
+	}
+	setPath := req.Path != nil
+	var path *string
+	if setPath {
+		p := strings.TrimSpace(*req.Path)
+		if !domainhealth.ValidPath(p) {
+			http.Error(w, "path must start with / and contain no spaces or control characters (max 512 chars)", http.StatusBadRequest)
+			return
+		}
+		if p != "" && p != "/" {
+			path = &p
+		}
+	}
+	if code == 0 && !setPath {
+		http.Error(w, "expected_http_status or path is required", http.StatusBadRequest)
 		return
 	}
 
 	_, err = h.db.Exec(`
-		UPDATE domains SET health_check_expected_status = $1, updated_at = NOW() WHERE id = $2
-	`, code, id)
+		UPDATE domains SET
+			health_check_expected_status = CASE WHEN $1 > 0 THEN $1 ELSE health_check_expected_status END,
+			health_check_path = CASE WHEN $3 THEN $4 ELSE health_check_path END
+		WHERE id = $2
+	`, code, id, setPath, path)
 	if err != nil {
 		log.Printf("update health check: %v", err)
 		http.Error(w, "Failed to update", http.StatusInternalServerError)

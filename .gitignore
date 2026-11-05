@@ -29,3 +29,5 @@ Thumbs.db
 *.log
 logs/
 
+backend/agent-binaries/configuratix-agent*
+!backend/agent-binaries/version.json

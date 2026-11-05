@@ -1,21 +1,30 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useSidebarPrefs } from "@/components/app/sidebar-resize";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
-import { AppSidebar } from "@/components/app-sidebar";
-import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
-import { Separator } from "@/components/ui/separator";
-import { Toaster } from "sonner";
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+import { api, type User } from "@/lib/api";
+import { AppSidebar } from "@/components/app-sidebar";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { Separator } from "@/components/ui/separator";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "@/components/ui/sonner";
+import {
+  AppBackdrop,
+  BrandedLoader,
+  BreadcrumbLabelProvider,
+  CommandPaletteProvider,
+  ConfirmProvider,
+  JobTrackerProvider,
+  RouteBreadcrumbs,
+} from "@/components/app";
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<import("@/lib/api").User | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const sidebarPrefs = useSidebarPrefs();
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -24,60 +33,51 @@ export default function DashboardLayout({
         router.push("/login");
         return;
       }
-
       try {
         const userData = await api.getMe();
         setUser(userData);
+        setLoading(false);
       } catch {
         router.push("/login");
-      } finally {
-        setLoading(false);
       }
     };
-
     checkAuth();
   }, [router]);
 
+  const logout = useCallback(() => {
+    api.logout();
+    router.push("/login");
+  }, [router]);
+
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <svg className="animate-spin h-8 w-8 text-primary" viewBox="0 0 24 24">
-            <circle 
-              className="opacity-25" 
-              cx="12" 
-              cy="12" 
-              r="10" 
-              stroke="currentColor" 
-              strokeWidth="4"
-              fill="none"
-            />
-            <path 
-              className="opacity-75" 
-              fill="currentColor" 
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-            />
-          </svg>
-          <span className="text-muted-foreground text-sm">Loading...</span>
-        </div>
-      </div>
-    );
+    return <BrandedLoader label="Verifying session" />;
   }
 
   return (
-    <SidebarProvider>
-      <Toaster richColors position="top-right" />
-      <AppSidebar user={user} />
-      <SidebarInset>
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/50 px-4">
-          <SidebarTrigger className="-ml-1" />
-          <Separator orientation="vertical" className="mr-2 h-4" />
-        </header>
-        <main className="flex-1 p-6 overflow-x-hidden">
-          {children}
-        </main>
-      </SidebarInset>
-    </SidebarProvider>
+    <TooltipProvider delayDuration={150}>
+      <ConfirmProvider>
+        <JobTrackerProvider>
+          <BreadcrumbLabelProvider>
+            <CommandPaletteProvider role={user?.role} onLogout={logout}>
+              <SidebarProvider {...sidebarPrefs}>
+                <AppSidebar user={user} onLogout={logout} />
+                <SidebarInset className="isolate min-w-0 bg-transparent">
+                  <AppBackdrop />
+                  <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background/80 px-3 backdrop-blur-md supports-[backdrop-filter]:bg-background/65 md:px-4">
+                    <SidebarTrigger className="-ml-1 text-muted-foreground hover:text-foreground" />
+                    <Separator orientation="vertical" className="mr-1 h-4! bg-border-strong" />
+                    <RouteBreadcrumbs className="flex-1" />
+                  </header>
+                  <div className="relative flex-1 overflow-x-hidden">
+                    <div className="mx-auto w-full max-w-[1600px] px-4 py-6 md:px-6 lg:px-8">{children}</div>
+                  </div>
+                </SidebarInset>
+              </SidebarProvider>
+            </CommandPaletteProvider>
+          </BreadcrumbLabelProvider>
+        </JobTrackerProvider>
+        <Toaster />
+      </ConfirmProvider>
+    </TooltipProvider>
   );
 }
-

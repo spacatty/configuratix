@@ -1,349 +1,248 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { ColumnDef } from "@tanstack/react-table";
-import { Card, CardContent } from "@/components/ui/card";
+import { Suspense, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { ListChecks, Play, Search, Terminal, Variable, X } from "lucide-react";
+import { api, type CommandTemplate } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { DataTable } from "@/components/ui/data-table";
-import { api, CommandTemplate, Machine } from "@/lib/api";
-import { toast } from "sonner";
-import { 
-  Play, 
-  Terminal,
-  Cog,
-  Shield,
-  FileCode,
-  Zap
-} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { CardSkeleton, EmptyState, ErrorState, PageHeader, usePolling } from "@/components/app";
+import { fuzzyFilter } from "@/lib/fuzzy";
+import { cn } from "@/lib/utils";
+import { OnErrorBadge, categoryMeta } from "@/components/commands/command-meta";
+import { ExecuteCommandSheet } from "@/components/commands/execute-command-sheet";
+import { RecentCommandRuns } from "@/components/commands/recent-runs";
 
 export default function CommandsPage() {
-  const [commands, setCommands] = useState<CommandTemplate[]>([]);
-  const [machines, setMachines] = useState<Machine[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showExecuteDialog, setShowExecuteDialog] = useState(false);
-  const [selectedCommand, setSelectedCommand] = useState<CommandTemplate | null>(null);
-  const [selectedMachine, setSelectedMachine] = useState("");
-  const [variables, setVariables] = useState<Record<string, string>>({});
-  const [executing, setExecuting] = useState(false);
+  return (
+    <Suspense>
+      <CommandsPageInner />
+    </Suspense>
+  );
+}
 
-  useEffect(() => {
-    loadData();
-  }, []);
+function CommandsPageInner() {
+  const params = useSearchParams();
+  const initialMachine = params.get("machine");
+  const { data, loading, error, refresh } = usePolling(() => api.listCommands(), 0);
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState<string>("all");
+  const [selected, setSelected] = useState<CommandTemplate | null>(null);
+  const [open, setOpen] = useState(false);
+  const [runsKey, setRunsKey] = useState(0);
 
-  const loadData = async () => {
-    try {
-      const [commandsData, machinesData] = await Promise.all([
-        api.listCommands(),
-        api.listMachines(),
-      ]);
-      setCommands(commandsData);
-      setMachines(machinesData);
-    } catch (err) {
-      console.error("Failed to load data:", err);
-      toast.error("Failed to load commands");
-    } finally {
-      setLoading(false);
+  const commands = useMemo(() => data ?? [], [data]);
+
+  const categories = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of commands) counts.set(c.category, (counts.get(c.category) ?? 0) + 1);
+    return [...counts.entries()]
+      .sort((a, b) => categoryMeta(a[0]).order - categoryMeta(b[0]).order || a[0].localeCompare(b[0]))
+      .map(([key, count]) => ({ key, count, ...categoryMeta(key) }));
+  }, [commands]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim();
+    let list = category === "all" ? commands : commands.filter((c) => c.category === category);
+    if (q) {
+      list = list
+        .map((c) => ({
+          c,
+          score: fuzzyFilter(c.name, q, [c.description, c.category, c.id, ...c.variables.map((v) => v.name)]),
+        }))
+        .filter((x) => x.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .map((x) => x.c);
     }
+    return list;
+  }, [commands, category, query]);
+
+  const groups = useMemo(() => {
+    if (query.trim()) return [{ key: "results", label: `${filtered.length} results`, items: filtered, icon: Search }];
+    return categories
+      .map((cat) => ({ key: cat.key, label: cat.label, icon: cat.icon, items: filtered.filter((c) => c.category === cat.key) }))
+      .filter((g) => g.items.length > 0);
+  }, [categories, filtered, query]);
+
+  const openCommand = (c: CommandTemplate) => {
+    setSelected(c);
+    setOpen(true);
   };
-
-  const openExecuteDialog = (command: CommandTemplate) => {
-    setSelectedCommand(command);
-    const defaultVars: Record<string, string> = {};
-    command.variables.forEach(v => {
-      defaultVars[v.name] = v.default || "";
-    });
-    setVariables(defaultVars);
-    setSelectedMachine("");
-    setShowExecuteDialog(true);
-  };
-
-  const handleExecute = async () => {
-    if (!selectedCommand || !selectedMachine) {
-      toast.error("Please select a machine");
-      return;
-    }
-
-    // Validate required variables
-    for (const v of selectedCommand.variables) {
-      if (v.required && !variables[v.name]) {
-        toast.error(`Variable "${v.name}" is required`);
-        return;
-      }
-    }
-
-    setExecuting(true);
-    try {
-      await api.executeCommand(selectedMachine, selectedCommand.id, variables);
-      setShowExecuteDialog(false);
-      toast.success(`Command "${selectedCommand.name}" sent to machine`);
-    } catch (err) {
-      console.error("Failed to execute command:", err);
-      toast.error("Failed to execute command");
-    } finally {
-      setExecuting(false);
-    }
-  };
-
-  const getCategoryIcon = (category: string) => {
-    switch (category) {
-      case "system":
-        return <Cog className="h-4 w-4" />;
-      case "security":
-        return <Shield className="h-4 w-4" />;
-      case "nginx":
-        return <FileCode className="h-4 w-4" />;
-      default:
-        return <Terminal className="h-4 w-4" />;
-    }
-  };
-
-  const getCategoryColor = (category: string) => {
-    switch (category) {
-      case "system":
-        return "bg-blue-500/20 text-blue-400 border-blue-500/30";
-      case "security":
-        return "bg-red-500/20 text-red-400 border-red-500/30";
-      case "nginx":
-        return "bg-green-500/20 text-green-400 border-green-500/30";
-      default:
-        return "bg-gray-500/20 text-gray-400 border-gray-500/30";
-    }
-  };
-
-  const columns: ColumnDef<CommandTemplate>[] = [
-    {
-      accessorKey: "name",
-      header: "Command",
-      cell: ({ row }) => {
-        const cmd = row.original;
-        return (
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-yellow-500/20 to-yellow-500/5 flex items-center justify-center">
-              <Zap className="h-5 w-5 text-yellow-500" />
-            </div>
-            <div>
-              <div className="font-medium">{cmd.name}</div>
-              <div className="text-xs text-muted-foreground max-w-md truncate">
-                {cmd.description}
-              </div>
-            </div>
-          </div>
-        );
-      },
-    },
-    {
-      accessorKey: "category",
-      header: "Category",
-      cell: ({ row }) => {
-        const category = row.original.category;
-        return (
-          <Badge className={`${getCategoryColor(category)} text-xs capitalize`}>
-            {getCategoryIcon(category)}
-            <span className="ml-1">{category}</span>
-          </Badge>
-        );
-      },
-    },
-    {
-      accessorKey: "variables",
-      header: "Variables",
-      cell: ({ row }) => {
-        const vars = row.original.variables;
-        const required = vars.filter(v => v.required).length;
-        const optional = vars.length - required;
-        return (
-          <div className="text-sm">
-            {vars.length === 0 ? (
-              <span className="text-muted-foreground">None</span>
-            ) : (
-              <span>
-                {required > 0 && (
-                  <Badge variant="outline" className="mr-1 text-xs">
-                    {required} required
-                  </Badge>
-                )}
-                {optional > 0 && (
-                  <Badge variant="secondary" className="text-xs">
-                    {optional} optional
-                  </Badge>
-                )}
-              </span>
-            )}
-          </div>
-        );
-      },
-    },
-    {
-      accessorKey: "steps",
-      header: "Steps",
-      cell: ({ row }) => (
-        <span className="text-sm text-muted-foreground">
-          {row.original.steps.length} step(s)
-        </span>
-      ),
-    },
-    {
-      accessorKey: "on_error",
-      header: "On Error",
-      cell: ({ row }) => {
-        const onError = row.original.on_error;
-        return (
-          <Badge 
-            variant="outline" 
-            className={`text-xs ${
-              onError === "rollback" 
-                ? "border-yellow-500/30 text-yellow-500" 
-                : onError === "stop"
-                ? "border-red-500/30 text-red-500"
-                : "border-gray-500/30"
-            }`}
-          >
-            {onError}
-          </Badge>
-        );
-      },
-    },
-    {
-      id: "actions",
-      cell: ({ row }) => (
-        <Button size="sm" onClick={() => openExecuteDialog(row.original)}>
-          <Play className="h-4 w-4 mr-1" />
-          Execute
-        </Button>
-      ),
-    },
-  ];
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" />
-      </div>
-    );
-  }
 
   return (
-    <div className="flex flex-col h-full space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Commands</h1>
-          <p className="text-muted-foreground mt-1">
-            Execute predefined commands on your machines. {commands.length} template(s) available.
-          </p>
+    <div className="space-y-6">
+      <PageHeader
+        icon={Terminal}
+        title="Commands"
+        description="Run vetted command templates on a machine. Variables are validated server-side before reaching the agent."
+        badge={data ? <Badge variant="muted" className="font-data">{commands.length}</Badge> : undefined}
+      />
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="space-y-4 lg:col-span-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[220px] flex-1">
+              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search commands, variables…"
+                className="pl-8"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && filtered[0]) openCommand(filtered[0]);
+                  if (e.key === "Escape") setQuery("");
+                }}
+              />
+              {query && (
+                <button
+                  type="button"
+                  aria-label="Clear search"
+                  onClick={() => setQuery("")}
+                  className="absolute top-1/2 right-2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="size-3.5" />
+                </button>
+              )}
+            </div>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={category}
+              onValueChange={(v) => v && setCategory(v)}
+              className="flex-wrap"
+            >
+              <ToggleGroupItem value="all">
+                All <span className="font-data text-[11px] text-subtle-foreground">{commands.length}</span>
+              </ToggleGroupItem>
+              {categories.map((c) => (
+                <ToggleGroupItem key={c.key} value={c.key}>
+                  <c.icon className="size-3.5" />
+                  {c.label}
+                  <span className="font-data text-[11px] text-subtle-foreground">{c.count}</span>
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </div>
+
+          {loading ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <CardSkeleton key={i} lines={2} />
+              ))}
+            </div>
+          ) : error && !data ? (
+            <ErrorState error={error} onRetry={refresh} />
+          ) : groups.length === 0 ? (
+            <EmptyState
+              icon={Search}
+              title="No commands match"
+              description="Try a different search or category."
+              action={
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setQuery("");
+                    setCategory("all");
+                  }}
+                >
+                  Clear filters
+                </Button>
+              }
+            />
+          ) : (
+            <div className="space-y-6">
+              {groups.map((g) => (
+                <section key={g.key} className="space-y-2">
+                  <h2 className="flex items-center gap-2 text-[13px] font-medium text-muted-foreground">
+                    <g.icon className="size-3.5" />
+                    {g.label}
+                    <span className="font-data text-[11px] text-subtle-foreground">{g.items.length}</span>
+                  </h2>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {g.items.map((c) => (
+                      <CommandCard key={c.id} command={c} onRun={() => openCommand(c)} />
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="lg:sticky lg:top-20 lg:self-start">
+          <RecentCommandRuns refreshKey={runsKey} />
         </div>
       </div>
 
-      {/* Commands Table */}
-      <Card className="border-border/50 bg-card/50 flex-1 flex flex-col overflow-hidden">
-        <CardContent className="p-6">
-          <DataTable 
-            columns={columns} 
-            data={commands}
-            searchKey="name"
-            searchPlaceholder="Search commands..."
-          />
-        </CardContent>
-      </Card>
+      <ExecuteCommandSheet
+        command={selected}
+        open={open}
+        onOpenChange={setOpen}
+        initialMachineId={initialMachine}
+        onStarted={() => setRunsKey((k) => k + 1)}
+      />
+    </div>
+  );
+}
 
-      {/* Execute Dialog */}
-      <Dialog open={showExecuteDialog} onOpenChange={setShowExecuteDialog}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Execute: {selectedCommand?.name}</DialogTitle>
-            <DialogDescription>
-              {selectedCommand?.description}
-            </DialogDescription>
-          </DialogHeader>
-          
-          {selectedCommand && (
-            <div className="space-y-4">
-              {/* Machine Selection */}
-              <div className="space-y-2">
-                <Label>Target Machine</Label>
-                <Select value={selectedMachine} onValueChange={setSelectedMachine}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a machine" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {machines.map(machine => {
-                      const isOnline = machine.last_seen && 
-                        (Date.now() - new Date(machine.last_seen).getTime()) / 1000 / 60 < 5;
-                      return (
-                        <SelectItem key={machine.id} value={machine.id}>
-                          <div className="flex items-center gap-2">
-                            <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-500'}`} />
-                            {machine.title || machine.hostname || machine.ip_address}
-                          </div>
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Variables */}
-              {selectedCommand.variables.length > 0 && (
-                <div className="space-y-3">
-                  <Label>Variables</Label>
-                  <div className="space-y-3 p-4 rounded-lg bg-muted/50">
-                    {selectedCommand.variables.map(v => (
-                      <div key={v.name} className="space-y-1">
-                        <Label htmlFor={`var-${v.name}`} className="text-sm">
-                          {v.name}
-                          {v.required && <span className="text-red-500 ml-1">*</span>}
-                        </Label>
-                        <Input
-                          id={`var-${v.name}`}
-                          type={v.type === "password" ? "password" : "text"}
-                          value={variables[v.name] || ""}
-                          onChange={(e) => setVariables({...variables, [v.name]: e.target.value})}
-                          placeholder={v.description}
-                        />
-                        <p className="text-xs text-muted-foreground">{v.description}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Steps Preview */}
-              <div className="space-y-2">
-                <Label>Steps ({selectedCommand.steps.length})</Label>
-                <div className="max-h-32 overflow-y-auto text-xs font-mono p-3 rounded-lg bg-black text-green-400">
-                  {selectedCommand.steps.map((step, i) => (
-                    <div key={i} className="mb-1">
-                      <span className="text-muted-foreground">{i + 1}.</span>{" "}
-                      <span className="text-yellow-400">{step.action}</span>
-                      {step.command && <span>: {step.command}</span>}
-                      {step.path && <span>: {step.path}</span>}
-                      {step.name && <span>: {step.name}</span>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* On Error */}
-              <div className="text-sm text-muted-foreground">
-                On error: <Badge variant="outline" className="ml-1">{selectedCommand.on_error}</Badge>
-              </div>
-            </div>
+function CommandCard({ command, onRun }: { command: CommandTemplate; onRun: () => void }) {
+  const meta = categoryMeta(command.category);
+  const required = command.variables.filter((v) => v.required).length;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onRun}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onRun();
+        }
+      }}
+      className={cn(
+        "group flex cursor-pointer flex-col gap-2 rounded-lg border border-border bg-card px-4 py-3 outline-none transition-colors",
+        "hover:border-border-strong hover:bg-surface-2/40 focus-visible:ring-[3px] focus-visible:ring-ring/30"
+      )}
+    >
+      <div className="flex items-start gap-2.5">
+        <meta.icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] font-medium">{command.name}</div>
+          <p className="line-clamp-2 text-xs text-muted-foreground">{command.description}</p>
+        </div>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="shrink-0 opacity-60 group-hover:opacity-100"
+          aria-label={`Run ${command.name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRun();
+          }}
+        >
+          <Play />
+        </Button>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pl-6.5 text-[11px] text-subtle-foreground">
+        <span className="flex items-center gap-1" title="Variables">
+          <Variable className="size-3" />
+          {command.variables.length === 0 ? (
+            "no variables"
+          ) : (
+            <span className="font-data">
+              {command.variables.map((v) => v.name).join(", ")}
+              {required > 0 && <span className="text-muted-foreground"> · {required} req</span>}
+            </span>
           )}
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowExecuteDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleExecute} disabled={executing || !selectedMachine}>
-              {executing ? "Executing..." : "Execute Command"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </span>
+        <span className="flex items-center gap-1" title="Steps">
+          <ListChecks className="size-3" />
+          <span className="font-data">{command.steps.length}</span> steps
+        </span>
+        {command.on_error === "rollback" && <OnErrorBadge value={command.on_error} />}
+      </div>
     </div>
   );
 }

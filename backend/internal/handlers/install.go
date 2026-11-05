@@ -162,7 +162,12 @@ fi
 
 # Download agent binary
 echo "Downloading agent binary..."
-AGENT_DOWNLOAD_URL="${SERVER_URL}/api/agent/download"
+case "$(uname -m)" in
+    x86_64|amd64) AGENT_ARCH="amd64" ;;
+    aarch64|arm64) AGENT_ARCH="arm64" ;;
+    *) echo "ERROR: unsupported architecture $(uname -m)"; exit 1 ;;
+esac
+AGENT_DOWNLOAD_URL="${SERVER_URL}/api/agent/download?arch=${AGENT_ARCH}"
 AGENT_PATH="/opt/configuratix/bin/configuratix-agent"
 
 # Try to download pre-built binary

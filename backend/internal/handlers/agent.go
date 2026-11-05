@@ -10,12 +10,15 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
+	"configuratix/backend/internal/jobhooks"
 	"configuratix/backend/internal/models"
 
 	"github.com/google/uuid"
@@ -105,7 +108,7 @@ func (h *AgentHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 	err = tx.Get(&agent, `
 		INSERT INTO agents (name, token_hash, api_key_hash, api_key_lookup, last_seen)
 		VALUES ($1, $2, $3, $4, NOW())
-		RETURNING *
+		RETURNING id
 	`, req.Hostname, tokenHash, apiKeyHash, apiKeyLookup(apiKey))
 	if err != nil {
 		log.Printf("Failed to create agent: %v", err)
@@ -164,7 +167,8 @@ type InterfaceIP struct {
 	IsIPv6    bool   `json:"is_ipv6"`
 }
 
-// HeartbeatRequest includes system stats from agent
+// HeartbeatRequest includes system stats from agent.
+// Fields after DetectedIPs are sent by agents >= 0.6.0 only.
 type HeartbeatRequest struct {
 	Version     string        `json:"version"`
 	CPUPercent  float64       `json:"cpu_percent"`
@@ -177,6 +181,17 @@ type HeartbeatRequest struct {
 	UFWRules    []UFWRule     `json:"ufw_rules"`
 	Fail2ban    bool          `json:"fail2ban_enabled"`
 	DetectedIPs []InterfaceIP `json:"detected_ips"`
+
+	Arch                string   `json:"arch"`
+	OS                  string   `json:"os"`
+	Capabilities        []string `json:"capabilities"`
+	RunningJobID        *string  `json:"running_job_id"`
+	UpdateState         string   `json:"update_state"`
+	UpdateTargetVersion string   `json:"update_target_version"`
+	UpdateError         string   `json:"update_error"`
+	UpdateJobID         string   `json:"update_job_id"`
+	UpdateAvailable     bool     `json:"update_available"`
+	LatestVersion       string   `json:"latest_version"`
 }
 
 // Heartbeat handles agent heartbeat
@@ -190,14 +205,33 @@ func (h *AgentHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	var req HeartbeatRequest
 	json.NewDecoder(r.Body).Decode(&req)
 
-	// Update agent last_seen and version
+	// v2 agents always send capabilities; only they report running_job_id.
+	isV2 := req.Capabilities != nil
+	var capsJSON []byte
+	var runningJobID *uuid.UUID
+	if isV2 {
+		capsJSON, _ = json.Marshal(req.Capabilities)
+		if req.RunningJobID != nil {
+			if id, err := uuid.Parse(*req.RunningJobID); err == nil {
+				runningJobID = &id
+			}
+		}
+	}
+
+	// Update agent last_seen, version and runtime state
 	_, err := h.db.Exec(`
-		UPDATE agents SET last_seen = NOW(), version = COALESCE(NULLIF($1, ''), version)
-		WHERE id = $2
-	`, req.Version, agentID)
+		UPDATE agents SET last_seen = NOW(),
+			version = COALESCE(NULLIF($1, ''), version),
+			arch = COALESCE(NULLIF($2, ''), arch),
+			capabilities = CASE WHEN $3 THEN $4::jsonb ELSE capabilities END,
+			running_job_id = CASE WHEN $3 THEN $5::uuid ELSE running_job_id END
+		WHERE id = $6
+	`, req.Version, req.Arch, isV2, nullableJSON(capsJSON), runningJobID, agentID)
 	if err != nil {
 		log.Printf("Failed to update agent heartbeat: %v", err)
 	}
+
+	h.processUpdateHeartbeat(r.Context(), agentID, &req)
 
 	// Serialize UFW rules to JSON
 	ufwRulesJSON, _ := json.Marshal(req.UFWRules)
@@ -226,7 +260,7 @@ func (h *AgentHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	// Update machine stats including detected IPs
 	// Only update primary_ip if it's not already set (user hasn't manually selected)
 	_, err = h.db.Exec(`
-		UPDATE machines SET 
+		UPDATE machines SET
 			cpu_percent = $1,
 			memory_used = $2,
 			memory_total = $3,
@@ -248,10 +282,36 @@ func (h *AgentHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":         "ok",
+		"target_version": AgentTargetVersion(),
+	})
 }
 
-// GetJobs returns pending jobs for an agent
+func nullableJSON(b []byte) interface{} {
+	if len(b) == 0 {
+		return nil
+	}
+	return string(b)
+}
+
+// claimedJob is what agents receive from GetJobs. JSON field names match the
+// legacy models.Job encoding (id, agent_id, type, payload, status, ...).
+type claimedJob struct {
+	ID             uuid.UUID       `db:"id" json:"id"`
+	AgentID        uuid.UUID       `db:"agent_id" json:"agent_id"`
+	Type           string          `db:"type" json:"type"`
+	PayloadJSON    json.RawMessage `db:"payload_json" json:"payload"`
+	Status         string          `db:"status" json:"status"`
+	CreatedAt      time.Time       `db:"created_at" json:"created_at"`
+	Seq            int64           `db:"seq" json:"seq"`
+	TimeoutSeconds *int            `db:"timeout_seconds" json:"timeout_seconds,omitempty"`
+	Attempts       int             `db:"attempts" json:"attempts"`
+}
+
+// GetJobs atomically claims pending jobs for an agent (marks them running).
+// Concurrent polls never receive the same job (FOR UPDATE SKIP LOCKED).
+// ?limit=N (1..50, default 10 for old agents; v2 agents claim one at a time).
 func (h *AgentHandler) GetJobs(w http.ResponseWriter, r *http.Request) {
 	agentID, ok := r.Context().Value("agent_id").(uuid.UUID)
 	if !ok {
@@ -259,28 +319,100 @@ func (h *AgentHandler) GetJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var jobs []models.Job
+	limit := 10
+	if s := r.URL.Query().Get("limit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n >= 1 && n <= 50 {
+			limit = n
+		}
+	}
+
+	var jobs []claimedJob
 	err := h.db.Select(&jobs, `
-		SELECT * FROM jobs 
-		WHERE agent_id = $1 AND status = 'pending'
-		ORDER BY created_at ASC
-		LIMIT 10
-	`, agentID)
+		UPDATE jobs j
+		SET status = 'running',
+			started_at = COALESCE(j.started_at, NOW()),
+			attempts = COALESCE(j.attempts, 0) + 1,
+			claimed_at = NOW(),
+			updated_at = NOW()
+		WHERE j.id IN (
+			SELECT id FROM jobs
+			WHERE agent_id = $1 AND status = 'pending' AND NOT COALESCE(cancel_requested, false)
+			ORDER BY created_at, seq
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING j.id, j.agent_id, j.type, j.payload_json, j.status, j.created_at, j.seq,
+			j.timeout_seconds, COALESCE(j.attempts, 0) AS attempts
+	`, agentID, limit)
 	if err != nil {
-		log.Printf("Failed to get jobs: %v", err)
+		log.Printf("Failed to claim jobs: %v", err)
 		http.Error(w, "Failed to get jobs", http.StatusInternalServerError)
 		return
 	}
 
+	// RETURNING order is unspecified: restore queue order.
+	sort.Slice(jobs, func(i, k int) bool {
+		if !jobs[i].CreatedAt.Equal(jobs[k].CreatedAt) {
+			return jobs[i].CreatedAt.Before(jobs[k].CreatedAt)
+		}
+		return jobs[i].Seq < jobs[k].Seq
+	})
+
+	for _, j := range jobs {
+		jobhooks.OnJobStarted(context.WithoutCancel(r.Context()), h.db, j.ID.String())
+		if j.Type == "update_agent" {
+			h.db.Exec(`
+				UPDATE agents SET update_state = 'downloading'
+				WHERE id = $1 AND update_job_id = $2 AND update_state = 'pending'
+			`, agentID, j.ID)
+		}
+	}
+
 	if jobs == nil {
-		jobs = []models.Job{}
+		jobs = []claimedJob{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(jobs)
 }
 
-// UpdateJob updates job status
+// JobUpdateRequest is sent by agents.
+//
+// Legacy agents (<0.6.0) send {job_id, status, logs}; logs is appended with a
+// newline separator. v2 agents stream {job_id, status:"running", append_logs}
+// and finish with {job_id, status, append_logs, result, error}; append_logs is
+// appended verbatim.
+type JobUpdateRequest struct {
+	JobID      uuid.UUID       `json:"job_id"`
+	Status     string          `json:"status"`
+	Logs       *string         `json:"logs"`
+	AppendLogs *string         `json:"append_logs"`
+	Result     json.RawMessage `json:"result"`
+	Error      string          `json:"error"`
+}
+
+// JobUpdateResponse tells the agent the job's current state.
+type JobUpdateResponse struct {
+	Status          string `json:"status"` // "ok"
+	JobStatus       string `json:"job_status"`
+	CancelRequested bool   `json:"cancel_requested"`
+}
+
+const maxJobLogBytes = 8 << 20
+
+func isTerminalStatus(s string) bool {
+	return s == "completed" || s == "failed" || s == "cancelled"
+}
+
+// legacyErrorMessage extracts "Error: ..." appended by old agents.
+func legacyErrorMessage(logs string) string {
+	if i := strings.LastIndex(logs, "\nError: "); i >= 0 {
+		return strings.TrimSpace(logs[i+len("\nError: "):])
+	}
+	return ""
+}
+
+// UpdateJob updates job status / appends logs / stores the structured result.
 func (h *AgentHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 	agentID, ok := r.Context().Value("agent_id").(uuid.UUID)
 	if !ok {
@@ -288,47 +420,184 @@ func (h *AgentHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		JobID  uuid.UUID `json:"job_id"`
-		Status string    `json:"status"`
-		Logs   string    `json:"logs"`
-	}
+	var req JobUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
-	var finishedAt *time.Time
-	if req.Status == "completed" || req.Status == "failed" {
-		now := time.Now()
-		finishedAt = &now
+	switch req.Status {
+	case "running", "completed", "failed", "cancelled":
+	default:
+		http.Error(w, "Invalid status", http.StatusBadRequest)
+		return
 	}
 
-	var startedAt *time.Time
-	if req.Status == "running" {
-		now := time.Now()
-		startedAt = &now
-	}
+	legacy := req.AppendLogs == nil && len(req.Result) == 0
+	ctx := r.Context()
 
-	_, err := h.db.Exec(`
-		UPDATE jobs 
-		SET status = $1, logs = COALESCE(logs || E'\n' || $2, $2), 
-			started_at = COALESCE(started_at, $3),
-			finished_at = $4,
-			updated_at = NOW()
-		WHERE id = $5 AND agent_id = $6
-	`, req.Status, req.Logs, startedAt, finishedAt, req.JobID, agentID)
+	resp, finished, err := h.applyJobUpdate(ctx, agentID, &req, legacy)
 	if err != nil {
-		log.Printf("Failed to update job: %v", err)
+		log.Printf("Failed to update job %s: %v", req.JobID, err)
 		http.Error(w, "Failed to update job", http.StatusInternalServerError)
 		return
 	}
-	if req.Status == "completed" || req.Status == "failed" {
-		h.updateL7CertificateStatuses(req.JobID, req.Status, req.Logs)
+
+	if finished {
+		h.afterJobFinished(ctx, req.JobID, resp.JobStatus)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	json.NewEncoder(w).Encode(resp)
+}
+
+// afterJobFinished runs the L7 certificate status parser and the entity hooks.
+func (h *AgentHandler) afterJobFinished(ctx context.Context, jobID uuid.UUID, status string) {
+	var logs sql.NullString
+	h.db.Get(&logs, `SELECT logs FROM jobs WHERE id = $1`, jobID)
+	l7Status := "completed"
+	if status != "completed" {
+		l7Status = "failed"
+	}
+	h.updateL7CertificateStatuses(jobID, l7Status, logs.String)
+	jobhooks.OnJobFinished(context.WithoutCancel(ctx), h.db, jobID.String())
+}
+
+func (h *AgentHandler) applyJobUpdate(ctx context.Context, agentID uuid.UUID, req *JobUpdateRequest, legacy bool) (*JobUpdateResponse, bool, error) {
+	tx, err := h.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback()
+
+	var cur struct {
+		Status          string `db:"status"`
+		Type            string `db:"type"`
+		CancelRequested bool   `db:"cancel_requested"`
+	}
+	err = tx.GetContext(ctx, &cur, `
+		SELECT COALESCE(status, 'pending') AS status, type, COALESCE(cancel_requested, false) AS cancel_requested
+		FROM jobs WHERE id = $1 AND agent_id = $2 FOR UPDATE
+	`, req.JobID, agentID)
+	if err == sql.ErrNoRows {
+		return &JobUpdateResponse{Status: "ok", JobStatus: "not_found"}, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Logs: legacy appends with newline separator, v2 appends verbatim.
+	var appendText string
+	var sep bool
+	if req.Logs != nil {
+		appendText, sep = *req.Logs, true
+	}
+	if req.AppendLogs != nil {
+		appendText += *req.AppendLogs
+		if req.Logs == nil {
+			sep = false
+		}
+	}
+	if req.Logs != nil || (req.AppendLogs != nil && *req.AppendLogs != "") {
+		q := `UPDATE jobs SET logs = CASE
+				WHEN length(COALESCE(logs, '')) > $3 THEN logs
+				WHEN $4 THEN COALESCE(logs || E'\n' || $2, $2)
+				ELSE COALESCE(logs, '') || $2 END,
+				updated_at = NOW()
+			WHERE id = $1`
+		if _, err := tx.ExecContext(ctx, q, req.JobID, appendText, maxJobLogBytes, sep); err != nil {
+			return nil, false, err
+		}
+	}
+
+	resp := &JobUpdateResponse{Status: "ok", JobStatus: cur.Status, CancelRequested: cur.CancelRequested}
+
+	// Terminal jobs (reaped, cancelled, confirmed) keep their status.
+	if isTerminalStatus(cur.Status) {
+		return resp, false, tx.Commit()
+	}
+
+	newStatus := req.Status
+	if newStatus == "running" {
+		startedExpr := "COALESCE(started_at, NOW())"
+		if legacy {
+			// Old agents claim up to 10 jobs at once and run them sequentially:
+			// their own "running" report is the real start time.
+			startedExpr = "NOW()"
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = 'running', started_at = `+startedExpr+`, updated_at = NOW() WHERE id = $1`, req.JobID); err != nil {
+			return nil, false, err
+		}
+		resp.JobStatus = "running"
+		return resp, false, tx.Commit()
+	}
+
+	errMsg := req.Error
+	if errMsg == "" && newStatus != "completed" && req.Logs != nil {
+		errMsg = legacyErrorMessage(*req.Logs)
+	}
+	if len(errMsg) > 4000 {
+		errMsg = errMsg[:4000]
+	}
+
+	// update_agent: "completed" only means the new binary is installed and the
+	// agent is restarting; the job completes when a heartbeat confirms the
+	// target version (or fails on rollback / timeout).
+	if cur.Type == "update_agent" {
+		var a struct {
+			Version string `db:"version"`
+			Target  string `db:"target"`
+		}
+		tx.GetContext(ctx, &a, `SELECT COALESCE(version, '') AS version, COALESCE(update_target_version, '') AS target FROM agents WHERE id = $1`, agentID)
+		if newStatus == "completed" && a.Target != "" && a.Version != a.Target {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE jobs SET logs = COALESCE(logs, '') || $2, result_json = COALESCE($3::jsonb, result_json), updated_at = NOW()
+				WHERE id = $1`, req.JobID, "\n[server] Binary installed; waiting for the agent to restart and confirm version "+a.Target+"...\n", nullableRaw(req.Result)); err != nil {
+				return nil, false, err
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE agents SET update_state = 'restarting'
+				WHERE id = $1 AND update_job_id = $2 AND update_state IN ('pending','downloading','verifying','installing','restarting')
+			`, agentID, req.JobID); err != nil {
+				return nil, false, err
+			}
+			resp.JobStatus = "running"
+			return resp, false, tx.Commit()
+		}
+		stateVal := "confirmed"
+		if newStatus != "completed" {
+			stateVal = "failed"
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE agents SET update_state = $3, last_update_error = NULLIF($4, '')
+			WHERE id = $1 AND update_job_id = $2
+		`, agentID, req.JobID, stateVal, errMsg); err != nil {
+			return nil, false, err
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE jobs SET status = $2::text,
+			finished_at = NOW(),
+			started_at = COALESCE(started_at, NOW()),
+			result_json = COALESCE($3::jsonb, result_json),
+			error_message = CASE WHEN $2::text = 'completed' THEN NULL ELSE COALESCE(NULLIF($4::text, ''), error_message) END,
+			updated_at = NOW()
+		WHERE id = $1
+	`, req.JobID, newStatus, nullableRaw(req.Result), errMsg); err != nil {
+		return nil, false, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE agents SET running_job_id = NULL WHERE id = $1 AND running_job_id = $2`, agentID, req.JobID); err != nil {
+		return nil, false, err
+	}
+	resp.JobStatus = newStatus
+	return resp, true, tx.Commit()
+}
+
+func nullableRaw(b json.RawMessage) interface{} {
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	return string(b)
 }
 
 func (h *AgentHandler) updateL7CertificateStatuses(jobID uuid.UUID, jobStatus, logs string) {

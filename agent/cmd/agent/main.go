@@ -16,12 +16,25 @@ import (
 	"configuratix/agent/internal/executor"
 	"configuratix/agent/internal/files"
 	"configuratix/agent/internal/security"
+	"configuratix/agent/internal/state"
 	"configuratix/agent/internal/stats"
 	"configuratix/agent/internal/terminal"
 	"configuratix/agent/internal/updater"
+	"configuratix/agent/internal/worker"
 )
 
-const Version = "0.5.3"
+// fallbackVersion is used when the binary was built without
+// -ldflags "-X main.Version=...". Keep in sync with backend/agent-binaries/version.json.
+const fallbackVersion = "0.6.0"
+
+// Version is injected at build time by the backend (-X main.Version=<target>).
+var Version = ""
+
+func init() {
+	if Version == "" {
+		Version = fallbackVersion
+	}
+}
 
 func main() {
 	enrollCmd := flag.NewFlagSet("enroll", flag.ExitOnError)
@@ -49,8 +62,10 @@ func main() {
 		if err := run(); err != nil {
 			log.Fatal(err)
 		}
-	case "version":
+	case "version", "--version":
 		fmt.Printf("Configuratix Agent %s\n", Version)
+	case "--self-test", "self-test":
+		os.Exit(selfTest())
 	default:
 		printUsage()
 		os.Exit(1)
@@ -64,6 +79,7 @@ func printUsage() {
 	fmt.Println("  configuratix-agent enroll --server URL --token TOKEN")
 	fmt.Println("  configuratix-agent run")
 	fmt.Println("  configuratix-agent version")
+	fmt.Println("  configuratix-agent --self-test")
 }
 
 func enroll(serverURL, token string) error {
@@ -105,13 +121,17 @@ func run() error {
 		return fmt.Errorf("failed to load config (run 'enroll' first): %v", err)
 	}
 
-	log.Printf("Starting Configuratix Agent %s", Version)
+	log.Printf("Starting Configuratix Agent %s (%s/%s)", Version, runtime.GOOS, runtime.GOARCH)
 	log.Printf("Server: %s", cfg.ServerURL)
 	log.Printf("Agent ID: %s", cfg.AgentID)
+
+	// Report the outcome of a previous self-update (if any) in heartbeats.
+	updater.CheckOnStartup(Version)
 
 	c := client.New(cfg.ServerURL, cfg.APIKey)
 	exec := executor.New()
 	exec.SetConfig(cfg.ServerURL, cfg.APIKey)
+	exec.SetVersion(Version)
 
 	// Start terminal connection in background
 	go terminal.RunTerminalLoop(cfg.ServerURL, cfg.APIKey)
@@ -119,8 +139,10 @@ func run() error {
 	// Start file handler connection in background
 	go files.RunFileLoop(cfg.ServerURL, cfg.APIKey)
 
-	// Start auto-updater in background
-	go updater.New(cfg.ServerURL, Version).Run()
+	// Version checker: reports update availability only, never installs.
+	upd := updater.New(cfg.ServerURL, Version)
+	upd.SetAPIKey(cfg.APIKey)
+	go upd.Run()
 
 	// Start security module (Linux only)
 	var securityModule *security.Module
@@ -146,49 +168,104 @@ func run() error {
 		log.Printf("Security module skipped (OS: %s, requires linux)", runtime.GOOS)
 	}
 
-	// Heartbeat ticker
-	heartbeatTicker := time.NewTicker(30 * time.Second)
-	defer heartbeatTicker.Stop()
+	// Jobs run in their own goroutine, sequentially, so long jobs never
+	// delay heartbeats.
+	go worker.New(c, exec).Run()
 
-	// Job poll ticker
-	jobTicker := time.NewTicker(5 * time.Second)
-	defer jobTicker.Stop()
+	heartbeatLoop(c, upd)
+	return nil
+}
 
-	// Initial heartbeat
-	c.HeartbeatWithStats(stats.Collect(Version))
+// heartbeatPayload is stats.Stats plus runtime/job/update state.
+type heartbeatPayload struct {
+	stats.Stats
+	Arch                string   `json:"arch"`
+	OS                  string   `json:"os"`
+	Capabilities        []string `json:"capabilities"`
+	RunningJobID        *string  `json:"running_job_id"`
+	UpdateState         string   `json:"update_state,omitempty"`
+	UpdateTargetVersion string   `json:"update_target_version,omitempty"`
+	UpdateError         string   `json:"update_error,omitempty"`
+	UpdateJobID         string   `json:"update_job_id,omitempty"`
+	UpdateAvailable     bool     `json:"update_available"`
+	LatestVersion       string   `json:"latest_version,omitempty"`
+}
 
+func buildHeartbeat(upd *updater.Updater) (heartbeatPayload, state.Snapshot) {
+	st := state.Get()
+	hb := heartbeatPayload{
+		Stats:               stats.Collect(Version),
+		Arch:                runtime.GOARCH,
+		OS:                  runtime.GOOS,
+		Capabilities:        executor.Capabilities,
+		UpdateState:         st.UpdateState,
+		UpdateTargetVersion: st.UpdateTargetVersion,
+		UpdateError:         st.UpdateError,
+		UpdateJobID:         st.UpdateJobID,
+		UpdateAvailable:     upd.IsUpdateAvailable(),
+	}
+	if st.RunningJobID != "" {
+		id := st.RunningJobID
+		hb.RunningJobID = &id
+	}
+	if lv := upd.GetLatestVersion(); lv != nil {
+		hb.LatestVersion = lv.Version
+	}
+	return hb, st
+}
+
+func heartbeatLoop(c *client.Client, upd *updater.Updater) {
+	const interval = 30 * time.Second
+	const retryInterval = 5 * time.Second
+
+	send := func() bool {
+		hb, st := buildHeartbeat(upd)
+		if _, err := c.Heartbeat(hb); err != nil {
+			log.Printf("Heartbeat failed: %v", err)
+			return false
+		}
+		updater.AfterHeartbeat()
+		state.ClearUpdateIfTerminal(st.UpdateChangedAt)
+		return true
+	}
+
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	lastSent := time.Time{}
 	for {
 		select {
-		case <-heartbeatTicker.C:
-			if err := c.HeartbeatWithStats(stats.Collect(Version)); err != nil {
-				log.Printf("Heartbeat failed: %v", err)
+		case <-timer.C:
+		case <-state.KickChan():
+			// Coalesce bursts of state changes.
+			if time.Since(lastSent) < 2*time.Second {
+				time.Sleep(2 * time.Second)
 			}
-
-		case <-jobTicker.C:
-			jobs, err := c.GetJobs()
-			if err != nil {
-				log.Printf("Failed to get jobs: %v", err)
-				continue
-			}
-
-			for _, job := range jobs {
-				log.Printf("Processing job %s (type: %s)", job.ID, job.Type)
-
-				// Mark as running
-				c.UpdateJob(job.ID, "running", "Starting job execution...")
-
-				// Execute job
-				logs, err := exec.Execute(job.Type, job.Payload)
-				if err != nil {
-					log.Printf("Job %s failed: %v", job.ID, err)
-					c.UpdateJob(job.ID, "failed", logs+"\nError: "+err.Error())
-				} else {
-					log.Printf("Job %s completed", job.ID)
-					c.UpdateJob(job.ID, "completed", logs)
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
 				}
 			}
 		}
+		ok := send()
+		lastSent = time.Now()
+		if ok {
+			timer.Reset(interval)
+		} else {
+			timer.Reset(retryInterval)
+		}
 	}
+}
+
+// selfTest is run by the updater on a freshly downloaded binary before it is
+// installed: the config must load and the version is printed for comparison.
+func selfTest() int {
+	if _, err := config.Load(); err != nil {
+		fmt.Printf("configuratix-agent self-test FAILED: config: %v\n", err)
+		return 1
+	}
+	fmt.Printf("configuratix-agent self-test ok arch=%s version=%s\n", runtime.GOARCH, Version)
+	return 0
 }
 
 func getOutboundIP() string {

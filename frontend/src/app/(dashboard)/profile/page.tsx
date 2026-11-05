@@ -1,397 +1,252 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import * as React from "react";
+import { KeyRound, Save, TriangleAlert, UserRound } from "lucide-react";
+import { toast } from "sonner";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { api, User } from "@/lib/api";
-import { toast } from "sonner";
-import { Shield, Key, User as UserIcon, Mail, Calendar, ShieldCheck, ShieldOff } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  CardSkeleton,
+  CopyableMono,
+  ErrorState,
+  KeyValueList,
+  PageHeader,
+  RelativeTime,
+  SectionCard,
+  Spinner,
+  errorMessage,
+  usePolling,
+} from "@/components/app";
+import { UserRoleBadge } from "@/components/admin/user-role-badge";
+import { FormField, InitialsAvatar, MIN_PASSWORD_LENGTH, PasswordInput, PasswordRules } from "@/components/profile/form-field";
+import { TwoFactorSection } from "@/components/profile/two-factor";
+import { formatDateTime } from "@/lib/format";
+import { api, type User } from "@/lib/api";
+import { cn } from "@/lib/utils";
+
+const SECTIONS = [
+  { id: "profile", label: "Profile" },
+  { id: "password", label: "Password" },
+  { id: "two-factor", label: "Two-factor" },
+];
 
 export default function ProfilePage() {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  // Profile form
-  const [name, setName] = useState("");
-
-  // Password form
-  const [showPasswordDialog, setShowPasswordDialog] = useState(false);
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-
-  // 2FA
-  const [show2FASetupDialog, setShow2FASetupDialog] = useState(false);
-  const [show2FADisableDialog, setShow2FADisableDialog] = useState(false);
-  const [totpData, setTotpData] = useState<{ secret: string; qr_code: string; url: string } | null>(null);
-  const [totpCode, setTotpCode] = useState("");
-  const [disablePassword, setDisablePassword] = useState("");
-
-  useEffect(() => {
-    loadUser();
-  }, []);
-
-  const loadUser = async () => {
-    try {
-      const data = await api.getMe();
-      setUser(data);
-      setName(data.name || "");
-    } catch (err) {
-      console.error("Failed to load user:", err);
-      toast.error("Failed to load profile");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleUpdateProfile = async () => {
-    setSaving(true);
-    try {
-      const updated = await api.updateProfile(name);
-      setUser(updated);
-      toast.success("Profile updated");
-    } catch (err) {
-      console.error("Failed to update profile:", err);
-      toast.error("Failed to update profile");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleChangePassword = async () => {
-    if (newPassword !== confirmPassword) {
-      toast.error("Passwords do not match");
-      return;
-    }
-    if (newPassword.length < 8) {
-      toast.error("Password must be at least 8 characters");
-      return;
-    }
-
-    setSaving(true);
-    try {
-      await api.changePassword(currentPassword, newPassword);
-      setShowPasswordDialog(false);
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-      toast.success("Password changed successfully");
-    } catch (err) {
-      console.error("Failed to change password:", err);
-      toast.error("Failed to change password. Check your current password.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleSetup2FA = async () => {
-    try {
-      const data = await api.setup2FA();
-      setTotpData(data);
-      setShow2FASetupDialog(true);
-    } catch (err) {
-      console.error("Failed to setup 2FA:", err);
-      toast.error("Failed to setup 2FA");
-    }
-  };
-
-  const handleEnable2FA = async () => {
-    if (!totpCode || totpCode.length !== 6) {
-      toast.error("Please enter a 6-digit code");
-      return;
-    }
-
-    setSaving(true);
-    try {
-      await api.enable2FA(totpCode);
-      setShow2FASetupDialog(false);
-      setTotpData(null);
-      setTotpCode("");
-      loadUser();
-      toast.success("2FA enabled successfully");
-    } catch (err) {
-      console.error("Failed to enable 2FA:", err);
-      toast.error("Invalid verification code");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDisable2FA = async () => {
-    setSaving(true);
-    try {
-      await api.disable2FA(disablePassword);
-      setShow2FADisableDialog(false);
-      setDisablePassword("");
-      loadUser();
-      toast.success("2FA disabled");
-    } catch (err) {
-      console.error("Failed to disable 2FA:", err);
-      toast.error("Invalid password");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const getRoleBadge = (role: string) => {
-    switch (role) {
-      case "superadmin":
-        return <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30">Super Admin</Badge>;
-      case "admin":
-        return <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">Admin</Badge>;
-      default:
-        return <Badge variant="secondary">User</Badge>;
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" />
-      </div>
-    );
-  }
+  const { data: user, loading, error, refresh, setData } = usePolling(() => api.getMe(), 0);
 
   return (
-    <div className="space-y-6 max-w-3xl">
-      <div>
-        <h1 className="text-3xl font-semibold tracking-tight">Profile</h1>
-        <p className="text-muted-foreground mt-1">Manage your account settings and security.</p>
-      </div>
+    <div className="space-y-6">
+      <PageHeader icon={UserRound} title="Profile" description="Your account details and sign-in security." />
 
-      {/* Profile Info */}
-      <Card className="border-border/50 bg-card/50">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <UserIcon className="h-5 w-5" />
-            Profile Information
-          </CardTitle>
-          <CardDescription>Update your display name and view account details.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label>Email</Label>
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/50">
-                <Mail className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm">{user?.email}</span>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Role</Label>
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/50">
-                <Shield className="h-4 w-4 text-muted-foreground" />
-                {user && getRoleBadge(user.role)}
-              </div>
-            </div>
+      {loading ? (
+        <div className="grid gap-6 lg:grid-cols-[180px_minmax(0,1fr)]">
+          <div />
+          <div className="max-w-3xl space-y-4">
+            <CardSkeleton lines={4} />
+            <CardSkeleton lines={4} />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="name">Display Name</Label>
-            <Input
-              id="name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Your name"
-            />
+        </div>
+      ) : !user ? (
+        <ErrorState title="Couldn't load your profile" error={error} onRetry={refresh} />
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-[180px_minmax(0,1fr)]">
+          <SectionNav />
+          <div className="max-w-3xl min-w-0 space-y-4">
+            <ProfileSection user={user} onSaved={(u) => setData(u)} />
+            <PasswordSection user={user} onChanged={refresh} />
+            <TwoFactorSection user={user} onChanged={refresh} />
           </div>
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Calendar className="h-4 w-4" />
-            Member since {user && new Date(user.created_at).toLocaleDateString()}
-          </div>
-          <Button onClick={handleUpdateProfile} disabled={saving}>
-            {saving ? "Saving..." : "Save Changes"}
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* Security */}
-      <Card className="border-border/50 bg-card/50">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Key className="h-5 w-5" />
-            Security
-          </CardTitle>
-          <CardDescription>Manage your password and two-factor authentication.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Password */}
-          <div className="flex items-center justify-between p-4 rounded-lg bg-muted/50">
-            <div>
-              <p className="font-medium">Password</p>
-              <p className="text-sm text-muted-foreground">
-                {user?.password_changed_at
-                  ? `Last changed ${new Date(user.password_changed_at).toLocaleDateString()}`
-                  : "Never changed"}
-              </p>
-            </div>
-            <Button variant="outline" onClick={() => setShowPasswordDialog(true)}>
-              Change Password
-            </Button>
-          </div>
-
-          {/* 2FA */}
-          <div className="flex items-center justify-between p-4 rounded-lg bg-muted/50">
-            <div className="flex items-center gap-3">
-              {user?.totp_enabled ? (
-                <ShieldCheck className="h-5 w-5 text-green-500" />
-              ) : (
-                <ShieldOff className="h-5 w-5 text-muted-foreground" />
-              )}
-              <div>
-                <p className="font-medium">Two-Factor Authentication</p>
-                <p className="text-sm text-muted-foreground">
-                  {user?.totp_enabled
-                    ? "Enabled - Your account is protected"
-                    : "Add an extra layer of security"}
-                </p>
-              </div>
-            </div>
-            {user?.totp_enabled ? (
-              <Button variant="outline" onClick={() => setShow2FADisableDialog(true)}>
-                Disable 2FA
-              </Button>
-            ) : (
-              <Button onClick={handleSetup2FA}>
-                Enable 2FA
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Change Password Dialog */}
-      <Dialog open={showPasswordDialog} onOpenChange={setShowPasswordDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Change Password</DialogTitle>
-            <DialogDescription>
-              Enter your current password and choose a new one.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="current-password">Current Password</Label>
-              <Input
-                id="current-password"
-                type="password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="new-password">New Password</Label>
-              <Input
-                id="new-password"
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirm-password">Confirm New Password</Label>
-              <Input
-                id="confirm-password"
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowPasswordDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleChangePassword} disabled={saving}>
-              {saving ? "Changing..." : "Change Password"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* 2FA Setup Dialog */}
-      <Dialog open={show2FASetupDialog} onOpenChange={setShow2FASetupDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Set Up Two-Factor Authentication</DialogTitle>
-            <DialogDescription>
-              Scan this QR code with Google Authenticator or another TOTP app.
-            </DialogDescription>
-          </DialogHeader>
-          {totpData && (
-            <div className="space-y-4">
-              <div className="flex justify-center p-4 bg-white rounded-lg">
-                <img src={totpData.qr_code} alt="2FA QR Code" className="w-48 h-48" />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">
-                  Can&apos;t scan? Enter this code manually:
-                </Label>
-                <code className="block p-2 bg-muted rounded text-sm font-mono break-all">
-                  {totpData.secret}
-                </code>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="totp-code">Verification Code</Label>
-                <Input
-                  id="totp-code"
-                  placeholder="000000"
-                  value={totpCode}
-                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  className="text-center text-2xl tracking-widest font-mono"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Enter the 6-digit code from your authenticator app
-                </p>
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShow2FASetupDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleEnable2FA} disabled={saving || totpCode.length !== 6}>
-              {saving ? "Verifying..." : "Enable 2FA"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* 2FA Disable Dialog */}
-      <Dialog open={show2FADisableDialog} onOpenChange={setShow2FADisableDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Disable Two-Factor Authentication</DialogTitle>
-            <DialogDescription>
-              Enter your password to disable 2FA. This will make your account less secure.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="disable-password">Password</Label>
-              <Input
-                id="disable-password"
-                type="password"
-                value={disablePassword}
-                onChange={(e) => setDisablePassword(e.target.value)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShow2FADisableDialog(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleDisable2FA} disabled={saving}>
-              {saving ? "Disabling..." : "Disable 2FA"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </div>
+      )}
     </div>
   );
 }
 
+function SectionNav() {
+  const [active, setActive] = React.useState("profile");
+  React.useEffect(() => {
+    const els = SECTIONS.map((s) => document.getElementById(s.id)).filter(Boolean) as HTMLElement[];
+    const io = new IntersectionObserver(
+      (entries) => {
+        const vis = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (vis[0]) setActive(vis[0].target.id);
+      },
+      { rootMargin: "-80px 0px -60% 0px" }
+    );
+    els.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, []);
+  return (
+    <nav aria-label="Profile sections" className="hidden lg:block">
+      <ul className="sticky top-20 space-y-0.5">
+        {SECTIONS.map((s) => (
+          <li key={s.id}>
+            <a
+              href={`#${s.id}`}
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById(s.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                setActive(s.id);
+              }}
+              className={cn(
+                "block rounded-md px-2.5 py-1.5 text-[13px] transition-colors",
+                active === s.id ? "bg-surface-2 font-medium text-foreground" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {s.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+function ProfileSection({ user, onSaved }: { user: User; onSaved: (u: User) => void }) {
+  const [name, setName] = React.useState(user.name ?? "");
+  const [saving, setSaving] = React.useState(false);
+  const dirty = name.trim() !== (user.name ?? "").trim();
+  const error = name.trim().length > 100 ? "Keep it under 100 characters" : null;
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!dirty || error) return;
+    setSaving(true);
+    try {
+      const updated = await api.updateProfile(name.trim());
+      onSaved(updated);
+      toast.success("Profile updated");
+    } catch (err) {
+      toast.error("Couldn't update profile", { description: errorMessage(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <SectionCard
+      id="profile"
+      title="Profile"
+      description="How you appear to teammates in projects and job history."
+      className="scroll-mt-20"
+    >
+      <form onSubmit={save} className="space-y-4">
+        <div className="flex items-center gap-3">
+          <InitialsAvatar name={name || user.email} size="lg" />
+          <div className="min-w-0">
+            <div className="truncate text-[15px] font-medium">{name.trim() || user.email}</div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <UserRoleBadge role={user.role} />
+            </div>
+          </div>
+        </div>
+        <FormField id="display-name" label="Display name" error={error} hint="Leave empty to show your email.">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" maxLength={120} className="max-w-sm" />
+        </FormField>
+        <KeyValueList
+          items={[
+            { label: "Email", value: <CopyableMono value={user.email} /> },
+            { label: "User ID", value: <CopyableMono value={user.id} display={`${user.id.slice(0, 8)}…`} /> },
+            { label: "Member since", value: <span className="font-data">{formatDateTime(user.created_at, false)}</span> },
+          ]}
+        />
+        <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
+          {dirty && (
+            <Button type="button" variant="ghost" size="sm" onClick={() => setName(user.name ?? "")} disabled={saving}>
+              Reset
+            </Button>
+          )}
+          <Button type="submit" size="sm" disabled={!dirty || !!error || saving}>
+            {saving ? <Spinner /> : <Save />}
+            Save changes
+          </Button>
+        </div>
+      </form>
+    </SectionCard>
+  );
+}
+
+function PasswordSection({ user, onChanged }: { user: User; onChanged: () => void }) {
+  const [current, setCurrent] = React.useState("");
+  const [next, setNext] = React.useState("");
+  const [confirmPw, setConfirmPw] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [submitted, setSubmitted] = React.useState(false);
+  const [serverError, setServerError] = React.useState<string | null>(null);
+
+  const rules = [
+    { label: `${MIN_PASSWORD_LENGTH}+ characters`, ok: next.length >= MIN_PASSWORD_LENGTH },
+    { label: "Different from current", ok: !!next && next !== current },
+    { label: "Confirmation matches", ok: !!next && next === confirmPw },
+  ];
+  const valid = !!current && rules.every((r) => r.ok);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitted(true);
+    if (!valid) return;
+    setBusy(true);
+    setServerError(null);
+    try {
+      await api.changePassword(current, next);
+      setCurrent("");
+      setNext("");
+      setConfirmPw("");
+      setSubmitted(false);
+      toast.success("Password changed");
+      onChanged();
+    } catch (err) {
+      const msg = errorMessage(err);
+      setServerError(/invalid|incorrect|wrong|401|current/i.test(msg) ? "Current password is incorrect." : msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SectionCard
+      id="password"
+      icon={KeyRound}
+      title="Password"
+      description={
+        user.password_changed_at ? (
+          <>
+            Last changed <RelativeTime date={user.password_changed_at} />
+          </>
+        ) : (
+          "Never changed since the account was created."
+        )
+      }
+      className="scroll-mt-20"
+    >
+      <form onSubmit={submit} className="space-y-4" noValidate>
+        <input type="text" autoComplete="username" value={user.email} readOnly hidden />
+        <FormField id="pw-current" label="Current password" error={submitted && !current ? "Enter your current password" : null} className="max-w-sm">
+          <PasswordInput autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+        </FormField>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField id="pw-new" label="New password">
+            <PasswordInput autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
+          </FormField>
+          <FormField id="pw-confirm" label="Confirm new password">
+            <PasswordInput autoComplete="new-password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />
+          </FormField>
+        </div>
+        {(next || submitted) && <PasswordRules rules={rules} />}
+        {serverError && (
+          <Alert variant="destructive">
+            <TriangleAlert />
+            <AlertDescription>{serverError}</AlertDescription>
+          </Alert>
+        )}
+        <div className="flex justify-end border-t border-border pt-3">
+          <Button type="submit" size="sm" disabled={busy || (submitted && !valid)}>
+            {busy ? <Spinner /> : <KeyRound />}
+            Update password
+          </Button>
+        </div>
+      </form>
+    </SectionCard>
+  );
+}

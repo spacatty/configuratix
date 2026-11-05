@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -1173,4 +1174,117 @@ func (h *SecurityHandler) AgentGetWhitelist(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(whitelist)
+}
+
+// maxBanPageSize caps page_size for GET /api/security/bans (larger values are clamped).
+const maxBanPageSize = 500
+
+// ExportBans streams all bans matching the list filters.
+// GET /api/security/bans/export?format=csv|txt&active_only=true&reason=&machine_id=&search=
+// csv: header ip_address,reason,source_machine,banned_at,expires_at,is_active,created_by
+// txt: one IP per line (suitable for firewall import)
+func (h *SecurityHandler) ExportBans(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+	q := r.URL.Query()
+	format := q.Get("format")
+	if format == "" {
+		format = "csv"
+	}
+	if format != "csv" && format != "txt" {
+		http.Error(w, "format must be csv or txt", http.StatusBadRequest)
+		return
+	}
+
+	// Same visibility and filters as ListBans.
+	query := `
+		SELECT b.ip_address::text AS ip, b.reason, COALESCE(NULLIF(m.title, ''), m.hostname, '') AS machine,
+			b.banned_at, b.expires_at, COALESCE(b.is_active, false) AS is_active, COALESCE(u.email, '') AS created_by
+		FROM security_ip_bans b
+		LEFT JOIN machines m ON b.source_machine_id = m.id
+		LEFT JOIN users u ON b.created_by = u.id
+		WHERE EXISTS (SELECT 1 FROM machines WHERE owner_id = $1)`
+	args := []interface{}{userID}
+	if s := q.Get("search"); s != "" {
+		args = append(args, "%"+s+"%")
+		query += fmt.Sprintf(" AND b.ip_address::text LIKE $%d", len(args))
+	}
+	if s := q.Get("reason"); s != "" {
+		args = append(args, s)
+		query += fmt.Sprintf(" AND b.reason = $%d", len(args))
+	}
+	if s := q.Get("machine_id"); s != "" {
+		if _, err := uuid.Parse(s); err != nil {
+			http.Error(w, "Invalid machine_id", http.StatusBadRequest)
+			return
+		}
+		args = append(args, s)
+		query += fmt.Sprintf(" AND b.source_machine_id = $%d", len(args))
+	}
+	if q.Get("active_only") == "true" || q.Get("active_only") == "1" {
+		query += " AND b.is_active = true AND (b.expires_at IS NULL OR b.expires_at > NOW())"
+	}
+	query += " ORDER BY b.banned_at DESC"
+
+	rows, err := h.db.QueryxContext(r.Context(), query, args...)
+	if err != nil {
+		log.Printf("Failed to export bans: %v", err)
+		http.Error(w, "Failed to export bans", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	stamp := time.Now().UTC().Format("20060102-150405")
+	if format == "txt" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	} else {
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="bans-%s.%s"`, stamp, format))
+
+	var cw *csv.Writer
+	if format == "csv" {
+		cw = csv.NewWriter(w)
+		cw.Write([]string{"ip_address", "reason", "source_machine", "banned_at", "expires_at", "is_active", "created_by"})
+	}
+	fmtTime := func(t *time.Time) string {
+		if t == nil {
+			return ""
+		}
+		return t.UTC().Format(time.RFC3339)
+	}
+	n := 0
+	for rows.Next() {
+		var row struct {
+			IP        string     `db:"ip"`
+			Reason    string     `db:"reason"`
+			Machine   string     `db:"machine"`
+			BannedAt  *time.Time `db:"banned_at"`
+			ExpiresAt *time.Time `db:"expires_at"`
+			IsActive  bool       `db:"is_active"`
+			CreatedBy string     `db:"created_by"`
+		}
+		if err := rows.StructScan(&row); err != nil {
+			log.Printf("export bans scan: %v", err)
+			break
+		}
+		ip := strings.TrimSuffix(strings.TrimSuffix(row.IP, "/32"), "/128")
+		if cw != nil {
+			cw.Write([]string{ip, row.Reason, row.Machine, fmtTime(row.BannedAt), fmtTime(row.ExpiresAt), strconv.FormatBool(row.IsActive), row.CreatedBy})
+		} else {
+			fmt.Fprintln(w, ip)
+		}
+		n++
+		if n%1000 == 0 {
+			if cw != nil {
+				cw.Flush()
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}
+	if cw != nil {
+		cw.Flush()
+	}
 }

@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"configuratix/backend/internal/database"
-	"configuratix/backend/internal/models"
+	"configuratix/backend/internal/jobs"
 	"configuratix/backend/internal/templates"
 
 	"github.com/google/uuid"
@@ -58,60 +58,48 @@ func (h *CommandsHandler) ExecuteCommand(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Get command template
 	cmd := templates.GetCommand(req.CommandID)
 	if cmd == nil {
 		http.Error(w, "Command not found", http.StatusNotFound)
 		return
 	}
-
-	// Validate required variables
-	for _, v := range cmd.Variables {
-		if v.Required {
-			if _, ok := req.Variables[v.Name]; !ok {
-				http.Error(w, "Missing required variable: "+v.Name, http.StatusBadRequest)
-				return
-			}
-		}
-		// Apply defaults
-		if v.Default != "" {
-			if _, ok := req.Variables[v.Name]; !ok {
-				req.Variables[v.Name] = v.Default
-			}
-		}
+	if req.Variables == nil {
+		req.Variables = map[string]string{}
 	}
 
-	// Get machine's agent ID
 	machineID, err := uuid.Parse(req.MachineID)
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
 		return
 	}
+	if !canManageMachineID(h.db, r, machineID) {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
 
-	var agentID uuid.UUID
-	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
+	agentID, err := machineAgentID(h.db, machineID)
 	if err != nil {
 		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
 		return
 	}
 
-	// Create job with run type
-	payload := cmd.ToPayload(req.Variables)
+	// Validates required variables, applies defaults and rejects unsafe values.
+	spec, err := jobs.FromTemplate(req.CommandID, req.Variables)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	spec.AgentID = agentID
+	spec.EntityType = jobs.EntityCommand
+	spec.EntityID = req.CommandID
+	spec.CreatedBy = jobs.UserID(r)
 
-	var job models.Job
-	err = h.db.Get(&job, `
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'run', $2, 'pending')
-		RETURNING *
-	`, agentID, payload)
+	job, err := jobs.Create(r.Context(), h.db, spec)
 	if err != nil {
 		log.Printf("Failed to create job: %v", err)
 		http.Error(w, "Failed to create job", http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(job)
+	writeJSON(w, http.StatusCreated, jobCreatedResponse(job))
 }
-

@@ -1,14 +1,16 @@
 "use client";
 
 import { useState, useEffect, Suspense } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { FolderKanban } from "lucide-react";
+import { toast } from "sonner";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import { toast } from "sonner";
-import { FolderKanban, Loader2 } from "lucide-react";
+import { AuthCard, AuthField } from "@/components/app/auth-card";
+import { LoadingState, Spinner } from "@/components/app/states";
 
 function JoinContent() {
   const router = useRouter();
@@ -18,24 +20,35 @@ function JoinContent() {
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  useEffect(() => {
-    // Get token from URL if present
-    const tokenFromUrl = searchParams.get("token");
-    if (tokenFromUrl) {
-      setInviteToken(tokenFromUrl);
+  const handleJoin = async (token?: string) => {
+    const tokenToUse = token || inviteToken;
+    if (!tokenToUse.trim()) {
+      toast.error("Invite token is required");
+      return;
     }
+    setLoading(true);
+    try {
+      const result = await api.requestJoinProject(tokenToUse.trim());
+      toast.success(`Requested to join “${result.project_name}”`, { description: "A project admin needs to approve your request." });
+      router.push("/projects");
+    } catch {
+      toast.error("Invalid or expired invite token");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    // Check if user is authenticated
+  useEffect(() => {
+    const tokenFromUrl = searchParams.get("token");
+    if (tokenFromUrl) setInviteToken(tokenFromUrl);
+
     const checkAuth = async () => {
       const token = localStorage.getItem("auth_token");
       if (token) {
         try {
           await api.getMe();
           setIsAuthenticated(true);
-          // If token in URL and authenticated, auto-join
-          if (tokenFromUrl) {
-            handleJoin(tokenFromUrl);
-          }
+          if (tokenFromUrl) handleJoin(tokenFromUrl);
         } catch {
           localStorage.removeItem("auth_token");
           setIsAuthenticated(false);
@@ -44,115 +57,74 @@ function JoinContent() {
       setCheckingAuth(false);
     };
     checkAuth();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  const handleJoin = async (token?: string) => {
-    const tokenToUse = token || inviteToken;
-    if (!tokenToUse.trim()) {
-      toast.error("Invite token is required");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const result = await api.requestJoinProject(tokenToUse);
-      toast.success(`Requested to join "${result.project_name}". Waiting for approval.`);
-      router.push("/projects");
-    } catch (err) {
-      console.error("Failed to join project:", err);
-      toast.error("Invalid or expired invite token");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleLoginRedirect = () => {
-    // Store the token to use after login
-    if (inviteToken) {
-      localStorage.setItem("pending_invite_token", inviteToken);
-    }
+    if (inviteToken) localStorage.setItem("pending_invite_token", inviteToken.trim());
     router.push("/login");
   };
 
-  if (checkingAuth) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted/30">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
+  if (checkingAuth) return <LoadingState label="Checking session…" />;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted/30 p-4">
-      <Card className="w-full max-w-md border-border/50 bg-card/95 backdrop-blur">
-        <CardHeader className="text-center">
-          <div className="mx-auto mb-4 h-14 w-14 rounded-xl bg-gradient-to-br from-blue-500/20 to-blue-500/5 flex items-center justify-center">
-            <FolderKanban className="h-7 w-7 text-blue-500" />
-          </div>
-          <CardTitle className="text-2xl">Join a Project</CardTitle>
-          <CardDescription>
-            Enter an invite token to request access to a project.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="invite-token">Invite Token</Label>
-              <Input
-                id="invite-token"
-                placeholder="Paste the invite token here"
-                value={inviteToken}
-                onChange={(e) => setInviteToken(e.target.value)}
-              />
-            </div>
+    <AuthCard
+      icon={FolderKanban}
+      title="Join a project"
+      description="Paste an invite token to request access. A project admin approves new members."
+      footer={
+        !isAuthenticated ? (
+          <>
+            No account yet?{" "}
+            <Link href="/register" className="font-medium text-foreground hover:text-primary">
+              Register
+            </Link>
+          </>
+        ) : undefined
+      }
+    >
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (isAuthenticated) handleJoin();
+          else handleLoginRedirect();
+        }}
+      >
+        <AuthField label="Invite token" htmlFor="invite-token">
+          <Input
+            id="invite-token"
+            placeholder="Paste the invite token"
+            value={inviteToken}
+            onChange={(e) => setInviteToken(e.target.value)}
+            className="font-data h-9"
+            autoFocus
+            spellCheck={false}
+          />
+        </AuthField>
 
-            {isAuthenticated ? (
-              <Button 
-                onClick={() => handleJoin()} 
-                disabled={loading} 
-                className="w-full"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Requesting...
-                  </>
-                ) : (
-                  "Request Access"
-                )}
-              </Button>
-            ) : (
-              <div className="space-y-3">
-                <p className="text-sm text-muted-foreground text-center">
-                  You need to be logged in to join a project.
-                </p>
-                <Button onClick={handleLoginRedirect} className="w-full">
-                  Log In to Continue
-                </Button>
-                <div className="text-center">
-                  <Button variant="link" onClick={() => router.push("/register")} className="text-sm">
-                    Don&apos;t have an account? Register
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+        {isAuthenticated ? (
+          <Button type="submit" size="lg" disabled={loading} className="w-full">
+            {loading && <Spinner />}
+            {loading ? "Requesting…" : "Request access"}
+          </Button>
+        ) : (
+          <>
+            <p className="text-[13px] text-muted-foreground">Sign in first — your token is kept and applied after login.</p>
+            <Button type="submit" size="lg" className="w-full">
+              Sign in to continue
+            </Button>
+          </>
+        )}
+      </form>
+    </AuthCard>
   );
 }
 
 export default function JoinPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted/30">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    }>
+    <Suspense fallback={<LoadingState label="Loading…" />}>
       <JoinContent />
     </Suspense>
   );
 }
-

@@ -1,747 +1,519 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, SecurityIPBan, BanListPage, ImportBansResponse } from "@/lib/api";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
+import type { ColumnDef } from "@tanstack/react-table";
+import { toast } from "sonner";
+import { Ban, Download, MoreHorizontal, Plus, RefreshCw, ShieldCheck, Trash2, Upload, X } from "lucide-react";
+import { api, type SecurityIPBan } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { DataTable, DataTableColumnHeader } from "@/components/ui/data-table";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { toast } from "sonner";
-import {
-  Ban,
-  ChevronLeft,
-  ChevronRight,
-  Download,
-  MoreHorizontal,
-  Plus,
-  RefreshCw,
-  Search,
-  Trash2,
-  Upload,
-  AlertTriangle,
-  Shield,
-  ShieldCheck,
-} from "lucide-react";
+  CopyableMono,
+  EmptyState,
+  ErrorState,
+  KeyValueList,
+  Mono,
+  PageHeader,
+  RelativeTime,
+  Spinner,
+  StatusText,
+  useConfirm,
+  usePolling,
+} from "@/components/app";
+import { formatDateTime, formatNumber } from "@/lib/format";
+import { BAN_REASONS, BanReasonBadge, SecurityNav, banReasonLabel, fetchBans } from "@/components/security/shared";
+import { AddBanDialog, ExportBansDialog, ImportBansDialog } from "@/components/security/ban-dialogs";
 
-export default function IPBlacklistPage() {
-  const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<BanListPage | null>(null);
-  const [page, setPage] = useState(1);
-  const [pageSize] = useState(50);
-  const [search, setSearch] = useState("");
-  const [reasonFilter, setReasonFilter] = useState<string>("");
+const PAGE_LIMIT = 2000;
+const NEVER_MS = 10 * 365 * 24 * 3600 * 1000;
+
+function banStatus(b: SecurityIPBan): "active" | "expired" | "inactive" {
+  if (!b.is_active) return b.unbanned_at ? "inactive" : "expired";
+  if (new Date(b.expires_at).getTime() < Date.now()) return "expired";
+  return "active";
+}
+
+function banDetail(b: SecurityIPBan): string {
+  return String(b.details?.user_agent || b.details?.path || "");
+}
+
+function Expiry({ date }: { date: string }) {
+  const t = new Date(date).getTime();
+  if (Number.isFinite(t) && t - Date.now() > NEVER_MS) return <span className="text-[12.5px] text-muted-foreground">Never</span>;
+  return <RelativeTime date={date} />;
+}
+
+export default function BansPage() {
+  return (
+    <Suspense>
+      <BansPageInner />
+    </Suspense>
+  );
+}
+
+function BansPageInner() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const confirm = useConfirm();
+
   const [activeOnly, setActiveOnly] = useState(true);
+  const [reason, setReason] = useState<string | null>(params.get("reason"));
+  const [search, setSearch] = useState("");
+  const [serverSearch, setServerSearch] = useState("");
+  const [addOpen, setAddOpen] = useState(params.get("add") === "1");
+  const [importOpen, setImportOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [detail, setDetail] = useState<SecurityIPBan | null>(null);
 
-  // Dialogs
-  const [showAddDialog, setShowAddDialog] = useState(false);
-  const [showImportDialog, setShowImportDialog] = useState(false);
-  const [showClearAllDialog, setShowClearAllDialog] = useState(false);
-  const [showExportDialog, setShowExportDialog] = useState(false);
-  const [exporting, setExporting] = useState(false);
-
-  // Form state
-  const [newBanIP, setNewBanIP] = useState("");
-  const [newBanReason, setNewBanReason] = useState("manual");
-  const [newBanExpiry, setNewBanExpiry] = useState(30);
-  const [importText, setImportText] = useState("");
-  const [importReason, setImportReason] = useState("imported");
-  const [submitting, setSubmitting] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-
-  const handleRefresh = async () => {
-    setSyncing(true);
-    try {
-      // Reload bans from database
-      await loadBans();
-      toast.success("Bans reloaded from database");
-    } catch (err) {
-      toast.error("Failed to refresh");
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const loadBans = async () => {
-    setLoading(true);
-    try {
-      const result = await api.listSecurityBans({
-        page,
-        page_size: pageSize,
-        search: search || undefined,
-        reason: reasonFilter || undefined,
-        active_only: activeOnly,
-      });
-      setData(result);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load bans");
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Debounce the server-side search so typing doesn't spam the API.
   useEffect(() => {
-    loadBans();
-  }, [page, pageSize, search, reasonFilter, activeOnly]);
+    const t = setTimeout(() => setServerSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
-  const handleAddBan = async () => {
-    if (!newBanIP.trim()) {
-      toast.error("IP address is required");
-      return;
-    }
+  const { data, loading, error, refresh, refreshing } = usePolling(
+    () =>
+      fetchBans(
+        { active_only: activeOnly, search: serverSearch || undefined, reason: reason || undefined },
+        PAGE_LIMIT
+      ),
+    60000,
+    { deps: [activeOnly, serverSearch, reason] }
+  );
 
-    setSubmitting(true);
-    try {
-      await api.createSecurityBan({
-        ip_address: newBanIP.trim(),
-        reason: newBanReason,
-        expires_in_days: newBanExpiry,
-      });
-      toast.success("IP banned successfully");
-      setShowAddDialog(false);
-      setNewBanIP("");
-      loadBans();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to ban IP");
-    } finally {
-      setSubmitting(false);
+  const bans = data?.bans ?? [];
+  const truncated = data ? data.total > bans.length : false;
+
+  const reasonOptions = useMemo(() => {
+    const set = new Set([...Object.keys(BAN_REASONS), ...bans.map((b) => b.reason)]);
+    return [...set].map((r) => ({ value: r, label: banReasonLabel(r) }));
+  }, [bans]);
+
+  const unban = async (rows: SecurityIPBan[], clear?: () => void) => {
+    const one = rows.length === 1;
+    const ok = await confirm({
+      title: one ? `Unban ${rows[0].ip_address}?` : `Unban ${rows.length} IPs?`,
+      description: "The IPs are removed from the blacklist and from nftables on the next agent sync.",
+      details: one ? undefined : (
+        <div className="font-data max-h-32 overflow-auto rounded-md border border-border bg-surface-2/40 p-2 text-xs text-muted-foreground">
+          {rows.map((r) => r.ip_address).join("  ")}
+        </div>
+      ),
+      destructive: true,
+      confirmText: one ? "Unban" : `Unban ${rows.length}`,
+      onConfirm: async () => {
+        const results = await Promise.allSettled(rows.map((r) => api.deleteSecurityBan(r.id)));
+        const failed = results.filter((r) => r.status === "rejected").length;
+        if (failed === rows.length) throw (results[0] as PromiseRejectedResult).reason;
+        if (failed) toast.warning(`${failed} of ${rows.length} couldn't be unbanned`);
+      },
+    });
+    if (ok) {
+      toast.success(one ? `${rows[0].ip_address} unbanned` : `${rows.length} IPs unbanned`);
+      clear?.();
+      setDetail(null);
+      refresh();
     }
   };
 
-  const handleImport = async () => {
-    const lines = importText
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"));
-
-    if (lines.length === 0) {
-      toast.error("No valid data found");
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      // Detect CSV format (check if first line is header)
-      const isCSV = lines[0].toLowerCase().startsWith("ip_address,");
-      
-      let result: ImportBansResponse;
-      
-      if (isCSV) {
-        // Parse CSV with full data
-        const csvEntries: Array<{
-          ip_address: string;
-          reason: string;
-          user_agent: string;
-          path: string;
-          expires_at: string;
-          banned_at: string;
-        }> = [];
-        
-        // Skip header line
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i];
-          if (!line) continue;
-          
-          // Parse CSV line (handle quoted fields)
-          const fields: string[] = [];
-          let current = "";
-          let inQuotes = false;
-          for (let j = 0; j < line.length; j++) {
-            const char = line[j];
-            if (char === '"') {
-              if (inQuotes && line[j + 1] === '"') {
-                current += '"';
-                j++; // Skip escaped quote
-              } else {
-                inQuotes = !inQuotes;
-              }
-            } else if (char === ',' && !inQuotes) {
-              fields.push(current);
-              current = "";
-            } else {
-              current += char;
-            }
-          }
-          fields.push(current);
-          
-          if (fields.length >= 1 && fields[0]) {
-            csvEntries.push({
-              ip_address: fields[0] || "",
-              reason: fields[1] || "",
-              user_agent: fields[2] || "",
-              path: fields[3] || "",
-              expires_at: fields[4] || "",
-              banned_at: fields[5] || "",
-            });
-          }
+  const whitelist = async (rows: SecurityIPBan[], clear?: () => void) => {
+    const one = rows.length === 1;
+    const ok = await confirm({
+      title: one ? `Whitelist ${rows[0].ip_address}?` : `Whitelist ${rows.length} IPs?`,
+      description: "Whitelisted IPs are unbanned and can never be banned again until removed from the whitelist.",
+      confirmText: "Add to whitelist",
+      icon: ShieldCheck,
+      onConfirm: async () => {
+        for (const b of rows) {
+          await api.createSecurityWhitelistEntry({
+            ip_cidr: b.ip_address,
+            description: `Whitelisted from ban (reason: ${banReasonLabel(b.reason)})`,
+          });
+          await api.deleteSecurityBan(b.id).catch(() => undefined);
         }
-        
-        result = await api.importSecurityBans({
-          ips: [],
-          reason: importReason,
-          csv: csvEntries,
-        });
-      } else {
-        // Simple IP list
-        result = await api.importSecurityBans({
-          ips: lines,
-          reason: importReason,
-        });
-      }
-      
-      toast.success(
-        `Imported ${result.imported} IPs. Skipped: ${result.skipped_whitelist} (whitelisted), ${result.already_banned} (already banned), ${result.invalid} (invalid)`
-      );
-      setShowImportDialog(false);
-      setImportText("");
-      loadBans();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to import");
-    } finally {
-      setSubmitting(false);
+      },
+    });
+    if (ok) {
+      toast.success(one ? `${rows[0].ip_address} whitelisted` : `${rows.length} IPs whitelisted`);
+      clear?.();
+      setDetail(null);
+      refresh();
     }
   };
 
-  const handleDelete = async (ban: SecurityIPBan) => {
-    try {
-      await api.deleteSecurityBan(ban.id);
-      toast.success("IP unbanned");
-      loadBans();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to unban");
-    }
+  const clearFilters = () => {
+    setSearch("");
+    setServerSearch("");
+    setReason(null);
+    router.replace("/security/bans");
   };
 
-  const handleWhitelist = async (ban: SecurityIPBan) => {
-    try {
-      // Add to whitelist
-      await api.createSecurityWhitelistEntry({
-        ip_cidr: ban.ip_address,
-        description: `Whitelisted from ban (was banned for: ${ban.reason})`,
-      });
-      // Remove from ban list
-      await api.deleteSecurityBan(ban.id);
-      toast.success(`${ban.ip_address} added to whitelist`);
-      loadBans();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to whitelist");
-    }
+  const unbanAll = async () => {
+    const ok = await confirm({
+      title: "Unban every IP?",
+      description: `All ${formatNumber(data?.total ?? 0)} bans are lifted on every machine. This can't be undone.`,
+      destructive: true,
+      typeToConfirm: "unban all",
+      confirmText: "Unban all",
+      onConfirm: async () => {
+        const r = await api.deleteAllSecurityBans();
+        toast.success(`Unbanned ${formatNumber(r.unbanned)} IPs`);
+      },
+    });
+    if (ok) refresh();
   };
 
-  const handleClearAll = async () => {
-    setSubmitting(true);
-    try {
-      const result = await api.deleteAllSecurityBans();
-      toast.success(`Unbanned ${result.unbanned} IPs`);
-      setShowClearAllDialog(false);
-      loadBans();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to clear bans");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleExportCSV = async () => {
-    setExporting(true);
-    try {
-      // Fetch all bans (use large page size)
-      const allBans = await api.listSecurityBans({ page_size: 100000, active_only: activeOnly });
-      
-      // CSV header
-      const header = "ip_address,reason,user_agent,path,expires_at,banned_at";
-      
-      // CSV rows
-      const rows = allBans.bans.map(ban => {
-        const userAgent = String(ban.details?.user_agent || "").replace(/"/g, '""');
-        const path = String(ban.details?.path || "").replace(/"/g, '""');
-        return `${ban.ip_address},"${ban.reason}","${userAgent}","${path}",${ban.expires_at},${ban.banned_at}`;
-      });
-      
-      const csv = [header, ...rows].join("\n");
-      
-      // Download
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `ip-bans-${new Date().toISOString().split("T")[0]}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-      
-      toast.success(`Exported ${allBans.bans.length} bans as CSV`);
-      setShowExportDialog(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to export");
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const handleExportList = async () => {
-    setExporting(true);
-    try {
-      // Fetch all bans
-      const allBans = await api.listSecurityBans({ page_size: 100000, active_only: activeOnly });
-      
-      // Just IP list, one per line
-      const list = allBans.bans.map(ban => ban.ip_address).join("\n");
-      
-      // Download
-      const blob = new Blob([list], { type: "text/plain" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `ip-bans-${new Date().toISOString().split("T")[0]}.txt`;
-      a.click();
-      URL.revokeObjectURL(url);
-      
-      toast.success(`Exported ${allBans.bans.length} IPs`);
-      setShowExportDialog(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to export");
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const getReasonBadge = (reason: string) => {
-    switch (reason) {
-      case "blocked_ua":
-        return <Badge variant="destructive">Blocked UA</Badge>;
-      case "invalid_endpoint":
-        return <Badge variant="destructive">Invalid Path</Badge>;
-      case "manual":
-        return <Badge variant="secondary">Manual</Badge>;
-      case "imported":
-        return <Badge variant="outline">Imported</Badge>;
-      default:
-        return <Badge>{reason}</Badge>;
-    }
-  };
-
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleString();
-  };
-
-  const formatExpiry = (dateStr: string) => {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diff = date.getTime() - now.getTime();
-    if (diff <= 0) return "Expired";
-    const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
-    if (days > 30) return `${Math.ceil(days / 30)} months`;
-    return `${days} days`;
-  };
+  const columns = useMemo<ColumnDef<SecurityIPBan>[]>(
+    () => [
+      {
+        accessorKey: "ip_address",
+        header: "IP address",
+        cell: ({ row }) => <CopyableMono value={row.original.ip_address} monoClassName="font-medium" />,
+      },
+      {
+        accessorKey: "reason",
+        header: "Reason",
+        cell: ({ row }) => <BanReasonBadge reason={row.original.reason} />,
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue(id)),
+      },
+      {
+        id: "details",
+        accessorFn: banDetail,
+        header: "Details",
+        enableSorting: false,
+        cell: ({ getValue }) => {
+          const v = getValue() as string;
+          return v ? (
+            <Mono muted truncate className="block max-w-[340px] text-xs" title={v}>
+              {v}
+            </Mono>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          );
+        },
+      },
+      {
+        id: "source",
+        accessorFn: (b) => b.source_machine_name || "Manual / API",
+        header: "Source",
+        cell: ({ row }) =>
+          row.original.source_machine_id ? (
+            <Link
+              href={`/machines/${row.original.source_machine_id}`}
+              className="truncate text-[13px] hover:text-primary hover:underline underline-offset-2"
+            >
+              {row.original.source_machine_name || "Machine"}
+            </Link>
+          ) : (
+            <span className="text-[13px] text-muted-foreground">{row.original.created_by_email || "Manual / API"}</span>
+          ),
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue(id)),
+      },
+      {
+        id: "status",
+        accessorFn: banStatus,
+        header: "Status",
+        cell: ({ getValue }) => <StatusText status={getValue() as string} />,
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue(id)),
+      },
+      {
+        accessorKey: "banned_at",
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Banned" />,
+        cell: ({ row }) => <RelativeTime date={row.original.banned_at} />,
+        sortingFn: "datetime",
+      },
+      {
+        accessorKey: "expires_at",
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Expires" />,
+        cell: ({ row }) => <Expiry date={row.original.expires_at} />,
+        sortingFn: "datetime",
+      },
+      {
+        id: "actions",
+        enableHiding: false,
+        meta: { align: "right" },
+        cell: ({ row }) => (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label="Actions">
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => whitelist([row.original])}>
+                <ShieldCheck />
+                Add to whitelist
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onClick={() => unban([row.original])}>
+                <Trash2 />
+                Unban
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
 
   return (
-    <div className="container mx-auto py-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Shield className="h-8 w-8 text-destructive" />
-          <div>
-            <h1 className="text-2xl font-bold">IP Blacklist</h1>
-            <p className="text-muted-foreground">
-              {data ? `${data.total} total bans` : "Loading..."}
-            </p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={handleRefresh} disabled={syncing}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? "Syncing..." : "Sync & Refresh"}
-          </Button>
-          <Button variant="outline" onClick={() => setShowExportDialog(true)}>
-            <Download className="h-4 w-4 mr-2" />
-            Export
-          </Button>
-          <Button variant="outline" onClick={() => setShowImportDialog(true)}>
-            <Upload className="h-4 w-4 mr-2" />
-            Import
-          </Button>
-          <Button onClick={() => setShowAddDialog(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            Ban IP
-          </Button>
-        </div>
-      </div>
-
-      {/* Filters */}
-      <div className="flex gap-4 flex-wrap items-end">
-        <div className="flex-1 min-w-[200px]">
-          <Label className="text-xs text-muted-foreground">Search IP</Label>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="192.168..."
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              className="pl-10"
-            />
-          </div>
-        </div>
-
-        <div className="w-40">
-          <Label className="text-xs text-muted-foreground">Reason</Label>
-          <Select
-            value={reasonFilter}
-            onValueChange={(v) => {
-              setReasonFilter(v === "all" ? "" : v);
-              setPage(1);
-            }}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="All reasons" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All reasons</SelectItem>
-              <SelectItem value="blocked_ua">Blocked UA</SelectItem>
-              <SelectItem value="invalid_endpoint">Invalid Path</SelectItem>
-              <SelectItem value="manual">Manual</SelectItem>
-              <SelectItem value="imported">Imported</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Button
-            variant={activeOnly ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => {
-              setActiveOnly(true);
-              setPage(1);
-            }}
-          >
-            Active
-          </Button>
-          <Button
-            variant={!activeOnly ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => {
-              setActiveOnly(false);
-              setPage(1);
-            }}
-          >
-            All
-          </Button>
-        </div>
-
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={() => setShowClearAllDialog(true)}
-        >
-          <Trash2 className="h-4 w-4 mr-2" />
-          Unban All
-        </Button>
-      </div>
-
-      {/* Table */}
-      <div className="border rounded-lg overflow-hidden">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-40">IP Address</TableHead>
-              <TableHead className="w-32">Reason</TableHead>
-              <TableHead>Details</TableHead>
-              <TableHead className="w-40">Source</TableHead>
-              <TableHead className="w-40">Banned</TableHead>
-              <TableHead className="w-32">Expires</TableHead>
-              <TableHead className="w-16"></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {loading ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center py-8">
-                  Loading...
-                </TableCell>
-              </TableRow>
-            ) : data?.bans.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center py-8">
-                  <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                    <Ban className="h-8 w-8" />
-                    <p>No banned IPs found</p>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ) : (
-              data?.bans.map((ban) => (
-                <TableRow key={ban.id} className={!ban.is_active ? "opacity-50" : ""}>
-                  <TableCell className="font-mono font-medium">
-                    {ban.ip_address}
-                  </TableCell>
-                  <TableCell>{getReasonBadge(ban.reason)}</TableCell>
-                  <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
-                    {String(ban.details?.user_agent || ban.details?.path || "-")}
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    {ban.source_machine_name || "-"}
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    {formatDate(ban.banned_at)}
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    {formatExpiry(ban.expires_at)}
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm">
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleWhitelist(ban)}>
-                          <ShieldCheck className="h-4 w-4 mr-2" />
-                          Add to Whitelist
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleDelete(ban)}>
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          Unban
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
-
-      {/* Pagination */}
-      {data && data.total_pages > 1 && (
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
-            Page {data.page} of {data.total_pages}
-          </p>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page === 1}
-              onClick={() => setPage(page - 1)}
-            >
-              <ChevronLeft className="h-4 w-4" />
-              Previous
+    <div className="space-y-6">
+      <PageHeader
+        icon={Ban}
+        title="IP bans"
+        description="Addresses blocked at the firewall on every agent with nftables enabled."
+        badge={data ? <Badge variant="muted" className="font-data">{formatNumber(data.total)}</Badge> : undefined}
+        actions={
+          <>
+            <Button variant="outline" size="icon" onClick={() => refresh()} disabled={refreshing} aria-label="Refresh">
+              {refreshing ? <Spinner /> : <RefreshCw />}
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= data.total_pages}
-              onClick={() => setPage(page + 1)}
-            >
-              Next
-              <ChevronRight className="h-4 w-4" />
+            <Button variant="outline" onClick={() => setExportOpen(true)}>
+              <Download />
+              Export
             </Button>
-          </div>
-        </div>
+            <Button variant="outline" onClick={() => setImportOpen(true)}>
+              <Upload />
+              Import
+            </Button>
+            <Button onClick={() => setAddOpen(true)}>
+              <Plus />
+              Ban IP
+            </Button>
+          </>
+        }
+      />
+
+      <SecurityNav />
+
+      {truncated && (
+        <Alert variant="info">
+          <AlertDescription>
+            Showing the newest <span className="font-data">{formatNumber(bans.length)}</span> of{" "}
+            <span className="font-data">{formatNumber(data!.total)}</span> bans. Search narrows the result on the server.
+          </AlertDescription>
+        </Alert>
       )}
 
-      {/* Add Ban Dialog */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Ban IP Address</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>IP Address</Label>
-              <Input
-                placeholder="192.168.1.100"
-                value={newBanIP}
-                onChange={(e) => setNewBanIP(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label>Reason</Label>
-              <Select value={newBanReason} onValueChange={setNewBanReason}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="manual">Manual Ban</SelectItem>
-                  <SelectItem value="blocked_ua">Blocked UA</SelectItem>
-                  <SelectItem value="invalid_endpoint">Invalid Endpoint</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Expires In (days)</Label>
-              <Input
-                type="number"
-                min={1}
-                max={365}
-                value={newBanExpiry}
-                onChange={(e) => setNewBanExpiry(parseInt(e.target.value) || 30)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleAddBan} disabled={submitting}>
-              {submitting ? "Banning..." : "Ban IP"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Import Dialog */}
-      <Dialog open={showImportDialog} onOpenChange={setShowImportDialog}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Import IP Addresses</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>IPs or CSV (paste data below)</Label>
-              <Textarea
-                placeholder={"Simple list (one IP per line):\n192.168.1.100\n10.0.0.1\n\nOr CSV from export:\nip_address,reason,user_agent,path,expires_at,banned_at\n192.168.1.100,\"blocked_ua\",\"python-httpx/0.12\",..."}
-                value={importText}
-                onChange={(e) => setImportText(e.target.value)}
-                rows={10}
-                className="font-mono text-sm"
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                CSV format auto-detected. For simple list, select reason below.
-              </p>
-            </div>
-            <div>
-              <Label>Default Reason (for simple list)</Label>
-              <Select value={importReason} onValueChange={setImportReason}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="imported">Imported</SelectItem>
-                  <SelectItem value="manual">Manual Ban</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowImportDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleImport} disabled={submitting}>
-              {submitting ? "Importing..." : "Import"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Clear All Confirmation Dialog */}
-      <Dialog open={showClearAllDialog} onOpenChange={setShowClearAllDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-5 w-5" />
-              Unban All IPs
-            </DialogTitle>
-          </DialogHeader>
-          <p className="text-muted-foreground">
-            This will remove all {data?.total || 0} banned IPs from the blacklist. 
-            This action cannot be undone.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowClearAllDialog(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleClearAll} disabled={submitting}>
-              {submitting ? "Clearing..." : "Unban All"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Export Dialog */}
-      <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Download className="h-5 w-5" />
-              Export IP Blacklist
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Choose export format. {activeOnly ? "Only active bans" : "All bans (including expired)"} will be exported.
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              <Button
+      {error && !data ? (
+        <ErrorState error={error} onRetry={refresh} />
+      ) : (
+        <DataTable
+          columns={columns}
+          data={bans}
+          loading={loading}
+          getRowId={(b) => b.id}
+          search={search}
+          onSearchChange={setSearch}
+          searchKeys={["ip_address", "reason", (b) => b.source_machine_name, banDetail]}
+          searchPlaceholder="Search IP, user agent, path…"
+          facets={[
+            { columnId: "reason", title: "Reason", options: reasonOptions },
+            { columnId: "source", title: "Source" },
+            ...(activeOnly ? [] : [{ columnId: "status", title: "Status" }]),
+          ]}
+          toolbar={
+            <>
+              <ToggleGroup
+                type="single"
                 variant="outline"
-                onClick={handleExportCSV}
-                disabled={exporting}
-                className="h-24 flex-col gap-2"
+                size="sm"
+                value={activeOnly ? "active" : "all"}
+                onValueChange={(v) => v && setActiveOnly(v === "active")}
               >
-                <Download className="h-6 w-6" />
-                <div className="text-center">
-                  <p className="font-medium">CSV (Full)</p>
-                  <p className="text-xs text-muted-foreground">IP, reason, UA, path, dates</p>
-                </div>
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleExportList}
-                disabled={exporting}
-                className="h-24 flex-col gap-2"
-              >
-                <Download className="h-6 w-6" />
-                <div className="text-center">
-                  <p className="font-medium">Text (IPs only)</p>
-                  <p className="text-xs text-muted-foreground">One IP per line</p>
-                </div>
-              </Button>
-            </div>
-            <div className="text-xs text-muted-foreground space-y-1">
-              <p><strong>CSV:</strong> Re-importable with full data (reason, UA, expiry dates)</p>
-              <p><strong>Text:</strong> Simple list, imports with &quot;imported&quot; reason</p>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowExportDialog(false)}>
-              Cancel
+                <ToggleGroupItem value="active">Active</ToggleGroupItem>
+                <ToggleGroupItem value="all">All</ToggleGroupItem>
+              </ToggleGroup>
+              {reason && (
+                <Badge variant="outline" className="h-7 gap-1.5 px-2 text-xs">
+                  Reason: {banReasonLabel(reason)}
+                  <button
+                    type="button"
+                    aria-label="Clear reason filter"
+                    onClick={() => {
+                      setReason(null);
+                      router.replace("/security/bans");
+                    }}
+                    className="rounded-sm text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </Badge>
+              )}
+            </>
+          }
+          toolbarActions={
+            <Button variant="destructive" size="sm" onClick={unbanAll} disabled={!data?.total}>
+              <Trash2 />
+              Unban all
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          }
+          initialState={{ sorting: [{ id: "banned_at", desc: true }] }}
+          onRowClick={(b) => setDetail(b)}
+          getRowClassName={(b) => (banStatus(b) !== "active" ? "opacity-60" : undefined)}
+          enableRowSelection
+          bulkActions={(rows, clear) => (
+            <>
+              <Button size="sm" variant="outline" onClick={() => whitelist(rows, clear)}>
+                <ShieldCheck />
+                Whitelist
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => unban(rows, clear)}>
+                <Trash2 />
+                Unban {rows.length}
+              </Button>
+            </>
+          )}
+          emptyMessage="No bans match these filters."
+          emptyState={
+            serverSearch || reason ? (
+              <EmptyState
+                icon={Ban}
+                title="No bans match these filters"
+                description={activeOnly ? "Only active bans are searched — try All." : undefined}
+                action={
+                  <Button variant="outline" onClick={clearFilters}>
+                    Clear filters
+                  </Button>
+                }
+              />
+            ) : activeOnly ? (
+              <EmptyState
+                icon={Ban}
+                title="No active bans"
+                description="Expired and lifted bans are hidden."
+                action={
+                  <Button variant="outline" onClick={() => setActiveOnly(false)}>
+                    Show all bans
+                  </Button>
+                }
+                secondaryAction={
+                  <Button onClick={() => setAddOpen(true)}>
+                    <Plus />
+                    Ban IP
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                icon={Ban}
+                title="No bans yet"
+                description="IPs are banned automatically when they hit a blocked user agent or an invalid endpoint, or manually here."
+                action={
+                  <Button onClick={() => setAddOpen(true)}>
+                    <Plus />
+                    Ban IP
+                  </Button>
+                }
+                secondaryAction={
+                  <Button variant="outline" onClick={() => setImportOpen(true)}>
+                    <Upload />
+                    Import list
+                  </Button>
+                }
+              />
+            )
+          }
+        />
+      )}
+
+      <BanDetailSheet ban={detail} onClose={() => setDetail(null)} onUnban={(b) => unban([b])} onWhitelist={(b) => whitelist([b])} />
+      <AddBanDialog open={addOpen} onOpenChange={setAddOpen} onCreated={refresh} />
+      <ImportBansDialog open={importOpen} onOpenChange={setImportOpen} onImported={refresh} />
+      <ExportBansDialog open={exportOpen} onOpenChange={setExportOpen} activeOnly={activeOnly} />
     </div>
+  );
+}
+
+function BanDetailSheet({
+  ban,
+  onClose,
+  onUnban,
+  onWhitelist,
+}: {
+  ban: SecurityIPBan | null;
+  onClose: () => void;
+  onUnban: (b: SecurityIPBan) => void;
+  onWhitelist: (b: SecurityIPBan) => void;
+}) {
+  const extra = ban
+    ? Object.entries(ban.details ?? {}).filter(([, v]) => v !== null && v !== undefined && v !== "")
+    : [];
+  return (
+    <Sheet open={!!ban} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent className="sm:max-w-xl">
+        {ban && (
+          <>
+            <SheetHeader>
+              <SheetTitle className="font-data">{ban.ip_address}</SheetTitle>
+              <SheetDescription className="flex items-center gap-2">
+                <BanReasonBadge reason={ban.reason} />
+                <StatusText status={banStatus(ban)} />
+              </SheetDescription>
+            </SheetHeader>
+            <div className="flex-1 space-y-6 overflow-y-auto px-4">
+              <KeyValueList
+                items={[
+                  { label: "IP address", value: ban.ip_address, mono: true, copy: ban.ip_address },
+                  { label: "Reason", value: banReasonLabel(ban.reason) },
+                  {
+                    label: "Source",
+                    value: ban.source_machine_id ? (
+                      <Link href={`/machines/${ban.source_machine_id}`} className="hover:text-primary hover:underline">
+                        {ban.source_machine_name || ban.source_machine_id}
+                      </Link>
+                    ) : (
+                      ban.created_by_email || "Manual / API"
+                    ),
+                  },
+                  { label: "Banned", value: formatDateTime(ban.banned_at), mono: true },
+                  { label: "Expires", value: <Expiry date={ban.expires_at} /> },
+                  { label: "Unbanned", value: ban.unbanned_at ? formatDateTime(ban.unbanned_at) : null, mono: true, hidden: !ban.unbanned_at },
+                ]}
+              />
+              {extra.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-[13px] font-medium">Request details</h3>
+                  <KeyValueList
+                    items={extra.map(([k, v]) => {
+                      const s = typeof v === "string" ? v : JSON.stringify(v);
+                      return { label: k.replace(/_/g, " "), value: s, mono: true, copy: s, full: s.length > 60 };
+                    })}
+                  />
+                </div>
+              )}
+            </div>
+            <SheetFooter>
+              <Button variant="outline" onClick={() => onWhitelist(ban)}>
+                <ShieldCheck />
+                Add to whitelist
+              </Button>
+              {ban.is_active && (
+                <Button variant="destructive" onClick={() => onUnban(ban)}>
+                  <Trash2 />
+                  Unban
+                </Button>
+              )}
+            </SheetFooter>
+          </>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }
 

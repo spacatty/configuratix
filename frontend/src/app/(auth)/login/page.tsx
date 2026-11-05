@@ -1,14 +1,15 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { ShieldCheck } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { api } from "@/lib/api";
-import { Logo } from "@/components/logo";
-import { ShieldCheck } from "lucide-react";
+import { AuthCard, AuthError, AuthField } from "@/components/app/auth-card";
+import { Spinner } from "@/components/app/states";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -19,56 +20,53 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [requires2FA, setRequires2FA] = useState(false);
 
-  // Check if already authenticated
+  const goNext = () => {
+    const pendingToken = localStorage.getItem("pending_invite_token");
+    if (pendingToken) {
+      localStorage.removeItem("pending_invite_token");
+      router.push(`/join?token=${pendingToken}`);
+    } else {
+      // Return to where an expired session left off; only same-origin paths.
+      const next = new URLSearchParams(window.location.search).get("next");
+      router.push(next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard");
+    }
+  };
+
+  // Already authenticated → skip
   useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("expired")) {
+      setError("Your session expired. Sign in again to continue.");
+    }
     const checkAuth = async () => {
       const token = localStorage.getItem("auth_token");
-      if (token) {
-        try {
-          await api.getMe();
-          // Already authenticated, check for pending invite
-          const pendingToken = localStorage.getItem("pending_invite_token");
-          if (pendingToken) {
-            localStorage.removeItem("pending_invite_token");
-            router.push(`/join?token=${pendingToken}`);
-          } else {
-            router.push("/machines");
-          }
-        } catch {
-          // Token invalid
-          localStorage.removeItem("auth_token");
-        }
+      if (!token) return;
+      try {
+        await api.getMe();
+        goNext();
+      } catch {
+        localStorage.removeItem("auth_token");
       }
     };
     checkAuth();
-  }, [router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
-
     try {
-      const response = await api.login({ 
-        email, 
-        password, 
-        totp_code: requires2FA ? totpCode : undefined 
+      const response = await api.login({
+        email,
+        password,
+        totp_code: requires2FA ? totpCode : undefined,
       });
-      
       if (response.requires_2fa) {
         setRequires2FA(true);
         setLoading(false);
         return;
       }
-      
-      // Check for pending invite token
-      const pendingToken = localStorage.getItem("pending_invite_token");
-      if (pendingToken) {
-        localStorage.removeItem("pending_invite_token");
-        router.push(`/join?token=${pendingToken}`);
-      } else {
-        router.push("/machines");
-      }
+      goNext();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -77,150 +75,90 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
-      {/* Background gradient */}
-      <div className="absolute inset-0 bg-gradient-to-br from-background via-background to-primary/5" />
-      
-      {/* Subtle grid pattern */}
-      <div 
-        className="absolute inset-0 opacity-[0.03]"
-        style={{
-          backgroundImage: `linear-gradient(rgba(255,255,255,.1) 1px, transparent 1px),
-                           linear-gradient(90deg, rgba(255,255,255,.1) 1px, transparent 1px)`,
-          backgroundSize: '50px 50px'
-        }}
-      />
-      
-      {/* Glow orbs */}
-      <div className="absolute top-1/4 -right-32 w-96 h-96 rounded-full bg-primary/10 blur-[120px]" />
-      <div className="absolute bottom-1/4 -left-32 w-64 h-64 rounded-full bg-primary/5 blur-[100px]" />
+    <AuthCard
+      icon={requires2FA ? ShieldCheck : undefined}
+      title={requires2FA ? "Two-factor authentication" : "Sign in"}
+      description={
+        requires2FA ? "Enter the 6-digit code from your authenticator app." : "Access your proxy infrastructure control plane."
+      }
+      footer={
+        <>
+          Don&apos;t have an account?{" "}
+          <Link href="/register" className="font-medium text-foreground hover:text-primary">
+            Create one
+          </Link>
+        </>
+      }
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {!requires2FA ? (
+          <>
+            <AuthField label="Email" htmlFor="email">
+              <Input
+                id="email"
+                type="email"
+                autoComplete="email"
+                placeholder="you@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoFocus
+                className="h-9"
+              />
+            </AuthField>
+            <AuthField label="Password" htmlFor="password">
+              <Input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                className="h-9"
+              />
+            </AuthField>
+          </>
+        ) : (
+          <AuthField label="Authentication code" htmlFor="totp">
+            <Input
+              id="totp"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="000000"
+              value={totpCode}
+              onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              required
+              autoFocus
+              className="font-data h-12 text-center text-xl tracking-[0.5em]"
+            />
+          </AuthField>
+        )}
 
-      <Card className="w-full max-w-md relative border-border/50 bg-card/80 backdrop-blur-sm">
-        <CardHeader className="space-y-4 pb-6">
-          <Logo size="lg" />
-          <CardDescription className="text-muted-foreground">
-            {requires2FA 
-              ? "Enter your two-factor authentication code"
-              : "Sign in to manage your proxy infrastructure"}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-5">
-            {!requires2FA ? (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="email" className="text-sm font-medium">
-                    Email
-                  </Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="admin@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                    className="h-11 bg-input/50 border-border/50 focus:border-primary/50 transition-colors"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="password" className="text-sm font-medium">
-                    Password
-                  </Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    className="h-11 bg-input/50 border-border/50 focus:border-primary/50 transition-colors"
-                  />
-                </div>
-              </>
-            ) : (
-              <div className="space-y-4">
-                <div className="flex items-center justify-center p-4 bg-muted/50 rounded-lg">
-                  <ShieldCheck className="h-12 w-12 text-primary" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="totp" className="text-sm font-medium">
-                    Authentication Code
-                  </Label>
-                  <Input
-                    id="totp"
-                    type="text"
-                    placeholder="000000"
-                    value={totpCode}
-                    onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                    required
-                    className="h-14 text-center text-2xl tracking-widest font-mono bg-input/50 border-border/50 focus:border-primary/50 transition-colors"
-                    autoFocus
-                  />
-                  <p className="text-xs text-center text-muted-foreground">
-                    Enter the 6-digit code from your authenticator app
-                  </p>
-                </div>
-                <Button 
-                  type="button"
-                  variant="ghost" 
-                  className="w-full text-muted-foreground hover:text-foreground"
-                  onClick={() => {
-                    setRequires2FA(false);
-                    setTotpCode("");
-                    setPassword("");
-                  }}
-                >
-                  Use a different account
-                </Button>
-              </div>
-            )}
-            
-            {error && (
-              <div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2">
-                {error}
-              </div>
-            )}
-            
-            <Button 
-              type="submit" 
-              className="w-full h-11 font-medium bg-primary hover:bg-primary/90 transition-all duration-200"
-              disabled={loading}
-            >
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                    <circle 
-                      className="opacity-25" 
-                      cx="12" 
-                      cy="12" 
-                      r="10" 
-                      stroke="currentColor" 
-                      strokeWidth="4"
-                      fill="none"
-                    />
-                    <path 
-                      className="opacity-75" 
-                      fill="currentColor" 
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    />
-                  </svg>
-                  {requires2FA ? "Verifying..." : "Signing in..."}
-                </span>
-              ) : (
-                requires2FA ? "Verify & Sign in" : "Sign in"
-              )}
-            </Button>
-          </form>
-        </CardContent>
-        <CardFooter className="flex justify-center border-t border-border/50 pt-6">
-          <p className="text-sm text-muted-foreground">
-            Don&apos;t have an account?{" "}
-            <a href="/register" className="text-primary hover:underline font-medium">
-              Sign up
-            </a>
-          </p>
-        </CardFooter>
-      </Card>
-    </div>
+        <AuthError>{error}</AuthError>
+
+        <Button type="submit" size="lg" className="w-full" disabled={loading}>
+          {loading && <Spinner />}
+          {loading ? (requires2FA ? "Verifying…" : "Signing in…") : requires2FA ? "Verify and sign in" : "Sign in"}
+        </Button>
+
+        {requires2FA && (
+          <Button
+            type="button"
+            variant="ghost"
+            className="w-full"
+            onClick={() => {
+              setRequires2FA(false);
+              setTotpCode("");
+              setPassword("");
+              setError("");
+            }}
+          >
+            Use a different account
+          </Button>
+        )}
+      </form>
+    </AuthCard>
   );
 }

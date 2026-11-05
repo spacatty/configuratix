@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	"configuratix/backend/internal/database"
+	"configuratix/backend/internal/jobs"
 	"configuratix/backend/internal/models"
 	"configuratix/backend/internal/templates"
 
@@ -32,6 +32,10 @@ func (h *PHPRuntimeHandler) GetPHPRuntime(w http.ResponseWriter, r *http.Request
 	machineID, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+	if !canAccessMachineID(h.db, r, machineID) {
+		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
 
@@ -131,12 +135,23 @@ func (h *PHPRuntimeHandler) InstallPHPRuntime(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
 		return
 	}
+	if !canManageMachineID(h.db, r, machineID) {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
 
 	var req InstallPHPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	h.installPHP(w, r, machineID, req)
+}
+
+// installPHP is the body of InstallPHPRuntime after the request was decoded (also used by
+// UpdatePHPRuntime when no runtime exists yet, since the body cannot be read twice).
+func (h *PHPRuntimeHandler) installPHP(w http.ResponseWriter, r *http.Request, machineID uuid.UUID, req InstallPHPRequest) {
+	var err error
 	req.Extensions = normalizeExtensions(req.Extensions)
 
 	// Validate version
@@ -197,19 +212,13 @@ func (h *PHPRuntimeHandler) InstallPHPRuntime(w http.ResponseWriter, r *http.Req
 		"extensions": strings.Join(req.Extensions, ","),
 	})
 
-	jobID := uuid.New()
-	_, err = h.db.Exec(`
-		INSERT INTO jobs (id, agent_id, type, payload_json, status)
-		VALUES ($1, $2, 'run', $3, 'pending')
-	`, jobID, machine.AgentID, payload)
+	jobID, err := h.createPHPJob(r, *machine.AgentID, machineID, "install_php_runtime", payload)
 	if err != nil {
 		log.Printf("Failed to create install job: %v", err)
 		http.Error(w, "Failed to create install job", http.StatusInternalServerError)
 		return
 	}
-
-	// Start goroutine to update runtime status when job completes
-	go h.watchJobCompletion(jobID, machineID, req.Version)
+	// Runtime status is updated by jobhooks.OnJobFinished when the job finishes.
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -219,65 +228,16 @@ func (h *PHPRuntimeHandler) InstallPHPRuntime(w http.ResponseWriter, r *http.Req
 	})
 }
 
-// watchJobCompletion monitors job status and updates runtime accordingly
-func (h *PHPRuntimeHandler) watchJobCompletion(jobID, machineID uuid.UUID, version string) {
-	timeout := time.After(15 * time.Minute)
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-timeout:
-			h.db.Exec(`
-				UPDATE php_runtimes 
-				SET status = 'failed', error_message = 'Installation timed out', updated_at = NOW()
-				WHERE machine_id = $1
-			`, machineID)
-			return
-		case <-ticker.C:
-			var status string
-			var logs sql.NullString
-			err := h.db.QueryRow(`
-				SELECT status, logs FROM jobs WHERE id = $1
-			`, jobID).Scan(&status, &logs)
-			if err != nil {
-				continue
-			}
-
-			switch status {
-			case "completed":
-				socketPath := models.GetPHPSocketPath(version)
-				h.db.Exec(`
-					UPDATE php_runtimes 
-					SET status = 'installed', socket_path = $1, installed_at = NOW(), updated_at = NOW()
-					WHERE machine_id = $2
-				`, socketPath, machineID)
-				return
-			case "failed":
-				errorMsg := "Installation failed"
-				if logs.Valid {
-					errorMsg = logs.String
-					if len(errorMsg) > 1000 {
-						errorMsg = errorMsg[len(errorMsg)-1000:]
-					}
-				}
-				h.db.Exec(`
-					UPDATE php_runtimes 
-					SET status = 'failed', error_message = $1, updated_at = NOW()
-					WHERE machine_id = $2
-				`, errorMsg, machineID)
-				return
-			}
-		}
-	}
-}
-
 // RemovePHPRuntime removes PHP from a machine
 func (h *PHPRuntimeHandler) RemovePHPRuntime(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	machineID, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+	if !canManageMachineID(h.db, r, machineID) {
+		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
 
@@ -310,36 +270,12 @@ func (h *PHPRuntimeHandler) RemovePHPRuntime(w http.ResponseWriter, r *http.Requ
 		"version": runtime.Version,
 	})
 
-	jobID := uuid.New()
-	_, err = h.db.Exec(`
-		INSERT INTO jobs (id, agent_id, type, payload_json, status)
-		VALUES ($1, $2, 'run', $3, 'pending')
-	`, jobID, machine.AgentID, payload)
+	jobID, err := h.createPHPJob(r, *machine.AgentID, machineID, "remove_php_runtime", payload)
 	if err != nil {
 		http.Error(w, "Failed to create remove job", http.StatusInternalServerError)
 		return
 	}
-
-	// Watch for completion and delete record
-	go func() {
-		timeout := time.After(10 * time.Minute)
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-timeout:
-				return
-			case <-ticker.C:
-				var status string
-				h.db.QueryRow("SELECT status FROM jobs WHERE id = $1", jobID).Scan(&status)
-				if status == "completed" || status == "failed" {
-					h.db.Exec("DELETE FROM php_runtimes WHERE machine_id = $1", machineID)
-					return
-				}
-			}
-		}
-	}()
+	// The runtime row is deleted by jobhooks.OnJobFinished when the job finishes.
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -354,6 +290,10 @@ func (h *PHPRuntimeHandler) UpdatePHPRuntime(w http.ResponseWriter, r *http.Requ
 	machineID, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+	if !canManageMachineID(h.db, r, machineID) {
+		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
 
@@ -374,7 +314,7 @@ func (h *PHPRuntimeHandler) UpdatePHPRuntime(w http.ResponseWriter, r *http.Requ
 	err = h.db.Get(&current, "SELECT * FROM php_runtimes WHERE machine_id = $1", machineID)
 	if err == sql.ErrNoRows {
 		// No existing runtime, redirect to install
-		h.InstallPHPRuntime(w, r)
+		h.installPHP(w, r, machineID, req)
 		return
 	}
 	if err != nil {
@@ -419,11 +359,7 @@ func (h *PHPRuntimeHandler) UpdatePHPRuntime(w http.ResponseWriter, r *http.Requ
 	template := templates.GetCommand(templateName)
 	payload := template.ToPayload(payloadVars)
 
-	jobID := uuid.New()
-	_, err = h.db.Exec(`
-		INSERT INTO jobs (id, agent_id, type, payload_json, status)
-		VALUES ($1, $2, 'run', $3, 'pending')
-	`, jobID, machine.AgentID, payload)
+	jobID, err := h.createPHPJob(r, *machine.AgentID, machineID, templateName, payload)
 	if err != nil {
 		log.Printf("Failed to create PHP update job: %v", err)
 		http.Error(w, "Failed to create update job", http.StatusInternalServerError)
@@ -441,7 +377,6 @@ func (h *PHPRuntimeHandler) UpdatePHPRuntime(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	go h.watchJobCompletion(jobID, machineID, req.Version)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -458,6 +393,10 @@ func (h *PHPRuntimeHandler) GetPHPRuntimeInfo(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
 		return
 	}
+	if !canAccessMachineID(h.db, r, machineID) {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
 
 	// Get machine agent
 	var machine models.Machine
@@ -471,11 +410,7 @@ func (h *PHPRuntimeHandler) GetPHPRuntimeInfo(w http.ResponseWriter, r *http.Req
 	template := templates.GetCommand("get_php_runtime_info")
 	payload := template.ToPayload(map[string]string{})
 
-	jobID := uuid.New()
-	_, err = h.db.Exec(`
-		INSERT INTO jobs (id, agent_id, type, payload_json, status)
-		VALUES ($1, $2, 'run', $3, 'pending')
-	`, jobID, machine.AgentID, payload)
+	jobID, err := h.createPHPJob(r, *machine.AgentID, machineID, "get_php_runtime_info", payload)
 	if err != nil {
 		http.Error(w, "Failed to create job", http.StatusInternalServerError)
 		return
@@ -515,3 +450,24 @@ func (h *PHPRuntimeHandler) ListAvailableExtensions(w http.ResponseWriter, r *ht
 	})
 }
 
+
+// createPHPJob creates a PHP runtime job linked to the machine's php_runtime entity.
+func (h *PHPRuntimeHandler) createPHPJob(r *http.Request, agentID, machineID uuid.UUID, action string, payload json.RawMessage) (uuid.UUID, error) {
+	var p struct {
+		Vars map[string]string `json:"vars"`
+	}
+	_ = json.Unmarshal(payload, &p)
+	job, err := jobs.Create(r.Context(), h.db, jobs.Spec{
+		AgentID:    agentID,
+		Payload:    payload,
+		Action:     action,
+		Title:      jobs.TemplateTitle(action, p.Vars),
+		EntityType: jobs.EntityPHPRuntime,
+		EntityID:   machineID.String(),
+		CreatedBy:  jobs.UserID(r),
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return job.ID, nil
+}

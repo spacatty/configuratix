@@ -13,6 +13,7 @@ import (
 
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
+	"configuratix/backend/internal/jobs"
 	"configuratix/backend/internal/models"
 
 	"github.com/google/uuid"
@@ -454,6 +455,19 @@ type DomainWithConfig struct {
 	MachineIP                 *string    `db:"machine_ip" json:"machine_ip"`
 	ConfigID                  *uuid.UUID `db:"config_id" json:"config_id"`
 	ConfigName                *string    `db:"config_name" json:"config_name"`
+	// Apply tracking (migration 039)
+	ApplyStatus    *string    `db:"apply_status" json:"apply_status"` // null|pending|applying|applied|failed|removing
+	LastJobID      *uuid.UUID `db:"last_job_id" json:"last_job_id"`
+	LastApplyError *string    `db:"last_apply_error" json:"last_apply_error"`
+	LastAppliedAt  *time.Time `db:"last_applied_at" json:"last_applied_at"`
+	LastJobStatus  *string    `db:"last_job_status" json:"last_job_status"`
+	ConfigUpdatedAt *time.Time `db:"config_updated_at" json:"config_updated_at"`
+	OutOfSync      bool       `db:"out_of_sync" json:"out_of_sync"`
+	// Health check details (migration 041)
+	HealthCheckPath     *string `db:"health_check_path" json:"health_check_path"`
+	LastCheckStatusCode *int    `db:"last_check_status_code" json:"last_check_status_code"`
+	LastCheckResponseMS *int    `db:"last_check_response_ms" json:"last_check_response_ms"`
+	LastCheckError      *string `db:"last_check_error" json:"last_check_error"`
 }
 
 // ListDomains returns all domains with their machine and config info
@@ -470,11 +484,15 @@ func (h *DomainsHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 				COALESCE(NULLIF(m.title, ''), m.hostname) as machine_name, 
 				COALESCE(m.primary_ip, m.ip_address) as machine_ip,
 				dcl.nginx_config_id as config_id,
-				nc.name as config_name
+				nc.name as config_name,
+			lj.status as last_job_status,
+			nc.updated_at as config_updated_at,
+			COALESCE(nc.id IS NOT NULL AND d.assigned_machine_id IS NOT NULL AND (d.last_applied_at IS NULL OR d.last_applied_at < nc.updated_at), false) as out_of_sync
 			FROM domains d
 			LEFT JOIN machines m ON d.assigned_machine_id = m.id
 			LEFT JOIN domain_config_links dcl ON d.id = dcl.domain_id
 			LEFT JOIN nginx_configs nc ON dcl.nginx_config_id = nc.id
+			LEFT JOIN jobs lj ON lj.id = d.last_job_id
 			ORDER BY d.created_at DESC
 		`)
 	} else {
@@ -483,11 +501,15 @@ func (h *DomainsHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 				COALESCE(NULLIF(m.title, ''), m.hostname) as machine_name, 
 				COALESCE(m.primary_ip, m.ip_address) as machine_ip,
 				dcl.nginx_config_id as config_id,
-				nc.name as config_name
+				nc.name as config_name,
+			lj.status as last_job_status,
+			nc.updated_at as config_updated_at,
+			COALESCE(nc.id IS NOT NULL AND d.assigned_machine_id IS NOT NULL AND (d.last_applied_at IS NULL OR d.last_applied_at < nc.updated_at), false) as out_of_sync
 			FROM domains d
 			LEFT JOIN machines m ON d.assigned_machine_id = m.id
 			LEFT JOIN domain_config_links dcl ON d.id = dcl.domain_id
 			LEFT JOIN nginx_configs nc ON dcl.nginx_config_id = nc.id
+			LEFT JOIN jobs lj ON lj.id = d.last_job_id
 			WHERE d.owner_id = $1 OR d.owner_id IS NULL
 			ORDER BY d.created_at DESC
 		`, userID)
@@ -521,11 +543,15 @@ func (h *DomainsHandler) GetDomain(w http.ResponseWriter, r *http.Request) {
 			COALESCE(NULLIF(m.title, ''), m.hostname) as machine_name, 
 			COALESCE(m.primary_ip, m.ip_address) as machine_ip,
 			dcl.nginx_config_id as config_id,
-			nc.name as config_name
+			nc.name as config_name,
+			lj.status as last_job_status,
+			nc.updated_at as config_updated_at,
+			COALESCE(nc.id IS NOT NULL AND d.assigned_machine_id IS NOT NULL AND (d.last_applied_at IS NULL OR d.last_applied_at < nc.updated_at), false) as out_of_sync
 		FROM domains d
 		LEFT JOIN machines m ON d.assigned_machine_id = m.id
 		LEFT JOIN domain_config_links dcl ON d.id = dcl.domain_id
 		LEFT JOIN nginx_configs nc ON dcl.nginx_config_id = nc.id
+			LEFT JOIN jobs lj ON lj.id = d.last_job_id
 		WHERE d.id = $1
 	`, id)
 	if err != nil {
@@ -594,14 +620,23 @@ func (h *DomainsHandler) AssignDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.assignDomainCore(id, req); err != nil {
+	created, err := h.assignDomainCore(id, req, jobs.UserID(r))
+	if err != nil {
 		log.Printf("Failed to assign domain: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), errorStatus(err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Domain assigned"})
+	resp := map[string]interface{}{"message": "Domain assigned", "jobs": []map[string]interface{}{}}
+	out := make([]map[string]interface{}, 0, len(created))
+	for _, j := range created {
+		out = append(out, jobCreatedResponse(j))
+	}
+	resp["jobs"] = out
+	if len(created) > 0 {
+		resp["job_id"] = created[0].ID
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // UpdateDomainNotes updates the notes for a domain
@@ -641,14 +676,58 @@ func (h *DomainsHandler) DeleteDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Create remove_domain job if assigned to a machine
+	claims, userID, ok := requestClaims(r)
+	if !ok || !h.domainAccessible(claims, userID, id) {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
 
-	_, err = h.db.Exec("DELETE FROM domains WHERE id = $1", id)
+	// Removes the nginx config from the assigned machine (transactional remove_domain job).
+	n, created, warnings, err := deleteDomainsWithCleanup(r.Context(), h.db, []uuid.UUID{id}, &userID)
 	if err != nil {
 		log.Printf("Failed to delete domain: %v", err)
 		http.Error(w, "Failed to delete domain", http.StatusInternalServerError)
 		return
 	}
+	if n == 0 {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"deleted": n, "jobs": jobsResponse(created), "warnings": warnings})
+}
 
-	w.WriteHeader(http.StatusNoContent)
+// ApplyDomain re-applies a domain's nginx config on its assigned machine.
+// POST /api/domains/{id}/apply → 202 {"jobs": [...], "job_id": "<main apply job>"}
+func (h *DomainsHandler) ApplyDomain(w http.ResponseWriter, r *http.Request) {
+	claims, userID, ok := requestClaims(r)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	id, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid domain ID", http.StatusBadRequest)
+		return
+	}
+	if !h.domainAccessible(claims, userID, id) {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+	var machineID *uuid.UUID
+	h.db.Get(&machineID, "SELECT assigned_machine_id FROM domains WHERE id = $1", id)
+	if machineID != nil && !canManageMachineID(h.db, r, *machineID) {
+		http.Error(w, "Access denied to the assigned machine", http.StatusForbidden)
+		return
+	}
+
+	created, err := applyDomainNow(r.Context(), h.db, id, &userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	out := make([]map[string]interface{}, 0, len(created))
+	for _, j := range created {
+		out = append(out, jobCreatedResponse(j))
+	}
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"jobs": out, "job_id": created[0].ID})
 }

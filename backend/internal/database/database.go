@@ -38,8 +38,8 @@ func New() (*DB, error) {
 	}
 
 	// Set connection pool settings
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(25) // keep warm: each new connection to a remote DB costs several round trips
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	// Test connection with timeout

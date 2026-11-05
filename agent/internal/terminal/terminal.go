@@ -4,6 +4,9 @@
 package terminal
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -17,264 +20,337 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// Keepalive discipline (same on every leg of browser <-> backend <-> agent):
+// control-frame ping every pingInterval, read deadline readTimeout refreshed
+// on pong and on any received message, every write with a fresh deadline,
+// any write error closes the connection.
+const (
+	pingInterval = 20 * time.Second
+	readTimeout  = 70 * time.Second
+	writeTimeout = 10 * time.Second
+	// Output produced while the backend link is down is kept and replayed.
+	maxPending = 256 * 1024
+)
+
 type TerminalMessage struct {
-	Type string `json:"type"` // input, output, resize, ping, pong, status
-	Data string `json:"data,omitempty"`
-	Cols int    `json:"cols,omitempty"`
-	Rows int    `json:"rows,omitempty"`
+	Type      string `json:"type"` // input, output, resize, ping, pong, status
+	Data      string `json:"data,omitempty"`
+	Cols      int    `json:"cols,omitempty"`
+	Rows      int    `json:"rows,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
-type Terminal struct {
-	serverURL string
-	apiKey    string
-	conn      *websocket.Conn
-	connLock  sync.Mutex
-	ptyFile   *os.File
-	cmd       *exec.Cmd
-	done      chan struct{}
+// wsConn serialises writes on one websocket (gorilla allows one writer).
+type wsConn struct {
+	conn   *websocket.Conn
+	mu     sync.Mutex
+	closed bool
+	once   sync.Once
 }
 
-func New(serverURL, apiKey string) *Terminal {
-	return &Terminal{
-		serverURL: serverURL,
-		apiKey:    apiKey,
-		done:      make(chan struct{}),
+func (c *wsConn) writeJSON(v interface{}) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errors.New("connection closed")
 	}
-}
-
-// Connect establishes websocket connection to backend terminal endpoint
-func (t *Terminal) Connect() error {
-	// Convert http(s) to ws(s)
-	wsURL := t.serverURL
-	wsURL = strings.Replace(wsURL, "https://", "wss://", 1)
-	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
-
-	u, err := url.Parse(wsURL + "/api/agent/terminal")
-	if err != nil {
+	c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if err := c.conn.WriteJSON(v); err != nil {
+		c.closed = true
+		c.conn.Close()
 		return err
 	}
-
-	header := http.Header{}
-	header.Set("X-API-Key", t.apiKey)
-
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-	}
-
-	conn, _, err := dialer.Dial(u.String(), header)
-	if err != nil {
-		return err
-	}
-
-	t.connLock.Lock()
-	t.conn = conn
-	t.connLock.Unlock()
-
 	return nil
 }
 
-// Run starts the terminal session
-func (t *Terminal) Run() error {
-	defer t.Close()
-
-	// Configure WebSocket ping/pong handlers
-	t.conn.SetPongHandler(func(appData string) error {
-		// Received pong, extend read deadline
-		t.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		return nil
-	})
-	
-	t.conn.SetPingHandler(func(appData string) error {
-		// Respond to ping with pong
-		t.connLock.Lock()
-		defer t.connLock.Unlock()
-		if t.conn != nil {
-			t.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			return t.conn.WriteMessage(websocket.PongMessage, []byte(appData))
-		}
-		return nil
-	})
-
-	// Start shell
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/bash"
+func (c *wsConn) ping() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errors.New("connection closed")
 	}
-
-	t.cmd = exec.Command(shell)
-	t.cmd.Env = append(os.Environ(), "TERM=xterm-256color")
-
-	var err error
-	t.ptyFile, err = pty.Start(t.cmd)
-	if err != nil {
+	if err := c.conn.WriteControl(websocket.PingMessage, []byte("keepalive"), time.Now().Add(writeTimeout)); err != nil {
+		c.closed = true
+		c.conn.Close()
 		return err
 	}
-	defer t.ptyFile.Close()
-
-	// Set initial size
-	t.setSize(80, 24)
-
-	// Set initial read deadline (60 seconds, will be extended by pings)
-	t.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-
-	// Goroutine: read from PTY, send to websocket
-	go t.readFromPTY()
-
-	// Goroutine: ping/pong keepalive
-	go t.keepalive()
-
-	// Main loop: read from websocket, write to PTY
-	return t.readFromWebsocket()
+	return nil
 }
 
-func (t *Terminal) readFromPTY() {
-	buf := make([]byte, 4096)
+func (c *wsConn) close() {
+	c.once.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
+		c.conn.Close()
+	})
+}
+
+// shell is a PTY-backed login shell that survives backend reconnects.
+type shell struct {
+	id   string
+	pty  *os.File
+	cmd  *exec.Cmd
+	done chan struct{}
+}
+
+type manager struct {
+	serverURL string
+	apiKey    string
+
+	mu      sync.Mutex
+	conn    *wsConn
+	sh      *shell
+	pending []byte
+	cols    int
+	rows    int
+}
+
+func newID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (m *manager) startShell() (*shell, error) {
+	sh := os.Getenv("SHELL")
+	if sh == "" {
+		sh = "/bin/bash"
+	}
+	cmd := exec.Command(sh)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	f, err := pty.Start(cmd)
+	if err != nil {
+		return nil, err
+	}
+	s := &shell{id: newID(), pty: f, cmd: cmd, done: make(chan struct{})}
+	cols, rows := m.cols, m.rows
+	if cols <= 0 || rows <= 0 {
+		cols, rows = 80, 24
+	}
+	pty.Setsize(f, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
+	go m.pump(s)
+	go func() {
+		cmd.Wait()
+		f.Close()
+		close(s.done)
+	}()
+	return s, nil
+}
+
+// pump copies PTY output to the current connection (or the pending buffer).
+func (m *manager) pump(s *shell) {
+	buf := make([]byte, 8192)
 	for {
+		n, err := s.pty.Read(buf)
+		if n > 0 {
+			m.emit(s, string(buf[:n]))
+		}
+		if err != nil {
+			break
+		}
+	}
+	m.mu.Lock()
+	if m.sh == s {
+		m.sh = nil
+	}
+	conn := m.conn
+	m.mu.Unlock()
+	if conn != nil {
+		conn.writeJSON(TerminalMessage{Type: "status", Data: "shell_exited", SessionID: s.id})
+	}
+}
+
+func (m *manager) emit(s *shell, data string) {
+	m.mu.Lock()
+	conn := m.conn
+	if conn == nil {
+		m.pending = append(m.pending, data...)
+		if len(m.pending) > maxPending {
+			m.pending = append([]byte(nil), m.pending[len(m.pending)-maxPending:]...)
+		}
+		m.mu.Unlock()
+		return
+	}
+	m.mu.Unlock()
+	if err := conn.writeJSON(TerminalMessage{Type: "output", Data: data, SessionID: s.id}); err != nil {
+		// Keep the output for the next connection.
+		m.mu.Lock()
+		m.pending = append(m.pending, data...)
+		m.mu.Unlock()
+	}
+}
+
+// ensureShell returns the live shell, starting a new one if needed.
+func (m *manager) ensureShell() (*shell, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sh != nil {
 		select {
-		case <-t.done:
-			return
+		case <-m.sh.done:
+			m.sh = nil
 		default:
-			n, err := t.ptyFile.Read(buf)
-			if err != nil {
-				return
-			}
-			if n > 0 {
-				t.sendMessage(TerminalMessage{
-					Type: "output",
-					Data: string(buf[:n]),
-				})
-			}
+			return m.sh, true, nil
 		}
 	}
-}
-
-func (t *Terminal) readFromWebsocket() error {
-	for {
-		select {
-		case <-t.done:
-			return nil
-		default:
-			var msg TerminalMessage
-			t.connLock.Lock()
-			conn := t.conn
-			t.connLock.Unlock()
-
-			if conn == nil {
-				return nil
-			}
-
-			if err := conn.ReadJSON(&msg); err != nil {
-				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-					return nil
-				}
-				return err
-			}
-
-			// Extend read deadline on any message received
-			t.connLock.Lock()
-			if t.conn != nil {
-				t.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-			}
-			t.connLock.Unlock()
-
-			switch msg.Type {
-			case "input":
-				if t.ptyFile != nil {
-					t.ptyFile.Write([]byte(msg.Data))
-				}
-			case "resize":
-				t.setSize(msg.Cols, msg.Rows)
-			case "ping":
-				t.sendMessage(TerminalMessage{Type: "pong"})
-			case "pong":
-				// Keepalive response, ignore
-			}
-		}
+	s, err := m.startShell()
+	if err != nil {
+		return nil, false, err
 	}
+	m.sh = s
+	return s, false, nil
 }
 
-func (t *Terminal) keepalive() {
-	// Use 15 second pings to keep connection alive through proxies
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-t.done:
-			return
-		case <-ticker.C:
-			t.connLock.Lock()
-			if t.conn != nil {
-				// Use WebSocket ping control frame (more reliable than JSON)
-				t.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				if err := t.conn.WriteMessage(websocket.PingMessage, []byte("keepalive")); err != nil {
-					log.Printf("Terminal ping failed: %v", err)
-					t.connLock.Unlock()
-					return
-				}
-			}
-			t.connLock.Unlock()
-		}
+func (m *manager) dial() (*wsConn, error) {
+	wsURL := m.serverURL
+	wsURL = strings.Replace(wsURL, "https://", "wss://", 1)
+	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
+	u, err := url.Parse(wsURL + "/api/agent/terminal")
+	if err != nil {
+		return nil, err
 	}
+	header := http.Header{}
+	header.Set("X-API-Key", m.apiKey)
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	conn, _, err := dialer.Dial(u.String(), header)
+	if err != nil {
+		return nil, err
+	}
+	return &wsConn{conn: conn}, nil
 }
 
-func (t *Terminal) sendMessage(msg TerminalMessage) error {
-	t.connLock.Lock()
-	defer t.connLock.Unlock()
+// serve runs one backend connection until it breaks. The shell keeps running.
+func (m *manager) serve(c *wsConn) {
+	defer c.close()
+	conn := c.conn
 
-	if t.conn == nil {
+	conn.SetReadDeadline(time.Now().Add(readTimeout))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
 		return nil
+	})
+	conn.SetPingHandler(func(appData string) error {
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
+		err := conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(writeTimeout))
+		if err != nil && !errors.Is(err, websocket.ErrCloseSent) {
+			c.close()
+		}
+		return nil
+	})
+
+	s, resumed, err := m.ensureShell()
+	if err != nil {
+		c.writeJSON(TerminalMessage{Type: "output", Data: "\r\n\x1b[31mFailed to start shell: " + err.Error() + "\x1b[0m\r\n"})
+		return
 	}
-
-	t.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	return t.conn.WriteJSON(msg)
-}
-
-func (t *Terminal) setSize(cols, rows int) {
-	if t.ptyFile == nil || cols <= 0 || rows <= 0 {
+	status := "shell_started"
+	if resumed {
+		status = "shell_resumed"
+	}
+	if err := c.writeJSON(TerminalMessage{Type: "status", Data: status, SessionID: s.id}); err != nil {
 		return
 	}
 
-	pty.Setsize(t.ptyFile, &pty.Winsize{
-		Rows: uint16(rows),
-		Cols: uint16(cols),
-	})
-}
-
-func (t *Terminal) Close() {
-	close(t.done)
-
-	t.connLock.Lock()
-	if t.conn != nil {
-		t.conn.Close()
-		t.conn = nil
+	// Attach: flush output produced while disconnected, then go live.
+	// The flush happens under the lock so live output can't overtake it.
+	m.mu.Lock()
+	if len(m.pending) > 0 {
+		if err := c.writeJSON(TerminalMessage{Type: "output", Data: string(m.pending), SessionID: s.id}); err != nil {
+			m.mu.Unlock()
+			return
+		}
+		m.pending = nil
 	}
-	t.connLock.Unlock()
+	m.conn = c
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		if m.conn == c {
+			m.conn = nil
+		}
+		m.mu.Unlock()
+	}()
 
-	if t.ptyFile != nil {
-		t.ptyFile.Close()
-	}
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		t := time.NewTicker(pingInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				if err := c.ping(); err != nil {
+					log.Printf("Terminal ping failed: %v", err)
+					return
+				}
+			}
+		}
+	}()
 
-	if t.cmd != nil && t.cmd.Process != nil {
-		t.cmd.Process.Kill()
-	}
-}
-
-// RunTerminalLoop continuously maintains terminal connection with reconnection
-func RunTerminalLoop(serverURL, apiKey string) {
 	for {
-		term := New(serverURL, apiKey)
-		if err := term.Connect(); err != nil {
-			log.Printf("Terminal connection failed: %v, retrying in 5s", err)
-			time.Sleep(5 * time.Second)
+		var msg TerminalMessage
+		if err := conn.ReadJSON(&msg); err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				log.Printf("Terminal read error: %v", err)
+			}
+			return
+		}
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
+
+		switch msg.Type {
+		case "input":
+			sh, resumedNow, err := m.ensureShell()
+			if err != nil {
+				continue
+			}
+			if !resumedNow {
+				c.writeJSON(TerminalMessage{Type: "status", Data: "shell_started", SessionID: sh.id})
+			}
+			sh.pty.Write([]byte(msg.Data))
+		case "resize":
+			if msg.Cols > 0 && msg.Rows > 0 {
+				m.mu.Lock()
+				m.cols, m.rows = msg.Cols, msg.Rows
+				sh := m.sh
+				m.mu.Unlock()
+				if sh != nil {
+					pty.Setsize(sh.pty, &pty.Winsize{Rows: uint16(msg.Rows), Cols: uint16(msg.Cols)})
+				}
+			}
+		case "ping":
+			c.writeJSON(TerminalMessage{Type: "pong"})
+		case "pong":
+		}
+	}
+}
+
+// RunTerminalLoop continuously maintains the terminal connection with
+// exponential-backoff reconnects. The PTY session persists across reconnects.
+func RunTerminalLoop(serverURL, apiKey string) {
+	m := &manager{serverURL: serverURL, apiKey: apiKey}
+	backoff := time.Second
+	for {
+		c, err := m.dial()
+		if err != nil {
+			log.Printf("Terminal connection failed: %v, retrying in %s", err, backoff)
+			time.Sleep(backoff)
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
 			continue
 		}
-
 		log.Println("Terminal connected")
-		if err := term.Run(); err != nil {
-			log.Printf("Terminal error: %v", err)
-		}
+		started := time.Now()
+		m.serve(c)
 		log.Println("Terminal disconnected, reconnecting...")
-		time.Sleep(2 * time.Second)
+		if time.Since(started) > 30*time.Second {
+			backoff = time.Second
+		}
+		time.Sleep(backoff)
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
 	}
 }

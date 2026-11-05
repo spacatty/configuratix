@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -8,6 +9,7 @@ import (
 
 	"configuratix/backend/internal/database"
 	"configuratix/backend/internal/handlers"
+	"configuratix/backend/internal/jobhooks"
 	"configuratix/backend/internal/middleware"
 	"configuratix/backend/internal/scheduler"
 	"configuratix/backend/internal/services"
@@ -132,6 +134,13 @@ func main() {
 	apiRouter.HandleFunc("/machines/tools/list", machinesHandler.GetMachinesForSpeedTest).Methods("GET", "OPTIONS")
 
 	// Machine Configs (file editing)
+	// Machine nginx view (inventory, drift, test, reload)
+	machineNginxHandler := handlers.NewMachineNginxHandler(db)
+	apiRouter.HandleFunc("/machines/{id}/nginx", machineNginxHandler.GetMachineNginx).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/nginx/expected", machineNginxHandler.GetMachineNginxExpected).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/nginx/test", machineNginxHandler.TestMachineNginx).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/nginx/reload", machineNginxHandler.ReloadMachineNginx).Methods("POST", "OPTIONS")
+
 	configsHandler := handlers.NewConfigsHandler(db)
 	apiRouter.HandleFunc("/machines/{id}/configs", configsHandler.ListConfigs).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/configs/read", configsHandler.ReadConfig).Methods("POST", "OPTIONS")
@@ -186,6 +195,7 @@ func main() {
 	apiRouter.HandleFunc("/domains/{id}/notes", domainsHandler.UpdateDomainNotes).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/health-check", domainsHandler.UpdateDomainHealthCheck).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/check", domainsHandler.TriggerDomainHealthCheck).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/domains/{id}/apply", domainsHandler.ApplyDomain).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}", domainsHandler.DeleteDomain).Methods("DELETE", "OPTIONS")
 
 	// Domain Groups
@@ -268,6 +278,7 @@ func main() {
 	// IP Bans
 	apiRouter.HandleFunc("/security/bans", securityHandler.ListBans).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/security/bans", securityHandler.CreateBan).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/security/bans/export", securityHandler.ExportBans).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/security/bans/import", securityHandler.ImportBans).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/security/bans/{id}", securityHandler.DeleteBan).Methods("DELETE", "OPTIONS")
 	apiRouter.HandleFunc("/security/bans", securityHandler.DeleteAllBans).Methods("DELETE", "OPTIONS")
@@ -303,6 +314,7 @@ func main() {
 	apiRouter.HandleFunc("/nginx-configs/{id}", nginxConfigsHandler.GetNginxConfig).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/nginx-configs/{id}", nginxConfigsHandler.UpdateNginxConfig).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/nginx-configs/{id}", nginxConfigsHandler.DeleteNginxConfig).Methods("DELETE", "OPTIONS")
+	apiRouter.HandleFunc("/nginx-configs/{id}/apply", nginxConfigsHandler.ApplyNginxConfig).Methods("POST", "OPTIONS")
 
 	// Tracker (subscriptions, servers, domains)
 	trackerHandler := handlers.NewTrackerHandler(db)
@@ -336,7 +348,14 @@ func main() {
 	jobsHandler := handlers.NewJobsHandler(db)
 	apiRouter.HandleFunc("/jobs", jobsHandler.ListJobs).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/jobs", jobsHandler.CreateJob).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/jobs/stats", jobsHandler.JobStats).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/jobs/{id}", jobsHandler.GetJob).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/jobs/{id}/cancel", jobsHandler.CancelJob).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/jobs/{id}/retry", jobsHandler.RetryJob).Methods("POST", "OPTIONS")
+
+	// Dashboard summary
+	dashboardHandler := handlers.NewDashboardHandler(db, agentUpdateHandler)
+	apiRouter.HandleFunc("/dashboard", dashboardHandler.GetDashboard).Methods("GET", "OPTIONS")
 
 	// Commands (templates)
 	commandsHandler := handlers.NewCommandsHandler(db)
@@ -394,6 +413,12 @@ func main() {
 	// Start tracker reminder scheduler
 	trackerSched := services.NewTrackerScheduler(db)
 	go trackerSched.Start()
+
+	// Fail running jobs that exceeded their timeout and unconfirmed agent updates
+	handlers.StartAgentJobReaper(db)
+
+	// Apply job outcomes to entities (domains, passthrough, php) for jobs whose hooks have not run
+	jobhooks.StartSweeper(context.Background(), db)
 	defer trackerSched.Stop()
 
 	port := os.Getenv("BACKEND_PORT")
