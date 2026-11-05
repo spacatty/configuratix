@@ -198,6 +198,7 @@ export function AttentionPanel({ domains, machines, configs, latestAgent, loadin
 
   return (
     <SectionCard
+      fill
       className={className}
       title="Needs attention"
       icon={TriangleAlert}

@@ -16,7 +16,17 @@ import (
 type DashboardHandler struct {
 	db      *database.DB
 	updates *AgentUpdateHandler // optional: latest agent version for outdated_agents
+
+	cacheMu sync.Mutex
+	cache   map[string]dashboardCacheEntry // per user; the page and sidebar badges poll it concurrently
 }
+
+type dashboardCacheEntry struct {
+	at   time.Time
+	resp map[string]interface{}
+}
+
+const dashboardCacheTTL = 5 * time.Second
 
 func NewDashboardHandler(db *database.DB, updates *AgentUpdateHandler) *DashboardHandler {
 	return &DashboardHandler{db: db, updates: updates}
@@ -67,6 +77,15 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	super := claims.IsSuperAdmin()
+
+	cacheKey := userID.String()
+	h.cacheMu.Lock()
+	if e, ok := h.cache[cacheKey]; ok && time.Since(e.at) < dashboardCacheTTL {
+		h.cacheMu.Unlock()
+		writeJSON(w, http.StatusOK, e.resp)
+		return
+	}
+	h.cacheMu.Unlock()
 
 	// Machine scope: "<cond>" on alias m with $1 = user id (no-op for superadmin).
 	machineWhere := "TRUE"
@@ -218,6 +237,12 @@ func (h *DashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) 
 
 	wg.Wait()
 	resp["jobs"] = jobsResp
+	h.cacheMu.Lock()
+	if h.cache == nil {
+		h.cache = map[string]dashboardCacheEntry{}
+	}
+	h.cache[cacheKey] = dashboardCacheEntry{at: time.Now(), resp: resp}
+	h.cacheMu.Unlock()
 	writeJSON(w, http.StatusOK, resp)
 }
 

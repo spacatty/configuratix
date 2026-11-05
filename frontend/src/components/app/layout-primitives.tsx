@@ -134,6 +134,8 @@ export interface SectionCardProps extends Omit<React.ComponentProps<"section">, 
   footer?: React.ReactNode;
   /** Remove body padding (for tables / lists that run edge-to-edge). */
   flush?: boolean;
+  /** lg+: fill the parent's height (grid cell) and scroll the body; description is dropped to save space. */
+  fill?: boolean;
   bodyClassName?: string;
 }
 
@@ -145,6 +147,7 @@ export function SectionCard({
   actions,
   footer,
   flush,
+  fill,
   className,
   bodyClassName,
   children,
@@ -156,23 +159,24 @@ export function SectionCard({
       data-slot="section-card"
       className={cn(
         "overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-[inset_0_1px_0_0_oklch(1_0_0/3.5%)]",
+        fill && "flex flex-col lg:h-full lg:min-h-0",
         className
       )}
       {...props}
     >
       {hasHeader && (
-        <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+        <header className={cn("flex items-start justify-between gap-3 border-b border-border px-4", fill ? "shrink-0 items-center py-2" : "py-3")}>
           <div className="flex min-w-0 items-start gap-2.5">
             {Icon && <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />}
             <div className="min-w-0 space-y-0.5">
               {title && <h2 className="text-sm leading-5 font-semibold tracking-[-0.01em]">{title}</h2>}
-              {description && <p className="text-xs leading-relaxed text-muted-foreground">{description}</p>}
+              {description && !fill && <p className="text-xs leading-relaxed text-muted-foreground">{description}</p>}
             </div>
           </div>
           {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
         </header>
       )}
-      <div className={cn(!flush && "p-4", bodyClassName)}>{children}</div>
+      <div className={cn(!flush && (fill ? "p-3" : "p-4"), fill && "lg:min-h-0 lg:flex-1 lg:overflow-y-auto", bodyClassName)}>{children}</div>
       {footer && (
         <footer className="flex items-center justify-end gap-2 border-t border-border bg-white/[0.012] px-4 py-2.5">
           {footer}

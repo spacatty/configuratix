@@ -62,6 +62,7 @@ export function FleetPanel({
 
   return (
     <SectionCard
+      fill
       className={className}
       title="Fleet health"
       icon={Cpu}

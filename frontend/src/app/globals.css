@@ -294,3 +294,12 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Sidebar drag-resize: no width easing or text selection while dragging */
+[data-slot="sidebar-wrapper"][data-resizing] {
+  cursor: col-resize;
+  user-select: none;
+}
+[data-slot="sidebar-wrapper"][data-resizing] * {
+  transition: none !important;
+}

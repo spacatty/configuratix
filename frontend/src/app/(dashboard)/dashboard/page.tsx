@@ -7,7 +7,6 @@ import {
   ArrowUpCircle,
   FileCode,
   Globe,
-  LayoutDashboard,
   RefreshCw,
   Server,
   ShieldBan,
@@ -22,14 +21,12 @@ import { formatDuration, formatNumber } from "@/lib/format";
 import { humanizeJobType } from "@/lib/jobs";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ErrorState,
-  PageHeader,
   RelativeTime,
   SectionCard,
   Spinner,
-  StatCard,
-  StatStrip,
   StatusDot,
   usePolling,
 } from "@/components/app";
@@ -75,136 +72,97 @@ export default function DashboardPage() {
   const loadingDash = dash.loading && !d;
 
   if (dash.error && !d && !dash.loading) {
-    return (
-      <div className="space-y-6">
-        <PageHeader icon={LayoutDashboard} title="Overview" />
-        <ErrorState error={dash.error} onRetry={dash.refresh} title="Couldn't load the dashboard" />
-      </div>
-    );
+    return <ErrorState error={dash.error} onRetry={dash.refresh} title="Couldn't load the dashboard" />;
   }
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        icon={LayoutDashboard}
-        title="Overview"
-        description="Fleet, domains, config drift and agent activity at a glance."
-        meta={
-          <>
-            <span className="inline-flex items-center gap-1.5">
-              <StatusDot status={dash.error ? "error" : "online"} pulse={!dash.error} />
-              {dash.error ? "Refresh failed — showing last data" : "Live"}
-            </span>
+    // lg+: exactly one viewport tall (minus top bar + page padding); panels scroll inside themselves.
+    <div className="flex flex-col gap-3 lg:h-[calc(100svh-6rem)]">
+      <div className="flex shrink-0 items-stretch gap-2">
+        <div className="grid flex-1 grid-cols-2 overflow-hidden rounded-lg border border-border bg-border gap-px sm:grid-cols-3 xl:grid-cols-6">
+          <Kpi
+            label="Machines online"
+            icon={Server}
+            href="/machines"
+            loading={loadingDash}
+            value={d ? d.machines.online : null}
+            total={d?.machines.total}
+            tone={d && d.machines.offline > 0 ? "warning" : undefined}
+            sub={d ? `${d.machines.offline} offline${d.machines.updating > 0 ? ` · ${d.machines.updating} updating` : ""}` : undefined}
+          />
+          <Kpi
+            label="Domains healthy"
+            icon={Globe}
+            href="/domains"
+            loading={loadingDash}
+            value={d ? d.domains.healthy : null}
+            total={d?.domains.total}
+            tone={d && d.domains.unhealthy > 0 ? "destructive" : undefined}
+            sub={d ? `${d.domains.unhealthy} unhealthy · ${d.domains.unknown} unknown` : undefined}
+          />
+          <Kpi
+            label="Apply failures"
+            icon={ShieldAlert}
+            href="/domains"
+            loading={loadingDash}
+            value={d ? d.domains.apply_failed : null}
+            tone={d && d.domains.apply_failed > 0 ? "destructive" : undefined}
+            sub={d ? (d.domains.applying > 0 ? `${d.domains.applying} applying` : "none in progress") : undefined}
+          />
+          <Kpi
+            label="Configs out of sync"
+            icon={FileCode}
+            href="/configs/nginx"
+            loading={loadingDash}
+            value={d ? d.nginx_configs.out_of_sync : null}
+            total={d?.nginx_configs.total}
+            tone={d && d.nginx_configs.out_of_sync > 0 ? "warning" : undefined}
+            sub={d ? `${d.nginx_configs.out_of_sync_domains} domains pending` : undefined}
+          />
+          <Kpi
+            label="Active bans"
+            icon={ShieldBan}
+            href="/security/bans"
+            loading={loadingDash}
+            value={d?.security ? d.security.active_bans : null}
+            sub={d ? (d.security ? `+${d.security.bans_24h} in 24h` : "n/a") : undefined}
+          />
+          <Kpi
+            label="Outdated agents"
+            icon={ArrowUpCircle}
+            href="/machines"
+            loading={loadingDash}
+            value={d && d.machines.outdated_agents !== null ? d.machines.outdated_agents : null}
+            tone={d && (d.machines.outdated_agents ?? 0) > 0 ? "warning" : undefined}
+            sub={d?.machines.latest_agent_version ? `latest ${d.machines.latest_agent_version}` : undefined}
+          />
+        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={refreshAll}
+              disabled={refreshing}
+              aria-label="Refresh dashboard"
+              className="flex w-9 shrink-0 flex-col items-center justify-center gap-2 rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
+            >
+              <StatusDot status={dash.error ? "error" : "online"} pulse={!dash.error} size="xs" />
+              {refreshing ? <Spinner className="size-3.5" /> : <RefreshCw className="size-3.5" />}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="left">
+            {dash.error ? "Refresh failed, showing last data" : "Live"}
             {dash.updatedAt && (
-              <span>
-                Updated <RelativeTime date={new Date(dash.updatedAt).toISOString()} />
+              <span className="text-muted-foreground">
+                {" "}· updated <RelativeTime date={new Date(dash.updatedAt).toISOString()} noTooltip />
               </span>
             )}
-            {(d?.jobs.running ?? 0) > 0 && (
-              <Link href="/jobs?status=running" className="inline-flex items-center gap-1.5 text-info hover:underline">
-                <StatusDot status="running" size="xs" />
-                <span className="font-data">{d?.jobs.running}</span> running
-              </Link>
-            )}
-          </>
-        }
-        actions={
-          <Button variant="outline" onClick={refreshAll} disabled={refreshing}>
-            {refreshing ? <Spinner /> : <RefreshCw />}
-            Refresh
-          </Button>
-        }
-      />
-
-      {/* KPI strip */}
-      <StatStrip className="lg:grid-flow-col">
-        <StatCard
-          label="Machines online"
-          icon={Server}
-          loading={loadingDash}
-          value={d ? formatNumber(d.machines.online) : "—"}
-          suffix={d ? `/ ${d.machines.total}` : undefined}
-          progress={d ? pct(d.machines.online, d.machines.total) : undefined}
-          progressTone={d && d.machines.offline > 0 ? "warning" : "success"}
-          tone={d && d.machines.offline > 0 ? "warning" : "default"}
-          sub={
-            d ? (
-              <>
-                <span className={cn(d.machines.offline > 0 && "text-destructive")}>{d.machines.offline} offline</span>
-                {d.machines.updating > 0 ? ` · ${d.machines.updating} updating` : ""}
-              </>
-            ) : undefined
-          }
-          href="/machines"
-        />
-        <StatCard
-          label="Domains healthy"
-          icon={Globe}
-          loading={loadingDash}
-          value={d ? formatNumber(d.domains.healthy) : "—"}
-          suffix={d ? `/ ${d.domains.total}` : undefined}
-          progress={d ? pct(d.domains.healthy, d.domains.total) : undefined}
-          progressTone={d && d.domains.unhealthy > 0 ? "destructive" : "success"}
-          tone={d && d.domains.unhealthy > 0 ? "destructive" : "default"}
-          sub={
-            d ? (
-              <>
-                <span className={cn(d.domains.unhealthy > 0 && "text-destructive")}>{d.domains.unhealthy} unhealthy</span> · {d.domains.unknown} unknown
-              </>
-            ) : undefined
-          }
-          href="/domains"
-        />
-        <StatCard
-          label="Apply failures"
-          icon={ShieldAlert}
-          loading={loadingDash}
-          value={d ? formatNumber(d.domains.apply_failed) : "—"}
-          tone={d && d.domains.apply_failed > 0 ? "destructive" : "default"}
-          sub={d ? (d.domains.applying > 0 ? `${d.domains.applying} applying now` : "No apply in progress") : undefined}
-          href="/domains"
-        />
-        <StatCard
-          label="Configs out of sync"
-          icon={FileCode}
-          loading={loadingDash}
-          value={d ? formatNumber(d.nginx_configs.out_of_sync) : "—"}
-          suffix={d ? `/ ${d.nginx_configs.total}` : undefined}
-          tone={d && d.nginx_configs.out_of_sync > 0 ? "warning" : "default"}
-          sub={d ? `${d.nginx_configs.out_of_sync_domains} domains awaiting apply` : undefined}
-          href="/configs/nginx"
-        />
-        <StatCard
-          label="Active bans"
-          icon={ShieldBan}
-          loading={loadingDash}
-          value={d?.security ? formatNumber(d.security.active_bans) : "—"}
-          sub={d ? (d.security ? `+${d.security.bans_24h} in last 24h` : "Not available") : undefined}
-          href="/security/bans"
-        />
-        <StatCard
-          label="Outdated agents"
-          icon={ArrowUpCircle}
-          loading={loadingDash}
-          value={d && d.machines.outdated_agents !== null ? formatNumber(d.machines.outdated_agents) : "—"}
-          tone={d && (d.machines.outdated_agents ?? 0) > 0 ? "warning" : "default"}
-          sub={
-            d ? (
-              d.machines.latest_agent_version ? (
-                <>
-                  Latest <span className="font-data">{d.machines.latest_agent_version}</span>
-                  {d.domains.ssl_expiring_soon ? <span className="text-warning"> · {d.domains.ssl_expiring_soon} certs expiring</span> : null}
-                </>
-              ) : (
-                "Latest version unknown"
-              )
-            ) : undefined
-          }
-        />
-      </StatStrip>
+          </TooltipContent>
+        </Tooltip>
+      </div>
 
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-3 lg:grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">
         <FleetPanel className="lg:col-span-2" top={d?.top_machines_by_cpu} machines={machines.data} loading={loadingDash} />
 
         <AttentionPanel
@@ -215,10 +173,9 @@ export default function DashboardPage() {
           loading={domains.loading || machines.loading}
           onChanged={refreshAll}
         />
-      </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
         <SectionCard
+          fill
           className="lg:col-span-2"
           title="Job activity"
           icon={Activity}
@@ -311,5 +268,51 @@ function MiniStat({
     </Link>
   ) : (
     <div className="bg-card px-3 py-2">{body}</div>
+  );
+}
+
+function Kpi({
+  label,
+  icon: Icon,
+  href,
+  value,
+  total,
+  sub,
+  tone,
+  loading,
+}: {
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  href: string;
+  value: number | null;
+  total?: number;
+  sub?: string;
+  tone?: "warning" | "destructive";
+  loading?: boolean;
+}) {
+  return (
+    <Link href={href} className="group flex min-w-0 flex-col gap-1 bg-card px-3 py-2 transition-colors hover:bg-surface-2/60">
+      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <Icon className="size-3 shrink-0" />
+        <span className="truncate">{label}</span>
+      </div>
+      {loading ? (
+        <Skeleton className="h-5 w-16" />
+      ) : (
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span
+            className={cn(
+              "font-data text-lg leading-none font-semibold tabular-nums",
+              value && tone === "warning" && "text-warning",
+              value && tone === "destructive" && "text-destructive"
+            )}
+          >
+            {value === null ? "—" : formatNumber(value)}
+            {total !== undefined && <span className="text-xs font-normal text-subtle-foreground">/{formatNumber(total)}</span>}
+          </span>
+          {sub && <span className="truncate text-[11px] text-subtle-foreground">{sub}</span>}
+        </div>
+      )}
+    </Link>
   );
 }

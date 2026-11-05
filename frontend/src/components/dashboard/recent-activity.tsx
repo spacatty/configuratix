@@ -21,6 +21,7 @@ export function RecentActivity({ jobs, loading, className }: { jobs: JobListItem
   const now = useNow(!!jobs?.some((j) => j.status === "running"));
   return (
     <SectionCard
+      fill
       className={className}
       title="Recent activity"
       icon={History}

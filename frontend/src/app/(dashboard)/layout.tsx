@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSidebarPrefs } from "@/components/app/sidebar-resize";
 import { useRouter } from "next/navigation";
 
 import { api, type User } from "@/lib/api";
@@ -23,6 +24,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
+  const sidebarPrefs = useSidebarPrefs();
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -57,7 +59,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <JobTrackerProvider>
           <BreadcrumbLabelProvider>
             <CommandPaletteProvider role={user?.role} onLogout={logout}>
-              <SidebarProvider>
+              <SidebarProvider {...sidebarPrefs}>
                 <AppSidebar user={user} onLogout={logout} />
                 <SidebarInset className="isolate min-w-0 bg-transparent">
                   <AppBackdrop />

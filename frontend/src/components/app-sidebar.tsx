@@ -19,7 +19,6 @@ import {
   SidebarMenuSub,
   SidebarMenuSubItem,
   SidebarMenuSubButton,
-  SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
 import {
@@ -43,6 +42,7 @@ import { Logo, LogoMark } from "@/components/logo";
 import { StatusDot, statusToneText, type StatusTone } from "@/components/app/status";
 import { useCommandPalette, useQuickActions } from "@/components/app/command-palette";
 import { JobsIndicator } from "@/components/app/jobs";
+import { SidebarResizeRail, usePersistedGroupOpen } from "@/components/app/sidebar-resize";
 import { isNavItemActive, sectionsForPlacement, type NavItem } from "@/components/app/nav";
 import { cn } from "@/lib/utils";
 
@@ -273,7 +273,7 @@ export function AppSidebar({ user, onLogout }: AppSidebarProps) {
         </div>
         <JobsIndicator side={isMobile ? "top" : "right"} align="end" iconOnly className="h-8 shrink-0 px-2 text-muted-foreground" />
       </SidebarFooter>
-      <SidebarRail />
+      <SidebarResizeRail />
     </Sidebar>
   );
 }
@@ -395,7 +395,7 @@ function NavGroupItem({
 }) {
   const anyActive = isNavItemActive(item, pathname);
   const childActive = item.children!.some((c) => isNavItemActive(c, pathname));
-  const [open, setOpen] = React.useState(anyActive);
+  const [open, setOpen] = usePersistedGroupOpen(item.href, anyActive);
   const [wasActive, setWasActive] = React.useState(anyActive);
   if (anyActive !== wasActive) {
     setWasActive(anyActive);
@@ -491,7 +491,7 @@ function ProjectsItem({
 }) {
   const active = isNavItemActive(item, pathname);
   const onProject = active && pathname !== "/projects";
-  const [open, setOpen] = React.useState(onProject);
+  const [open, setOpen] = usePersistedGroupOpen(item.href, onProject);
   const [wasOnProject, setWasOnProject] = React.useState(onProject);
   if (onProject !== wasOnProject) {
     setWasOnProject(onProject);
