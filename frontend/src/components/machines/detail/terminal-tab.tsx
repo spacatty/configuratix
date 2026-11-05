@@ -1,22 +1,16 @@
 "use client";
 
 import * as React from "react";
-import dynamic from "next/dynamic";
 import { toast } from "sonner";
 import { Copy, Eraser, Maximize2, Minimize2, PlugZap, TerminalSquare } from "lucide-react";
 import { api } from "@/lib/api";
-import { copyToClipboard } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { StatusDot, type StatusTone } from "@/components/app";
-import type { TerminalAgentStatus, TerminalConnectionStatus } from "@/components/terminal";
-
-const WebSocketTerminal = dynamic(() => import("@/components/terminal").then((m) => m.WebSocketTerminal), {
-  ssr: false,
-  loading: () => <div className="skeleton-shimmer h-full w-full rounded-lg bg-background" />,
-});
+// xterm touches `window` at import time: this module must be loaded with next/dynamic({ ssr: false }).
+import { WebSocketTerminal, type TerminalAgentStatus, type TerminalConnectionStatus, type WebSocketTerminalHandle } from "@/components/terminal";
 
 function describe(status: TerminalConnectionStatus | null, agent: TerminalAgentStatus): { label: string; detail?: string; tone: StatusTone; pulse: boolean } {
   switch (status) {
@@ -42,8 +36,13 @@ export function TerminalTab({ machineId, machineName, active }: { machineId: str
   const [status, setStatus] = React.useState<TerminalConnectionStatus | null>(null);
   const [agent, setAgent] = React.useState<TerminalAgentStatus>("unknown");
   const [fullscreen, setFullscreen] = React.useState(false);
-  const hostRef = React.useRef<HTMLDivElement>(null);
+  const termRef = React.useRef<WebSocketTerminalHandle>(null);
   const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") || "" : "";
+
+  React.useEffect(() => {
+    const t = setTimeout(() => termRef.current?.focus(), 60);
+    return () => clearTimeout(t);
+  }, [fullscreen, active]);
 
   React.useEffect(() => {
     if (!fullscreen) return;
@@ -58,24 +57,12 @@ export function TerminalTab({ machineId, machineName, active }: { machineId: str
     };
   }, [fullscreen]);
 
-  const textarea = () => hostRef.current?.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea") ?? null;
+  const clear = () => termRef.current?.clear();
 
-  /** Sends Ctrl+L to the shell (clear screen) through xterm's own key handling. */
-  const clear = () => {
-    const ta = textarea();
-    if (!ta) return;
-    ta.focus();
-    ta.dispatchEvent(new KeyboardEvent("keydown", { key: "l", code: "KeyL", keyCode: 76, ctrlKey: true, bubbles: true, cancelable: true }));
-  };
-
-  const copyScreen = async () => {
-    const rows = hostRef.current?.querySelector<HTMLElement>(".xterm-rows");
-    const text = rows?.innerText?.replace(/ /g, " ").replace(/[ \t]+$/gm, "").trim();
-    if (!text) {
-      toast.info("Nothing to copy", { description: "Select text in the terminal and press Ctrl+Shift+C instead." });
-      return;
-    }
-    if (await copyToClipboard(text)) toast.success("Screen copied");
+  const copy = async () => {
+    const text = (await termRef.current?.copySelection()) ?? "";
+    if (text) toast.success("Copied", { description: `${text.split(String.fromCharCode(10)).length} lines` });
+    else toast.info("Nothing to copy");
   };
 
   const view = describe(status, agent);
@@ -98,37 +85,35 @@ export function TerminalTab({ machineId, machineName, active }: { machineId: str
         <div className="ml-auto flex items-center gap-0.5">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" onClick={clear} disabled={status !== "connected"} aria-label="Clear screen">
+              <Button variant="ghost" size="icon-sm" onClick={clear} disabled={!status} aria-label="Clear">
                 <Eraser />
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              Clear screen <Kbd>Ctrl</Kbd>+<Kbd>L</Kbd>
+              Clear scrollback (shell: <Kbd>Ctrl</Kbd>+<Kbd>L</Kbd>)
             </TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" onClick={copyScreen} disabled={!status} aria-label="Copy screen">
+              <Button variant="ghost" size="icon-sm" onClick={copy} disabled={!status} aria-label="Copy">
                 <Copy />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Copy visible screen</TooltipContent>
+            <TooltipContent>Copy selection (or whole buffer)</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon-sm"
-                onClick={() => {
-                  setStatus("connecting");
-                  setSession((s) => s + 1);
-                }}
-                aria-label="New session"
+                onClick={() => termRef.current?.reconnect()}
+                onDoubleClick={() => setSession((s) => s + 1)}
+                aria-label="Reconnect"
               >
                 <PlugZap />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Reconnect (new session)</TooltipContent>
+            <TooltipContent>Reconnect (double-click for a fresh terminal)</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -140,9 +125,10 @@ export function TerminalTab({ machineId, machineName, active }: { machineId: str
           </Tooltip>
         </div>
       </div>
-      <div ref={hostRef} className="min-h-0 flex-1 bg-background p-1.5 [&>div]:h-full">
+      <div className="min-h-0 flex-1 bg-background p-1.5 [&>div]:h-full">
         <WebSocketTerminal
           key={session}
+          ref={termRef}
           machineId={machineId}
           apiUrl={api.getApiUrl()}
           token={token}

@@ -22,7 +22,7 @@ import {
   Undo2,
   WrapText,
 } from "lucide-react";
-import { api, type Job } from "@/lib/api";
+import { api, type Job, type NginxExpectedFile } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/format";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -76,6 +76,7 @@ export function EditorPane({
   const [diffAgainst, setDiffAgainst] = React.useState<string>("disk");
   const [diffText, setDiffText] = React.useState<string | null>(null);
   const [diffLoading, setDiffLoading] = React.useState(false);
+  const [expected, setExpected] = React.useState<NginxExpectedFile | null>(null);
   const [wrap, setWrap] = React.useState(false);
   const [saving, setSaving] = React.useState<{ jobId: string | null } | null>(null);
   const [outcome, setOutcome] = React.useState<Outcome | null>(null);
@@ -92,6 +93,7 @@ export function EditorPane({
     setMode("edit");
     setDiffAgainst("disk");
     setDiffText(null);
+    setExpected(null);
     if (!file || file.state === "missing") {
       setContent("");
       setOriginal("");
@@ -122,6 +124,24 @@ export function EditorPane({
     }
     let alive = true;
     setDiffLoading(true);
+    if (diffAgainst === "expected") {
+      api
+        .getMachineNginxExpected(machineId, path ?? "")
+        .then((e) => {
+          if (!alive) return;
+          setExpected(e);
+          setDiffText(e.content);
+        })
+        .catch((e) => {
+          if (!alive) return;
+          toast.error("Couldn't render the expected config", { description: errorMessage(e) });
+          setDiffAgainst("disk");
+        })
+        .finally(() => alive && setDiffLoading(false));
+      return () => {
+        alive = false;
+      };
+    }
     readConfigFile(machineId, diffAgainst)
       .then((c) => alive && setDiffText(c))
       .catch((e) => {
@@ -133,7 +153,7 @@ export function EditorPane({
     return () => {
       alive = false;
     };
-  }, [mode, diffAgainst, machineId]);
+  }, [mode, diffAgainst, machineId, path]);
 
   const isNginx = !!path?.startsWith("/etc/nginx/");
   const isPhp = !!path?.startsWith("/etc/php/");
@@ -245,6 +265,41 @@ export function EditorPane({
     if (ok) void apply(target, content, target.split("/").pop() ?? target);
   };
 
+  const canExpect = !!file && !!file.managed && file.state === "active" && isNginx;
+
+  const showExpectedDiff = () => {
+    setMode("diff");
+    setDiffAgainst("expected");
+  };
+
+  const restoreExpected = async () => {
+    if (!file || !canExpect) return;
+    let exp = expected;
+    try {
+      if (!exp) {
+        exp = await api.getMachineNginxExpected(machineId, file.path);
+        setExpected(exp);
+      }
+    } catch (e) {
+      toast.error("Couldn't render the expected config", { description: errorMessage(e) });
+      return;
+    }
+    const ok = await confirm({
+      title: `Restore ${file.name} to the expected config?`,
+      description: (
+        <>
+          Replaces the file on the machine with what Configuratix generates{file.domainFqdn ? <> for <span className="font-data text-foreground">{file.domainFqdn}</span></> : null}. Manual changes on the machine{dirty ? " and your unsaved edits" : ""} are discarded.
+        </>
+      ),
+      details: steps(file.path),
+      confirmText: "Restore expected",
+      icon: History,
+    });
+    if (!ok || !exp) return;
+    setContent(exp.content);
+    void apply(file.path, exp.content, file.name);
+  };
+
   const saveRef = React.useRef(save);
   React.useEffect(() => {
     saveRef.current = save;
@@ -267,7 +322,12 @@ export function EditorPane({
     );
   }
 
-  const backupOptions = [{ id: "disk", label: dirty ? "Saved on machine (vs. your edits)" : "Saved on machine", path: "" }, ...backups.map((b) => ({ id: b.path, label: b.name, path: b.path, mtime: b.mtime }))];
+  const backupOptions = [
+    { id: "disk", label: dirty ? "Saved on machine (vs. your edits)" : "Saved on machine", path: "" },
+    ...(canExpect ? [{ id: "expected", label: "Expected (Configuratix render)", path: "" }] : []),
+    ...backups.map((b) => ({ id: b.path, label: b.name, path: b.path, mtime: b.mtime })),
+  ];
+  const vsExpected = mode === "diff" && diffAgainst === "expected";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -305,7 +365,7 @@ export function EditorPane({
                 <FileCode2 />
                 {readOnly ? "View" : "Edit"}
               </ToggleGroupItem>
-              <ToggleGroupItem value="diff" aria-label="Diff" disabled={!dirty && backups.length === 0}>
+              <ToggleGroupItem value="diff" aria-label="Diff" disabled={!dirty && backups.length === 0 && !canExpect}>
                 <Columns2 />
                 Diff
               </ToggleGroupItem>
@@ -404,6 +464,18 @@ export function EditorPane({
             <AlertDescription className="text-xs">
               This file differs from what Configuratix generates{file.domainFqdn ? ` for ${file.domainFqdn}` : ""}. Re-applying overwrites manual changes.
             </AlertDescription>
+            {canExpect && (
+              <div className="col-start-2 mt-1.5 flex flex-wrap gap-1.5">
+                <Button size="xs" variant="outline" onClick={showExpectedDiff} disabled={vsExpected}>
+                  <Columns2 />
+                  Diff vs expected
+                </Button>
+                <Button size="xs" variant="outline" onClick={restoreExpected} disabled={!!saving || loading}>
+                  <History />
+                  Restore expected
+                </Button>
+              </div>
+            )}
           </Alert>
         )}
         {file.managed && !file.drift && file.state === "active" && !outcome && (
@@ -464,8 +536,14 @@ export function EditorPane({
                 )}
                 modal={false}
               />
-              <span>→ {dirty ? "your edits" : "current"}</span>
+              <span>{vsExpected ? "← on machine" : `→ ${dirty ? "your edits" : "current"}`}</span>
               {diffLoading && <Spinner className="ml-auto" />}
+              {vsExpected && expected && (
+                <Button size="xs" variant="outline" className={cn(!diffLoading && "ml-auto")} onClick={restoreExpected} disabled={!!saving}>
+                  <History />
+                  Restore expected
+                </Button>
+              )}
             </div>
             <div className="min-h-0 flex-1">
               <MonacoDiff
@@ -473,8 +551,8 @@ export function EditorPane({
                 language={languageForPath(file.path)}
                 theme={CFX_THEME}
                 beforeMount={setupMonaco}
-                original={diffAgainst === "disk" ? original : (diffText ?? "")}
-                modified={content}
+                original={vsExpected ? original : diffAgainst === "disk" ? original : (diffText ?? "")}
+                modified={vsExpected ? (diffText ?? "") : content}
                 options={{ ...EDITOR_OPTIONS, readOnly: true, renderSideBySide: true, wordWrap: wrap ? "on" : "off", originalEditable: false }}
               />
             </div>

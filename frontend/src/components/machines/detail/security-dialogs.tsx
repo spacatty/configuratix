@@ -17,12 +17,12 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react").then((m) => m.
   loading: () => <div className="skeleton-shimmer h-full w-full" />,
 });
 
-/** Validates a single port or a range "8000:8100". */
+/** Validates a single port or a range "8000:8100" / "8000-8100". */
 export function validatePortSpec(v: string, { allowRange = true, min = 1 } = {}): string | null {
   const s = v.trim();
   if (!s) return "Port is required";
-  const parts = s.split(":");
-  if (parts.length > 2 || (!allowRange && parts.length > 1)) return allowRange ? "Use a port (8080) or range (8000:8100)" : "Use a single port";
+  const parts = s.split(/[:-]/);
+  if (parts.length > 2 || (!allowRange && parts.length > 1)) return allowRange ? "Use a port (8080) or a range (8000:8100)" : "Use a single port";
   const nums = parts.map((p) => (/^\d+$/.test(p) ? Number(p) : NaN));
   if (nums.some((n) => Number.isNaN(n))) return "Ports are numbers";
   if (nums.some((n) => n < min || n > 65535)) return `Ports must be between ${min} and 65535`;
@@ -275,9 +275,10 @@ export function AddRuleDialog({
       setProtocol("tcp");
     }
   }, [open]);
-  const dup = existing.some((r) => r.port === port.trim() && (protocol === "both" || r.protocol.toLowerCase() === protocol));
-  const err = port ? (validatePortSpec(port, { allowRange: false }) ?? (dup ? `${port}/${protocol} is already allowed` : null)) : null;
-  const { busy, run } = useSubmit(() => onSubmit(port.trim(), protocol), () => onOpenChange(false));
+  const norm = port.trim().replace("-", ":");
+  const dup = existing.some((r) => r.port === norm && (protocol === "both" || r.protocol.toLowerCase() === protocol));
+  const err = port ? (validatePortSpec(port) ?? (dup ? `${port}/${protocol} is already allowed` : null)) : null;
+  const { busy, run } = useSubmit(() => onSubmit(norm, protocol), () => onOpenChange(false));
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -288,15 +289,15 @@ export function AddRuleDialog({
         <div className="space-y-4">
           <div className="grid grid-cols-[1fr_auto] gap-3">
             <div className="space-y-2">
-              <Label htmlFor="ufw-port">Port</Label>
+              <Label htmlFor="ufw-port">Port or range</Label>
               <Input
                 id="ufw-port"
                 autoFocus
                 className="font-data"
                 value={port}
-                onChange={(e) => setPort(e.target.value.replace(/[^\d]/g, ""))}
+                onChange={(e) => setPort(e.target.value.replace(/[^\d:-]/g, ""))}
                 onKeyDown={(e) => e.key === "Enter" && port && !err && run()}
-                placeholder="8080"
+                placeholder="8080 or 8000:8100"
                 aria-invalid={!!err}
               />
             </div>

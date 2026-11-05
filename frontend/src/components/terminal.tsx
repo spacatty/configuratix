@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
+import { copyToClipboard } from "@/lib/clipboard";
 
 export type TerminalConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
@@ -21,6 +22,17 @@ interface WebSocketTerminalProps {
   /** Hide the built-in status bar (status is still reported via onStatusChange). */
   hideStatusBar?: boolean;
   className?: string;
+}
+
+/** Imperative controls (via ref) for toolbars wrapping the terminal. */
+export interface WebSocketTerminalHandle {
+  /** Clears the local screen and scrollback (does not send anything to the shell). */
+  clear: () => void;
+  /** Copies the current selection, or the whole buffer when nothing is selected. Resolves to the copied text ("" if nothing/failed). */
+  copySelection: () => Promise<string>;
+  focus: () => void;
+  /** Drops the socket and reconnects (resets the backoff counter). */
+  reconnect: () => void;
 }
 
 const PING_INTERVAL_MS = 25_000;
@@ -42,15 +54,10 @@ function backoffDelay(attempt: number) {
   return Math.round(exp / 2 + Math.random() * (exp / 2)); // jitter
 }
 
-export function WebSocketTerminal({
-  machineId,
-  apiUrl,
-  token,
-  isActive = true,
-  onStatusChange,
-  hideStatusBar = false,
-  className,
-}: WebSocketTerminalProps) {
+export const WebSocketTerminal = forwardRef<WebSocketTerminalHandle, WebSocketTerminalProps>(function WebSocketTerminal(
+  { machineId, apiUrl, token, isActive = true, onStatusChange, hideStatusBar = false, className },
+  ref,
+) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -63,8 +70,12 @@ export function WebSocketTerminal({
   const sessionIdRef = useRef<string | null>(null);
   const agentStatusRef = useRef<TerminalAgentStatus>("unknown");
   const statusRef = useRef<TerminalConnectionStatus>("connecting");
+  // connect() and scheduleReconnect() call each other; the cycle is broken through this ref.
+  const scheduleReconnectRef = useRef<() => void>(() => {});
   const onStatusChangeRef = useRef(onStatusChange);
-  onStatusChangeRef.current = onStatusChange;
+  useEffect(() => {
+    onStatusChangeRef.current = onStatusChange;
+  }, [onStatusChange]);
 
   const [status, setStatus] = useState<TerminalConnectionStatus>("connecting");
   const [agentStatus, setAgentStatus] = useState<TerminalAgentStatus>("unknown");
@@ -284,14 +295,41 @@ export function WebSocketTerminal({
   }, [connect, updateStatus]);
 
   // connect() needs scheduleReconnect and vice versa; break the cycle via a ref.
-  const scheduleReconnectRef = useRef(scheduleReconnect);
-  scheduleReconnectRef.current = scheduleReconnect;
+  useEffect(() => {
+    scheduleReconnectRef.current = scheduleReconnect;
+  }, [scheduleReconnect]);
 
   const manualReconnect = useCallback(() => {
     attemptRef.current = 0;
     setAttempt(0);
     connect();
   }, [connect]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      clear: () => {
+        termRef.current?.clear();
+        termRef.current?.focus();
+      },
+      copySelection: async () => {
+        const term = termRef.current;
+        if (!term) return "";
+        let text = term.hasSelection() ? term.getSelection() : "";
+        if (!text) {
+          const buf = term.buffer.active;
+          const lines: string[] = [];
+          for (let i = 0; i < buf.length; i++) lines.push(buf.getLine(i)?.translateToString(true) ?? "");
+          text = lines.join(String.fromCharCode(10)).trimEnd();
+        }
+        if (text && !(await copyToClipboard(text))) return "";
+        return text;
+      },
+      focus: () => termRef.current?.focus(),
+      reconnect: manualReconnect,
+    }),
+    [manualReconnect],
+  );
 
   // Activate lazily: the first time isActive is true we create xterm + socket
   // and keep them for the component's lifetime (survives tab switches).
@@ -439,7 +477,7 @@ export function WebSocketTerminal({
       )}
     </div>
   );
-}
+});
 
 function describeStatus(
   status: TerminalConnectionStatus,

@@ -17,7 +17,6 @@ import { MachineHero } from "@/components/machines/detail/machine-hero";
 import { RenameDialog } from "@/components/machines/detail/rename-dialog";
 import { OverviewTab } from "@/components/machines/detail/overview-tab";
 import { SecurityTab } from "@/components/machines/detail/security-tab";
-import { TerminalTab } from "@/components/machines/detail/terminal-tab";
 import { LogsTab } from "@/components/machines/detail/logs-tab";
 import { JobsTab } from "@/components/machines/detail/jobs-tab";
 import { ToolsTab } from "@/components/machines/detail/tools-tab";
@@ -26,6 +25,10 @@ import { isAgentUpdating, liveness, type FleetMachine } from "@/components/machi
 const NginxTab = dynamic(() => import("@/components/machines/nginx/nginx-tab").then((m) => m.NginxTab), {
   ssr: false,
   loading: () => <CardSkeleton lines={10} />,
+});
+const TerminalTab = dynamic(() => import("@/components/machines/detail/terminal-tab").then((m) => m.TerminalTab), {
+  ssr: false,
+  loading: () => <div className="skeleton-shimmer h-[480px] rounded-lg border border-border" />,
 });
 const PHPRuntimeTab = dynamic(() => import("@/components/php-runtime-tab").then((m) => m.PHPRuntimeTab), {
   ssr: false,
