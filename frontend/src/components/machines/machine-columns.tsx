@@ -148,7 +148,20 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
                 {name}
               </Link>
               <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-subtle-foreground">
-                {ip && <span className="font-data shrink-0">{ip}</span>}
+                {ip && (
+                  <button
+                    type="button"
+                    title="Copy IP"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (await copyToClipboard(ip)) toast.success("IP copied", { description: ip });
+                    }}
+                    className="group/ip font-data inline-flex shrink-0 items-center gap-1 rounded-sm transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 outline-none"
+                  >
+                    {ip}
+                    <Copy className="size-3 -translate-x-1 opacity-0 transition-all duration-150 group-hover/ip:translate-x-0 group-hover/ip:opacity-100" />
+                  </button>
+                )}
                 {m.hostname && m.hostname !== name && (
                   <>
                     {ip && <span aria-hidden>·</span>}
