@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { ChevronRight, ChevronsUpDown, LogOut, Settings, UserCircle, FolderKanban } from "lucide-react";
+
 import {
   Sidebar,
   SidebarContent,
@@ -17,394 +19,273 @@ import {
   SidebarMenuSub,
   SidebarMenuSubItem,
   SidebarMenuSubButton,
+  SidebarRail,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
-import { api, User, Project } from "@/lib/api";
-import { Logo } from "@/components/logo";
-import { 
-  LayoutDashboard, 
-  Server, 
-  Globe, 
-  Terminal, 
-  FileCode, 
-  FileArchive,
-  Settings,
-  FolderKanban,
-  Users,
-  Shield,
-  ShieldCheck,
-  Ban,
-  Bot,
-  UserCircle,
-  LogOut,
-  ChevronUp,
-  ChevronRight,
-  KeyRound,
-  CalendarClock
-} from "lucide-react";
+import { api, type User, type Project } from "@/lib/api";
+import { Logo, LogoMark } from "@/components/logo";
+import { isNavItemActive, visibleSections, type NavItem } from "@/components/app/nav";
+import { cn } from "@/lib/utils";
 
 interface AppSidebarProps {
   user: User | null;
+  onLogout?: () => void;
 }
 
-const getRoleBadge = (role: string) => {
-  switch (role) {
-    case "superadmin":
-      return <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30 text-[10px]">Super Admin</Badge>;
-    case "admin":
-      return <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30 text-[10px]">Admin</Badge>;
-    default:
-      return <Badge variant="secondary" className="text-[10px]">User</Badge>;
-  }
-};
+function roleLabel(role?: string) {
+  if (role === "superadmin") return "Super admin";
+  if (role === "admin") return "Admin";
+  return "Member";
+}
 
-export function AppSidebar({ user }: AppSidebarProps) {
-  const pathname = usePathname();
+function initials(email: string, name?: string | null) {
+  if (name) return name.split(/\s+/).map((n) => n[0]).join("").slice(0, 2).toUpperCase();
+  return email.slice(0, 2).toUpperCase();
+}
+
+export function AppSidebar({ user, onLogout }: AppSidebarProps) {
+  const pathname = usePathname() ?? "/";
   const router = useRouter();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectsOpen, setProjectsOpen] = useState(true);
-  const [machinesOpen, setMachinesOpen] = useState(true);
+  const { state, isMobile, setOpenMobile } = useSidebar();
+  const collapsed = state === "collapsed" && !isMobile;
+  const [projects, setProjects] = React.useState<Project[]>([]);
 
-  useEffect(() => {
-    if (user) {
-      api.listProjects().then(setProjects).catch(() => {});
-    }
+  React.useEffect(() => {
+    if (user) api.listProjects().then(setProjects).catch(() => {});
   }, [user]);
 
+  // Close the mobile drawer after navigation
+  React.useEffect(() => {
+    if (isMobile) setOpenMobile(false);
+  }, [pathname, isMobile, setOpenMobile]);
+
   const handleLogout = () => {
+    if (onLogout) return onLogout();
     api.logout();
     router.push("/login");
   };
 
-  const getInitials = (email: string, name?: string) => {
-    if (name) {
-      return name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
-    }
-    return email.slice(0, 2).toUpperCase();
-  };
-
-  const isActive = (url: string) => pathname === url || pathname.startsWith(url + "/");
+  const sections = visibleSections(user?.role);
 
   return (
-    <Sidebar className="border-r border-sidebar-border">
-      <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
-        <Logo size="md" />
+    <Sidebar collapsible="icon" className="border-r border-sidebar-border">
+      <SidebarHeader className="h-12 justify-center border-b border-sidebar-border px-3 group-data-[collapsible=icon]:px-2">
+        <Link href="/dashboard" className="flex items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
+          {collapsed ? <LogoMark size="sm" /> : <Logo size="sm" />}
+        </Link>
       </SidebarHeader>
-      <SidebarContent>
-        {/* Overview */}
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Overview
-          </SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/dashboard")}>
-                  <a href="/dashboard" className="flex items-center gap-3">
-                    <LayoutDashboard className="h-4 w-4" />
-                    <span>Dashboard</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/tracker")}>
-                  <a href="/tracker" className="flex items-center gap-3">
-                    <CalendarClock className="h-4 w-4" />
-                    <span>Tracker</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
 
-        {/* Workspace */}
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Workspace
-          </SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {/* Machines - Collapsible with Enrollment Tokens */}
-              <Collapsible open={machinesOpen} onOpenChange={setMachinesOpen} defaultOpen>
-                <SidebarMenuItem>
-                  <CollapsibleTrigger asChild>
-                    <SidebarMenuButton isActive={isActive("/machines")}>
-                      <Server className="h-4 w-4" />
-                      <span className="flex-1">Machines</span>
-                      <ChevronRight className={`h-4 w-4 transition-transform ${machinesOpen ? "rotate-90" : ""}`} />
-                    </SidebarMenuButton>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <SidebarMenuSub>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild isActive={pathname === "/machines"}>
-                          <Link href="/machines">All Machines</Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild isActive={pathname === "/machines/tokens"}>
-                          <Link href="/machines/tokens" className="flex items-center gap-2">
-                            <KeyRound className="h-3 w-3" />
-                            Enrollment Tokens
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                    </SidebarMenuSub>
-                  </CollapsibleContent>
-                </SidebarMenuItem>
-              </Collapsible>
-
-              {/* Projects - Collapsible with subitems */}
-              <Collapsible open={projectsOpen} onOpenChange={setProjectsOpen}>
-                <SidebarMenuItem>
-                  <CollapsibleTrigger asChild>
-                    <SidebarMenuButton isActive={isActive("/projects")}>
-                      <FolderKanban className="h-4 w-4" />
-                      <span className="flex-1">Projects</span>
-                      <ChevronRight className={`h-4 w-4 transition-transform ${projectsOpen ? "rotate-90" : ""}`} />
-                    </SidebarMenuButton>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <SidebarMenuSub>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton asChild isActive={pathname === "/projects"}>
-                          <Link href="/projects">All Projects</Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                      {projects.slice(0, 5).map((project) => (
-                        <SidebarMenuSubItem key={project.id}>
-                          <SidebarMenuSubButton asChild isActive={pathname === `/projects/${project.id}`}>
-                            <Link href={`/projects/${project.id}`} className="truncate">
-                              {project.name}
-                            </Link>
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                      ))}
-                      {projects.length > 5 && (
-                        <SidebarMenuSubItem>
-                          <SidebarMenuSubButton asChild>
-                            <Link href="/projects" className="text-muted-foreground">
-                              +{projects.length - 5} more...
-                            </Link>
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                      )}
-                    </SidebarMenuSub>
-                  </CollapsibleContent>
-                </SidebarMenuItem>
-              </Collapsible>
-
-              {/* Domains */}
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/domains") && !pathname.includes("/dns")}>
-                  <a href="/domains" className="flex items-center gap-3">
-                    <Globe className="h-4 w-4" />
-                    <span>Domains</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-
-              {/* DNS Management - Last in Workspace */}
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/domains/dns")}>
-                  <Link href="/domains/dns" className="flex items-center gap-3">
-                    <Settings className="h-4 w-4" />
-                    <span>DNS Management</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {/* Security */}
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Security
-          </SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={pathname === "/security"}>
-                  <a href="/security" className="flex items-center gap-3">
-                    <Shield className="h-4 w-4" />
-                    <span>Overview</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/security/bans")}>
-                  <a href="/security/bans" className="flex items-center gap-3">
-                    <Ban className="h-4 w-4" />
-                    <span>IP Blacklist</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/security/whitelist")}>
-                  <a href="/security/whitelist" className="flex items-center gap-3">
-                    <ShieldCheck className="h-4 w-4" />
-                    <span>Whitelist</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/security/ua-patterns")}>
-                  <a href="/security/ua-patterns" className="flex items-center gap-3">
-                    <Bot className="h-4 w-4" />
-                    <span>UA Patterns</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {/* Tools */}
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Tools
-          </SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/static")}>
-                  <a href="/static" className="flex items-center gap-3">
-                    <FileArchive className="h-4 w-4" />
-                    <span>Static</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/configs/nginx")}>
-                  <a href="/configs/nginx" className="flex items-center gap-3">
-                    <FileCode className="h-4 w-4" />
-                    <span>Nginx Configs</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/commands")}>
-                  <a href="/commands" className="flex items-center gap-3">
-                    <Terminal className="h-4 w-4" />
-                    <span>Commands</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {/* Account */}
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Account
-          </SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/profile")}>
-                  <a href="/profile" className="flex items-center gap-3">
-                    <UserCircle className="h-4 w-4" />
-                    <span>Profile</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isActive("/settings")}>
-                  <a href="/settings" className="flex items-center gap-3">
-                    <Settings className="h-4 w-4" />
-                    <span>Settings</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {/* Admin */}
-        {(user?.role === "superadmin" || user?.role === "admin") && (
-          <SidebarGroup>
-            <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              Admin
+      <SidebarContent className="gap-0 py-1">
+        {sections.map((section) => (
+          <SidebarGroup key={section.title} className="py-1.5">
+            <SidebarGroupLabel className="h-6 px-2 text-[11px] font-medium text-subtle-foreground">
+              {section.title}
             </SidebarGroupLabel>
             <SidebarGroupContent>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={isActive("/admin/users")}>
-                    <a href="/admin/users" className="flex items-center gap-3">
-                      <Users className="h-4 w-4" />
-                      <span>Users</span>
-                    </a>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                {user?.role === "superadmin" && (
-                  <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={isActive("/admin/overview")}>
-                      <a href="/admin/overview" className="flex items-center gap-3">
-                        <Shield className="h-4 w-4" />
-                        <span>All Data</span>
-                      </a>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
+              <SidebarMenu className="gap-px">
+                {section.items.map((item) =>
+                  item.children?.length ? (
+                    <NavGroupItem key={item.href} item={item} pathname={pathname} collapsed={collapsed} />
+                  ) : item.href === "/projects" ? (
+                    <ProjectsItem key={item.href} item={item} pathname={pathname} projects={projects} collapsed={collapsed} />
+                  ) : (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton asChild isActive={isNavItemActive(item, pathname)} tooltip={item.title}>
+                        <Link href={item.href}>
+                          <item.icon />
+                          <span>{item.title}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )
                 )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-        )}
+        ))}
       </SidebarContent>
-      <SidebarFooter className="border-t border-sidebar-border p-4">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-3 w-full rounded-md p-2 hover:bg-sidebar-accent transition-colors text-left">
-              <Avatar className="h-8 w-8">
-                <AvatarFallback className="bg-primary/10 text-primary text-xs">
-                  {user ? getInitials(user.email, user.name || undefined) : "??"}
-                </AvatarFallback>
-              </Avatar>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">
-                  {user?.name || user?.email || "Unknown"}
-                </p>
-                <div className="mt-0.5">
-                  {user && getRoleBadge(user.role)}
-                </div>
-              </div>
-              <ChevronUp className="h-4 w-4 text-muted-foreground" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuItem disabled className="flex flex-col items-start">
-              <span className="font-medium">{user?.name || user?.email}</span>
-              <span className="text-xs text-muted-foreground">{user?.email}</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => router.push("/profile")}>
-              <UserCircle className="h-4 w-4 mr-2" />
-              Profile & Security
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
-              <LogOut className="h-4 w-4 mr-2" />
-              Sign out
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+
+      <SidebarFooter className="border-t border-sidebar-border p-2">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent">
+                  <Avatar className="size-7 rounded-md">
+                    <AvatarFallback className="rounded-md border border-primary/25 bg-primary/12 text-[11px] font-semibold text-[oklch(0.8_0.12_24)]">
+                      {user ? initials(user.email, user.name) : "··"}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="grid min-w-0 flex-1 text-left leading-tight">
+                    <span className="truncate text-[13px] font-medium">{user?.name || user?.email || "Unknown"}</span>
+                    <span className="truncate text-[11px] text-muted-foreground">{roleLabel(user?.role)}</span>
+                  </div>
+                  <ChevronsUpDown className="ml-auto size-3.5 text-muted-foreground" />
+                </SidebarMenuButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side={isMobile ? "top" : "right"} align="end" sideOffset={8} className="w-60">
+                <DropdownMenuLabel className="flex items-center gap-2.5 py-2">
+                  <Avatar className="size-8 rounded-md">
+                    <AvatarFallback className="rounded-md bg-surface-2 text-xs">{user ? initials(user.email, user.name) : "··"}</AvatarFallback>
+                  </Avatar>
+                  <div className="grid min-w-0 leading-tight">
+                    <span className="truncate text-[13px] font-medium text-foreground">{user?.name || user?.email}</span>
+                    <span className="truncate text-[11px] font-normal text-muted-foreground">{user?.email}</span>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link href="/profile">
+                    <UserCircle /> Profile & security
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/settings">
+                    <Settings /> Settings
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" onSelect={handleLogout}>
+                  <LogOut /> Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarFooter>
+      <SidebarRail />
     </Sidebar>
+  );
+}
+
+/** Parent item with children: parent is active only when no child matches exactly-ish. */
+function NavGroupItem({ item, pathname, collapsed }: { item: NavItem; pathname: string; collapsed: boolean }) {
+  const anyActive = isNavItemActive(item, pathname);
+  const [open, setOpen] = React.useState(true);
+  const childActive = item.children!.some((c) => isNavItemActive(c, pathname));
+
+  if (collapsed) {
+    return (
+      <SidebarMenuItem>
+        <SidebarMenuButton asChild isActive={anyActive} tooltip={item.title}>
+          <Link href={item.href}>
+            <item.icon />
+            <span>{item.title}</span>
+          </Link>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    );
+  }
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} asChild>
+      <SidebarMenuItem>
+        <CollapsibleTrigger asChild>
+          {/* Parent only highlights when on a sub-route none of the children claim (e.g. /machines/:id) */}
+          <SidebarMenuButton isActive={anyActive && !childActive} tooltip={item.title}>
+            <item.icon />
+            <span className="flex-1">{item.title}</span>
+            <ChevronRight className={cn("size-3.5! text-subtle-foreground transition-transform duration-200", open && "rotate-90")} />
+          </SidebarMenuButton>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
+          <SidebarMenuSub className="mr-0 gap-px py-0.5">
+            {item.children!.map((c) => (
+              <SidebarMenuSubItem key={c.href}>
+                <SidebarMenuSubButton asChild isActive={isNavItemActive(c, pathname)}>
+                  <Link href={c.href}>
+                    <span>{c.title}</span>
+                  </Link>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+            ))}
+          </SidebarMenuSub>
+        </CollapsibleContent>
+      </SidebarMenuItem>
+    </Collapsible>
+  );
+}
+
+function ProjectsItem({
+  item,
+  pathname,
+  projects,
+  collapsed,
+}: {
+  item: NavItem;
+  pathname: string;
+  projects: Project[];
+  collapsed: boolean;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const active = isNavItemActive(item, pathname);
+  if (collapsed || projects.length === 0) {
+    return (
+      <SidebarMenuItem>
+        <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
+          <Link href={item.href}>
+            <FolderKanban />
+            <span>{item.title}</span>
+          </Link>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    );
+  }
+  const shown = projects.slice(0, 5);
+  return (
+    <Collapsible open={open || (active && pathname !== "/projects")} onOpenChange={setOpen} asChild>
+      <SidebarMenuItem>
+        <div className="flex items-center">
+          <SidebarMenuButton asChild isActive={pathname === "/projects"} tooltip={item.title} className="flex-1">
+            <Link href="/projects">
+              <FolderKanban />
+              <span className="flex-1">{item.title}</span>
+              <span className="font-data text-[11px] text-subtle-foreground">{projects.length}</span>
+            </Link>
+          </SidebarMenuButton>
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              aria-label="Toggle projects"
+              className="ml-0.5 flex size-7 shrink-0 items-center justify-center rounded-md text-subtle-foreground hover:bg-sidebar-accent hover:text-foreground"
+            >
+              <ChevronRight className={cn("size-3.5 transition-transform duration-200", (open || (active && pathname !== "/projects")) && "rotate-90")} />
+            </button>
+          </CollapsibleTrigger>
+        </div>
+        <CollapsibleContent className="overflow-hidden">
+          <SidebarMenuSub className="mr-0 gap-px py-0.5">
+            {shown.map((p) => (
+              <SidebarMenuSubItem key={p.id}>
+                <SidebarMenuSubButton asChild isActive={pathname === `/projects/${p.id}`}>
+                  <Link href={`/projects/${p.id}`}>
+                    <span>{p.name}</span>
+                  </Link>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+            ))}
+            {projects.length > shown.length && (
+              <SidebarMenuSubItem>
+                <SidebarMenuSubButton asChild>
+                  <Link href="/projects" className="text-subtle-foreground">
+                    <span>+{projects.length - shown.length} more</span>
+                  </Link>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+            )}
+          </SidebarMenuSub>
+        </CollapsibleContent>
+      </SidebarMenuItem>
+    </Collapsible>
   );
 }

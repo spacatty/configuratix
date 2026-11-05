@@ -4,26 +4,46 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+/**
+ * Table primitives. Density: header 36px, rows ~40px (cells py-2 px-3).
+ * Numbers: add `className="text-right font-data"` on both TableHead and TableCell.
+ * Pass `containerClassName` to control the scroll container (e.g. max-h + sticky header).
+ */
+function Table({
+  className,
+  containerClassName,
+  containerStyle,
+  ...props
+}: React.ComponentProps<"table"> & { containerClassName?: string; containerStyle?: React.CSSProperties }) {
   return (
     <div
       data-slot="table-container"
-      className="relative w-full overflow-x-auto"
+      className={cn("relative w-full overflow-auto", containerClassName)}
+      style={containerStyle}
     >
       <table
         data-slot="table"
-        className={cn("w-full caption-bottom text-sm", className)}
+        className={cn("w-full caption-bottom text-[13px] border-separate border-spacing-0", className)}
         {...props}
       />
     </div>
   )
 }
 
-function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
+function TableHeader({
+  className,
+  sticky = false,
+  ...props
+}: React.ComponentProps<"thead"> & { sticky?: boolean }) {
   return (
     <thead
       data-slot="table-header"
-      className={cn("[&_tr]:border-b", className)}
+      data-sticky={sticky || undefined}
+      className={cn(
+        "[&_th]:border-b [&_th]:border-border",
+        sticky && "sticky top-0 z-10 [&_th]:bg-card",
+        className
+      )}
       {...props}
     />
   )
@@ -33,7 +53,7 @@ function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
   return (
     <tbody
       data-slot="table-body"
-      className={cn("[&_tr:last-child]:border-0", className)}
+      className={cn("[&_tr:last-child_td]:border-0", className)}
       {...props}
     />
   )
@@ -44,7 +64,7 @@ function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
     <tfoot
       data-slot="table-footer"
       className={cn(
-        "bg-muted/50 border-t font-medium [&>tr]:last:border-b-0",
+        "bg-muted/40 font-medium [&_td]:border-t [&_td]:border-border",
         className
       )}
       {...props}
@@ -57,7 +77,7 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
     <tr
       data-slot="table-row"
       className={cn(
-        "hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors",
+        "group/row transition-colors [&>td]:border-b [&>td]:border-border/70 hover:bg-white/[0.025] data-[state=selected]:bg-primary/[0.07] data-[state=selected]:hover:bg-primary/10",
         className
       )}
       {...props}
@@ -70,7 +90,7 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
     <th
       data-slot="table-head"
       className={cn(
-        "text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        "text-muted-foreground h-9 px-3 text-left align-middle text-xs font-medium whitespace-nowrap first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 [&:has([role=checkbox])]:w-9 [&>[role=checkbox]]:translate-y-[2px]",
         className
       )}
       {...props}
@@ -83,7 +103,7 @@ function TableCell({ className, ...props }: React.ComponentProps<"td">) {
     <td
       data-slot="table-cell"
       className={cn(
-        "p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        "h-10 px-3 py-2 align-middle whitespace-nowrap first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
         className
       )}
       {...props}
