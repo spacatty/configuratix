@@ -181,7 +181,7 @@ export function buildDomainColumns({
       header: "Groups",
       enableSorting: false,
       meta: { label: "Groups" },
-      cell: ({ row }) => <GroupChips groups={groupsByDomain[row.original.id] ?? []} />,
+      cell: ({ row }) => <GroupChips groups={groupsByDomain[row.original.id] ?? []} onEdit={() => actions.groups(row.original)} />,
     },
     {
       accessorKey: "created_at",

@@ -52,7 +52,7 @@ function DomainsCell({ m }: { m: FleetMachine }) {
   if (!total) return <span className="text-xs text-subtle-foreground">—</span>;
   const summary = m.assigned_domains_summary ?? [];
   const body = (
-    <div className="flex items-center justify-end gap-2">
+    <div className="flex items-center gap-2">
       <div className="flex h-1.5 w-12 overflow-hidden rounded-full bg-white/[0.07]" aria-hidden>
         {healthy > 0 && <div className="h-full bg-success" style={{ width: `${(healthy / total) * 100}%` }} />}
         {unhealthy > 0 && <div className="h-full bg-destructive" style={{ width: `${(unhealthy / total) * 100}%` }} />}
@@ -133,7 +133,7 @@ function resourceColumns(): ColumnDef<FleetMachine>[] {
       id: "load",
       accessorFn: (m) => Math.max(cpuPct(m) ?? -1, memPct(m) ?? -1, diskPct(m) ?? -1),
       header: ({ column }) => <DataTableColumnHeader column={column} title="Load" />,
-      meta: { label: "Load (CPU / Mem / Disk)" },
+      meta: { label: "Load (CPU / Mem / Disk)", width: "fill" },
       sortDescFirst: true,
       cell: ({ row }) => {
         const items = [...resourceProps(row.original)];
@@ -149,7 +149,7 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       id: "name",
       accessorFn: (m) => machineDisplayName(m),
       header: ({ column }) => <DataTableColumnHeader column={column} title="Machine" />,
-      meta: { label: "Machine" },
+      meta: { label: "Machine", width: "fit" },
       enableHiding: false,
       cell: ({ row }) => {
         const m = row.original;
@@ -157,7 +157,7 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
         const name = machineDisplayName(m);
         const ip = machineIp(m);
         return (
-          <div className="flex min-w-[170px] items-center gap-2.5">
+          <div className="flex items-center gap-2.5 pr-6">
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="flex size-4 items-center justify-center">
@@ -221,16 +221,16 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       id: "groups",
       accessorFn: (m) => machineGroups(m, h.groupsByMachine).map((g) => g.name),
       header: "Groups",
-      meta: { label: "Groups" },
+      meta: { label: "Groups", width: "fit" },
       enableSorting: false,
-      cell: ({ row }) => <GroupChips groups={machineGroups(row.original, h.groupsByMachine)} />,
+      cell: ({ row }) => <GroupChips groups={machineGroups(row.original, h.groupsByMachine)} onEdit={() => h.onAssignGroups(row.original)} />,
     },
     ...resourceColumns(),
     {
       id: "domains",
       accessorFn: (m) => m.assigned_domains_count ?? 0,
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Domains" align="right" />,
-      meta: { label: "Domains", align: "right" },
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Domains" />,
+      meta: { label: "Domains", width: "fill" },
       sortDescFirst: true,
       cell: ({ row }) => <DomainsCell m={row.original} />,
     },
@@ -238,14 +238,14 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       id: "agent_version",
       accessorFn: (m) => m.agent_version ?? "",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Agent" />,
-      meta: { label: "Agent" },
+      meta: { label: "Agent", width: "fit" },
       cell: ({ row }) => <AgentCell m={row.original} latest={h.latestAgent} />,
     },
     {
       id: "last_seen",
       accessorFn: (m) => (m.last_seen ? new Date(m.last_seen).getTime() : 0),
       header: ({ column }) => <DataTableColumnHeader column={column} title="Last seen" align="right" />,
-      meta: { label: "Last seen", align: "right" },
+      meta: { label: "Last seen", align: "right", width: "fit" },
       sortDescFirst: true,
       cell: ({ row }) =>
         liveness(row.original) === "online" ? (
@@ -264,7 +264,7 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       header: "",
       enableHiding: false,
       enableSorting: false,
-      meta: { align: "right", className: "w-[72px]" },
+      meta: { align: "right", width: "fit" },
       cell: ({ row }) => (
         <div className="flex items-center justify-end gap-0.5">
           <Tooltip>

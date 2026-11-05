@@ -76,6 +76,11 @@ declare module "@tanstack/react-table" {
     className?: string;
     /** Extra classes on the <th>. */
     headerClassName?: string;
+    /**
+     * Column sizing: "fit" shrinks to the widest cell (no wrapping); "fill" columns share
+     * the remaining width evenly. Columns without it size automatically.
+     */
+    width?: "fit" | "fill";
   }
 }
 
@@ -462,6 +467,7 @@ export function DataTable<TData, TValue>({
   const filteredTotal = table.getFilteredRowModel().rows.length;
   const isFiltered = !!globalFilter || columnFilters.length > 0;
   const visibleColCount = table.getVisibleLeafColumns().length;
+  const fillCount = table.getVisibleLeafColumns().filter((c) => c.columnDef.meta?.width === "fill").length;
 
   const selectedRows = React.useMemo(() => {
     if (!selectedCount) return [] as TData[];
@@ -524,14 +530,22 @@ export function DataTable<TData, TValue>({
               <TableRow key={headerGroup.id} className="hover:bg-transparent">
                 {headerGroup.headers.map((header) => {
                   const meta = header.column.columnDef.meta;
+                  const fillShare = fillCount ? `${(100 / fillCount).toFixed(2)}%` : undefined;
                   const def = header.column.columnDef.header;
                   const plainSortable = header.column.getCanSort() && typeof def === "string";
                   return (
                     <TableHead
                       key={header.id}
                       colSpan={header.colSpan}
-                      style={header.column.id === "select" ? { width: 36 } : undefined}
+                      style={
+                        header.column.id === "select"
+                          ? { width: 36 }
+                          : meta?.width === "fill"
+                            ? { width: fillShare }
+                            : undefined
+                      }
                       className={cn(
+                        meta?.width === "fit" && "w-px whitespace-nowrap",
                         meta?.align === "right" && "text-right",
                         meta?.align === "center" && "text-center",
                         meta?.headerClassName
@@ -597,6 +611,7 @@ export function DataTable<TData, TValue>({
                         key={cell.id}
                         className={cn(
                           rowPad,
+                          meta?.width === "fit" && "w-px whitespace-nowrap",
                           meta?.align === "right" && "text-right",
                           meta?.align === "center" && "text-center",
                           meta?.className
