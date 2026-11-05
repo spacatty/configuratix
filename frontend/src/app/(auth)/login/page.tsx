@@ -26,12 +26,17 @@ export default function LoginPage() {
       localStorage.removeItem("pending_invite_token");
       router.push(`/join?token=${pendingToken}`);
     } else {
-      router.push("/machines");
+      // Return to where an expired session left off; only same-origin paths.
+      const next = new URLSearchParams(window.location.search).get("next");
+      router.push(next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard");
     }
   };
 
   // Already authenticated → skip
   useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("expired")) {
+      setError("Your session expired. Sign in again to continue.");
+    }
     const checkAuth = async () => {
       const token = localStorage.getItem("auth_token");
       if (!token) return;

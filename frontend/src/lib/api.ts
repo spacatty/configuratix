@@ -939,6 +939,16 @@ class ApiClient {
     return this.token;
   }
 
+  private redirectingToLogin = false;
+
+  private handleSessionExpired() {
+    if (this.redirectingToLogin || typeof window === "undefined") return;
+    this.redirectingToLogin = true;
+    this.setToken(null);
+    const here = window.location.pathname + window.location.search;
+    window.location.assign(`/login?next=${encodeURIComponent(here)}&expired=1`);
+  }
+
   async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -955,6 +965,10 @@ class ApiClient {
     });
 
     if (!response.ok) {
+      // An expired/invalid session would otherwise leave every page polling into 401s.
+      if (response.status === 401 && this.token && !endpoint.startsWith("/api/auth/")) {
+        this.handleSessionExpired();
+      }
       const text = await response.text();
       throw new Error(text || response.statusText || "An error occurred");
     }

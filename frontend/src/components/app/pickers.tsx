@@ -160,7 +160,7 @@ export function MachinePicker(props: MachinePickerProps) {
     groupOrder: groupBy === "status" ? LIVE_ORDER : undefined,
     isItemDisabled: disableOffline ? (m: Machine) => machineLiveness(m) === "offline" : undefined,
     searchPlaceholder: props.searchPlaceholder ?? "Search name, hostname, IP, group…",
-    emptyText: props.emptyText ?? "No machines match.",
+    emptyText: props.emptyText ?? (!loading && items.length === 0 ? "No machines enrolled yet. Press / then type new to add one." : "No machines match."),
     placeholder: props.placeholder ?? (props.multiple ? "Select machines…" : "Select machine…"),
     disabled: props.disabled,
     className: props.className,
