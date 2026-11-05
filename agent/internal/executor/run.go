@@ -157,7 +157,7 @@ func (e *Executor) executeRun(ctx context.Context, payload RunPayload, logs io.W
 				}
 			}
 			sr.Attempts = attempt + 1
-			out, stepErr = rc.runStep(step, w)
+			out, stepErr = rc.runStepHdr(step, w, logs)
 			if stepErr == nil || ctx.Err() != nil {
 				break
 			}
@@ -259,23 +259,29 @@ type stepOutput struct {
 }
 
 func (rc *runCtx) runStep(step Step, w io.Writer) (stepOutput, error) {
+	return rc.runStepHdr(step, w, w)
+}
+
+// runStepHdr writes command echo lines ("$ cmd") to hdr only, so result output_tail
+// holds process output instead of (possibly long) scripts.
+func (rc *runCtx) runStepHdr(step Step, w, hdr io.Writer) (stepOutput, error) {
 	out := stepOutput{exitCode: -1}
 	switch step.Action {
 	case "exec":
-		fmt.Fprintf(w, "$ %s\n", step.Command)
+		fmt.Fprintf(hdr, "$ %s\n", step.Command)
 		r, err := runProcess(rc.ctx, []string{"/bin/bash", "-c", step.Command}, step.Env, step.Timeout, w, step.Capture != "")
 		out.exitCode, out.stdout = r.ExitCode, r.Stdout
 		return out, err
 
 	case "script":
 		lines := strings.Count(step.Script, "\n") + 1
-		fmt.Fprintf(w, "$ bash script (%d lines, set -euo pipefail)\n", lines)
+		fmt.Fprintf(hdr, "$ bash script (%d lines, set -euo pipefail)\n", lines)
 		r, err := runProcess(rc.ctx, []string{"/bin/bash", "-c", "set -euo pipefail\n" + step.Script}, step.Env, step.Timeout, w, step.Capture != "")
 		out.exitCode, out.stdout = r.ExitCode, r.Stdout
 		return out, err
 
 	case "assert":
-		fmt.Fprintf(w, "$ %s\n", step.Command)
+		fmt.Fprintf(hdr, "$ %s\n", step.Command)
 		r, err := runProcess(rc.ctx, []string{"/bin/bash", "-c", step.Command}, step.Env, step.Timeout, w, step.Capture != "")
 		out.exitCode, out.stdout = r.ExitCode, r.Stdout
 		if err != nil && rc.ctx.Err() == nil {
@@ -288,7 +294,7 @@ func (rc *runCtx) runStep(step Step, w io.Writer) (stepOutput, error) {
 		return out, err
 
 	case "nginx_test":
-		fmt.Fprintf(w, "$ nginx -t\n")
+		fmt.Fprintf(hdr, "$ nginx -t\n")
 		var combined limitedBuffer
 		combined.max = 64 * 1024
 		r, err := runProcess(rc.ctx, []string{"nginx", "-t"}, step.Env, step.Timeout, io.MultiWriter(w, &combined), false)

@@ -118,7 +118,7 @@ func (h *NginxConfigsHandler) CreateNginxConfig(w http.ResponseWriter, r *http.R
 		INSERT INTO nginx_configs (name, owner_id, mode, structured_json, raw_text)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING *
-	`, req.Name, userID, req.Mode, structuredJSON, req.RawText)
+	`, req.Name, userID, req.Mode, jsonOrNull(structuredJSON), req.RawText)
 	if err != nil {
 		log.Printf("Failed to create nginx config: %v", err)
 		http.Error(w, "Failed to create nginx config", http.StatusInternalServerError)
@@ -197,7 +197,7 @@ func (h *NginxConfigsHandler) UpdateNginxConfig(w http.ResponseWriter, r *http.R
 		SET name = $1, mode = $2, structured_json = $3, raw_text = $4, updated_at = NOW()
 		WHERE id = $5
 		RETURNING *
-	`, name, mode, structuredJSON, rawText, id)
+	`, name, mode, jsonOrNull(structuredJSON), rawText, id)
 	if err != nil {
 		log.Printf("Failed to update nginx config: %v", err)
 		http.Error(w, "Failed to update nginx config", http.StatusInternalServerError)
@@ -453,4 +453,13 @@ func (h *NginxConfigsHandler) ApplyNginxConfig(w http.ResponseWriter, r *http.Re
 		"results":   results,
 		"jobs":      allJobs,
 	})
+}
+
+// jsonOrNull stores a JSON null instead of SQL NULL/empty bytes: an empty []byte is not
+// valid jsonb, and models.NginxConfig.StructuredJSON can't scan SQL NULL.
+func jsonOrNull(b []byte) string {
+	if len(b) == 0 {
+		return "null"
+	}
+	return string(b)
 }

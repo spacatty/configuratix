@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -58,6 +59,9 @@ func ParseResult(logs string) Result {
 	}
 	return r
 }
+
+// genericAgentErrRe matches step errors that carry no information beyond the exit code.
+var genericAgentErrRe = regexp.MustCompile(`^(exit status \d+|signal: \w+)$`)
 
 // ErrorMessage derives a short human error for a failed job from its logs.
 func ErrorMessage(status, logs string, res Result) string {
@@ -145,14 +149,17 @@ func OnJobFinished(ctx context.Context, db *database.DB, jobID string) {
 	errMsg := ""
 	if !success {
 		errMsg = j.ErrorMessage.String
-		if errMsg == "" {
+		// v2 agents report the step error ("exit status 1"); the CONFIGURATIX_RESULT
+		// reason is far more useful, so it replaces such generic messages.
+		generic := genericAgentErrRe.MatchString(errMsg)
+		if errMsg == "" || (generic && res.Reason != "") {
 			errMsg = ErrorMessage(j.Status, logs, res)
 		}
 	}
 
 	// Persist error message and parsed apply result (merged, never overwriting agent data).
-	if !success && !j.ErrorMessage.Valid {
-		_, _ = db.ExecContext(ctx, `UPDATE jobs SET error_message = $1 WHERE id = $2 AND error_message IS NULL`, errMsg, jobID)
+	if !success && errMsg != j.ErrorMessage.String {
+		_, _ = db.ExecContext(ctx, `UPDATE jobs SET error_message = $1 WHERE id = $2`, errMsg, jobID)
 	}
 	if res.Status != "" || len(res.Disabled) > 0 || len(res.Reenabled) > 0 {
 		if b, err := json.Marshal(res); err == nil {
