@@ -100,13 +100,10 @@ export function FqdnCell({ domain, nested }: { domain: Domain; nested: boolean }
 export function buildDomainColumns({
   actions,
   groupsByDomain,
-  apexSet,
   retryingIds,
 }: {
   actions: DomainRowActions;
   groupsByDomain: Record<string, DomainGroup[]>;
-  /** Apex names that are themselves rows (to draw nesting). */
-  apexSet: Set<string>;
   retryingIds: Set<string>;
 }): ColumnDef<Domain>[] {
   return [
@@ -116,7 +113,7 @@ export function buildDomainColumns({
       meta: { label: "Domain", className: "max-w-[360px]" },
       sortingFn: (a, b) => a.original.fqdn.localeCompare(b.original.fqdn),
       cell: ({ row }) => (
-        <FqdnCell domain={row.original} nested={apexSet.has(getApexDomain(row.original.fqdn))} />
+        <FqdnCell domain={row.original} nested={row.depth > 0} />
       ),
     },
     {

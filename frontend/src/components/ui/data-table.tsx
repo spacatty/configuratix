@@ -19,6 +19,7 @@ import {
   type VisibilityState,
   flexRender,
   getCoreRowModel,
+  getExpandedRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
   getFilteredRowModel,
@@ -155,6 +156,11 @@ export interface DataTableProps<TData, TValue> {
   getRowClassName?: (row: TData) => string | undefined;
   /** Stable row id for selection / cross-page selection */
   getRowId?: (row: TData) => string;
+  /**
+   * Child rows (always expanded). Sorting orders groups and, separately, children within
+   * each group; filters keep a parent when any child matches; pages never split a group.
+   */
+  getSubRows?: (row: TData) => TData[] | undefined;
   onRowClick?: (row: TData, event: React.MouseEvent<HTMLTableRowElement>) => void;
   /** Row href for middle-click/cmd-click semantics is up to onRowClick; this just styles. */
   density?: "compact" | "default";
@@ -279,6 +285,7 @@ export function DataTable<TData, TValue>({
   emptyMessage = "No results.",
   getRowClassName,
   getRowId,
+  getSubRows,
   onRowClick,
   density = "default",
   enableRowSelection = false,
@@ -404,6 +411,11 @@ export function DataTable<TData, TValue>({
     data,
     columns: finalColumns,
     getRowId,
+    getSubRows,
+    getExpandedRowModel: getSubRows ? getExpandedRowModel() : undefined,
+    filterFromLeafRows: !!getSubRows,
+    paginateExpandedRows: false,
+    enableSubRowSelection: false,
     enableRowSelection,
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
@@ -428,6 +440,7 @@ export function DataTable<TData, TValue>({
       columnOrder,
       rowSelection,
       globalFilter,
+      ...(getSubRows ? { expanded: true as const } : {}),
       pagination,
     },
   });

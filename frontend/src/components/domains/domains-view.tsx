@@ -103,8 +103,27 @@ export function DomainsView() {
     return out;
   }, [machinesQ.data]);
 
-  const sorted = React.useMemo(() => sortDomainsByApex(domains), [domains]);
-  const apexSet = React.useMemo(() => new Set(domains.map((d) => d.fqdn.toLowerCase())), [domains]);
+  // Subdomains become child rows of their apex when the apex itself is in the list, so sorting
+  // and filtering act on whole groups instead of tearing subdomains away from their apex.
+  const { topLevel, childrenOf } = React.useMemo(() => {
+    const ordered = sortDomainsByApex(domains);
+    const apexRow = new Map<string, Domain>();
+    for (const d of ordered) if (d.fqdn.toLowerCase() === getApexDomain(d.fqdn)) apexRow.set(d.fqdn.toLowerCase(), d);
+    const top: Domain[] = [];
+    const kids = new Map<string, Domain[]>();
+    for (const d of ordered) {
+      const parent = apexRow.get(getApexDomain(d.fqdn));
+      if (parent && parent.id !== d.id) {
+        const list = kids.get(parent.id) ?? [];
+        list.push(d);
+        kids.set(parent.id, list);
+      } else {
+        top.push(d);
+      }
+    }
+    return { topLevel: top, childrenOf: kids };
+  }, [domains]);
+  const getSubRows = React.useCallback((d: Domain) => childrenOf.get(d.id), [childrenOf]);
   const byId = React.useMemo(() => new Map(domains.map((d) => [d.id, d])), [domains]);
 
   /* ------------------------------ search (?q=) ------------------------------ */
@@ -382,8 +401,8 @@ export function DomainsView() {
   }, [domains]);
 
   const columns = React.useMemo(
-    () => buildDomainColumns({ actions, groupsByDomain, apexSet, retryingIds: retrying }),
-    [actions, groupsByDomain, apexSet, retrying]
+    () => buildDomainColumns({ actions, groupsByDomain, retryingIds: retrying }),
+    [actions, groupsByDomain, retrying]
   );
 
   const facets = React.useMemo(
@@ -449,7 +468,8 @@ export function DomainsView() {
 
       <DataTable
         columns={columns}
-        data={sorted}
+        data={topLevel}
+        getSubRows={getSubRows}
         loading={loading}
         getRowId={(d) => d.id}
         search={search}
