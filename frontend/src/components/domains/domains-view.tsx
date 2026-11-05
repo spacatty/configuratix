@@ -470,7 +470,7 @@ export function DomainsView() {
         onRowSelectionChange={setRowSelection}
         pageSize={50}
         pageSizeOptions={[25, 50, 100, 250]}
-        initialState={{ columnVisibility: { created_at: false } }}
+        initialState={{ columnVisibility: { created_at: false, health: false } }}
         getRowClassName={(d) => (isApplyActive(d) ? "bg-info/[0.04]" : undefined)}
         emptyState={
           <EmptyState

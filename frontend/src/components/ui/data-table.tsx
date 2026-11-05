@@ -1,10 +1,13 @@
 "use client";
+"use no memo";
 
 import * as React from "react";
+import { usePathname } from "next/navigation";
 import {
   type Column,
   type ColumnDef,
   type ColumnFiltersState,
+  type ColumnOrderState,
   type FilterFn,
   type OnChangeFn,
   type PaginationState,
@@ -32,6 +35,8 @@ import {
   ChevronsRight,
   ChevronsUpDown,
   CirclePlus,
+  GripVertical,
+  RotateCcw,
   Search,
   Settings2,
   X,
@@ -52,14 +57,6 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -137,6 +134,11 @@ export interface DataTableProps<TData, TValue> {
   pageSizeOptions?: number[];
 
   /* ---- state ---- */
+  /**
+   * localStorage key for the table layout (column order/visibility, sorting, page size).
+   * Defaults to the route (ids normalized) + column set; pass false to disable.
+   */
+  persistKey?: string | false;
   initialState?: {
     sorting?: SortingState;
     columnVisibility?: VisibilityState;
@@ -181,6 +183,32 @@ export interface DataTableProps<TData, TValue> {
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */
 /* -------------------------------------------------------------------------- */
+
+type SavedLayout = {
+  sorting?: SortingState;
+  columnVisibility?: VisibilityState;
+  columnOrder?: ColumnOrderState;
+  pageSize?: number;
+};
+
+function loadLayout(key: string | null): SavedLayout | null {
+  if (!key || typeof window === "undefined") return null;
+  try {
+    const v = JSON.parse(window.localStorage.getItem(key) ?? "null");
+    return v && typeof v === "object" ? (v as SavedLayout) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLayout(key: string | null, layout: SavedLayout) {
+  if (!key) return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(layout));
+  } catch {
+    // storage unavailable: layout just isn't remembered
+  }
+}
 
 const INTERACTIVE = "a,button,input,select,textarea,label,[role=checkbox],[role=menuitem],[role=switch],[data-no-row-click]";
 
@@ -244,6 +272,7 @@ export function DataTable<TData, TValue>({
   pageSize: pageSizeProp,
   pageSizeOptions = [10, 20, 50, 100],
   initialState: initialStateProp,
+  persistKey,
   loading,
   skeletonRows = 6,
   emptyState,
@@ -261,8 +290,19 @@ export function DataTable<TData, TValue>({
   className,
   bordered = true,
 }: DataTableProps<TData, TValue>) {
-  const defaultPageSize = pageSizeProp ?? 20;
-  const [sorting, setSorting] = React.useState<SortingState>(initialStateProp?.sorting ?? []);
+  const pathname = usePathname() ?? "";
+  const storageKey = React.useMemo(() => {
+    if (persistKey === false) return null;
+    if (persistKey) return `cfx.table:${persistKey}`;
+    const route = pathname.replace(/\/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "/:id").replace(/\/\d+(?=\/|$)/g, "/:n");
+    const ids = columns.map((c) => columnKey(c) ?? "").filter(Boolean).sort().join(",");
+    return `cfx.table:${route}:${ids}`;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persistKey, pathname]);
+  const saved = React.useMemo(() => loadLayout(storageKey), [storageKey]);
+
+  const defaultPageSize = saved?.pageSize ?? pageSizeProp ?? 20;
+  const [sorting, setSorting] = React.useState<SortingState>(saved?.sorting ?? initialStateProp?.sorting ?? []);
   const [columnFiltersInner, setColumnFiltersInner] = React.useState<ColumnFiltersState>([]);
   const columnFilters = columnFiltersControlled ?? columnFiltersInner;
   const setColumnFilters = React.useCallback<OnChangeFn<ColumnFiltersState>>(
@@ -273,7 +313,17 @@ export function DataTable<TData, TValue>({
     },
     [columnFilters, columnFiltersControlled, onColumnFiltersChangeControlled]
   );
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(initialStateProp?.columnVisibility ?? {});
+  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(() => {
+    const initial = initialStateProp?.columnVisibility ?? {};
+    const merged = { ...initial, ...(saved?.columnVisibility ?? {}) };
+    // Columns the user can't toggle keep the page's setting (e.g. sort/filter-only columns).
+    for (const c of columns) {
+      const key = columnKey(c);
+      if (key && (c as { enableHiding?: boolean }).enableHiding === false && key in initial) merged[key] = initial[key];
+    }
+    return merged;
+  });
+  const [columnOrder, setColumnOrder] = React.useState<ColumnOrderState>(saved?.columnOrder ?? []);
   const [rowSelectionInternal, setRowSelectionInternal] = React.useState<RowSelectionState>({});
   const rowSelection = rowSelectionControlled ?? rowSelectionInternal;
   const setRowSelection = onRowSelectionChangeControlled ?? setRowSelectionInternal;
@@ -289,9 +339,14 @@ export function DataTable<TData, TValue>({
   const [pagination, setPagination] = React.useState<PaginationState>({ pageIndex: 0, pageSize: defaultPageSize });
 
   React.useEffect(() => {
+    if (saved?.pageSize) return; // the user's own choice wins over the page default
     const next = pageSizeProp ?? 20;
     setPagination((p) => (p.pageSize === next ? p : { ...p, pageSize: next, pageIndex: 0 }));
-  }, [pageSizeProp]);
+  }, [pageSizeProp, saved?.pageSize]);
+
+  React.useEffect(() => {
+    saveLayout(storageKey, { sorting, columnVisibility, columnOrder, pageSize: pagination.pageSize });
+  }, [storageKey, sorting, columnVisibility, columnOrder, pagination.pageSize]);
 
   // Columns: attach facet filterFn + optional auto selection column
   const finalColumns = React.useMemo(() => {
@@ -359,6 +414,7 @@ export function DataTable<TData, TValue>({
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
     onColumnVisibilityChange: setColumnVisibility,
+    onColumnOrderChange: setColumnOrder,
     onRowSelectionChange: setRowSelection as OnChangeFn<RowSelectionState>,
     onGlobalFilterChange: (u) => setGlobalFilter(typeof u === "function" ? u(globalFilter) : u),
     onPaginationChange: setPagination,
@@ -369,6 +425,7 @@ export function DataTable<TData, TValue>({
       sorting,
       columnFilters,
       columnVisibility,
+      columnOrder,
       rowSelection,
       globalFilter,
       pagination,
@@ -437,7 +494,7 @@ export function DataTable<TData, TValue>({
           {toolbar}
           <div className="ml-auto flex items-center gap-2">
             {toolbarActions}
-            {showColumnToggle && <DataTableViewOptions table={table} />}
+            {showColumnToggle && <DataTableViewOptions table={table} defaultVisibility={initialStateProp?.columnVisibility} />}
           </div>
         </div>
       )}
@@ -733,37 +790,127 @@ export function DataTableFacetedFilter<TData, TValue>({
   );
 }
 
-export function DataTableViewOptions<TData>({ table }: { table: TanstackTable<TData> }) {
-  const hideable = table.getAllColumns().filter((c) => typeof c.accessorFn !== "undefined" || c.getCanHide()).filter((c) => c.getCanHide() && c.id !== "select");
-  if (hideable.length === 0) return null;
+export function DataTableViewOptions<TData>({
+  table,
+  defaultVisibility = {},
+}: {
+  table: TanstackTable<TData>;
+  /** The page's own default visibility (what "Reset" restores). */
+  defaultVisibility?: VisibilityState;
+}) {
+  const [dragId, setDragId] = React.useState<string | null>(null);
+  const [overId, setOverId] = React.useState<string | null>(null);
+  const leaf = table.getAllLeafColumns();
+  const movable = leaf.filter((c) => c.getCanHide() && c.id !== "select");
+  if (movable.length === 0) return null;
+
+  const label = (column: (typeof leaf)[number]) => {
+    const def = column.columnDef;
+    return def.meta?.label ?? (typeof def.header === "string" ? def.header : column.id.replace(/_/g, " "));
+  };
+
+  // Movable columns are reordered among themselves; fixed ones (selection, actions) keep their slots.
+  const move = (from: string, to: string) => {
+    if (from === to) return;
+    const ids = movable.map((c) => c.id);
+    const next = ids.filter((id) => id !== from);
+    next.splice(next.indexOf(to) + (ids.indexOf(from) < ids.indexOf(to) ? 1 : 0), 0, from);
+    let i = 0;
+    table.setColumnOrder(leaf.map((c) => (c.getCanHide() && c.id !== "select" ? next[i++] : c.id)));
+  };
+  const nudge = (id: string, dir: -1 | 1) => {
+    const ids = movable.map((c) => c.id);
+    const target = ids[ids.indexOf(id) + dir];
+    if (target) move(id, target);
+  };
+  const customized =
+    table.getState().columnOrder.length > 0 ||
+    movable.some((c) => c.getIsVisible() !== (defaultVisibility[c.id] ?? true));
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <Popover>
+      <PopoverTrigger asChild>
         <Button variant="outline" size="sm" className="h-8">
           <Settings2 />
           <span className="hidden sm:inline">View</span>
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Toggle columns</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {hideable.map((column) => {
-          const def = column.columnDef;
-          const label = def.meta?.label ?? (typeof def.header === "string" ? def.header : column.id.replace(/_/g, " "));
-          return (
-            <DropdownMenuCheckboxItem
-              key={column.id}
-              className="capitalize"
-              checked={column.getIsVisible()}
-              onCheckedChange={(v) => column.toggleVisibility(!!v)}
-              onSelect={(e) => e.preventDefault()}
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-60 p-1">
+        <div className="flex items-center justify-between px-2 pt-1 pb-1.5">
+          <span className="text-xs text-muted-foreground">Columns · drag to reorder</span>
+          {customized && (
+            <button
+              type="button"
+              onClick={() => {
+                table.setColumnOrder([]);
+                table.setColumnVisibility({ ...defaultVisibility });
+              }}
+              className="inline-flex items-center gap-1 rounded px-1 text-[11px] text-muted-foreground hover:text-foreground"
             >
-              {label}
-            </DropdownMenuCheckboxItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
+              <RotateCcw className="size-3" /> Reset
+            </button>
+          )}
+        </div>
+        <ul className="max-h-[min(360px,60vh)] overflow-y-auto">
+          {movable.map((column) => (
+            <li
+              key={column.id}
+              data-col-id={column.id}
+              className={cn(
+                "group flex items-center gap-2 rounded-md px-1.5 py-1 text-[13px] select-none hover:bg-accent",
+                dragId === column.id && "opacity-40",
+                overId === column.id && dragId !== column.id && "bg-accent ring-1 ring-primary/40"
+              )}
+            >
+              {/* Pointer-based drag (mouse, touch, pen); HTML5 DnD is unreliable inside popovers. */}
+              <span
+                className="cursor-grab touch-none text-subtle-foreground active:cursor-grabbing"
+                aria-hidden
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  setDragId(column.id);
+                  setOverId(column.id);
+                }}
+                onPointerMove={(e) => {
+                  if (!dragId) return;
+                  const el = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-col-id]");
+                  if (el?.dataset.colId) setOverId(el.dataset.colId);
+                }}
+                onPointerUp={() => {
+                  if (dragId && overId) move(dragId, overId);
+                  setDragId(null);
+                  setOverId(null);
+                }}
+                onPointerCancel={() => {
+                  setDragId(null);
+                  setOverId(null);
+                }}
+              >
+                <GripVertical className="size-3.5" />
+              </span>
+              <Checkbox
+                id={`col-${column.id}`}
+                checked={column.getIsVisible()}
+                onCheckedChange={(v) => column.toggleVisibility(!!v)}
+              />
+              <label htmlFor={`col-${column.id}`} className="flex-1 cursor-pointer truncate capitalize">
+                {label(column)}
+              </label>
+              {/* Keyboard / no-drag fallback */}
+              <span className="flex opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+                <button type="button" aria-label={`Move ${label(column)} up`} onClick={() => nudge(column.id, -1)} className="rounded p-0.5 text-muted-foreground hover:text-foreground">
+                  <ArrowUp className="size-3" />
+                </button>
+                <button type="button" aria-label={`Move ${label(column)} down`} onClick={() => nudge(column.id, 1)} className="rounded p-0.5 text-muted-foreground hover:text-foreground">
+                  <ArrowDown className="size-3" />
+                </button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -899,8 +1046,9 @@ export function DataTableColumnHeader<TData, TValue>({
     <button
       type="button"
       onClick={() => {
-        if (sorted === false) column.toggleSorting(false);
-        else if (sorted === "asc") column.toggleSorting(true);
+        const now = column.getIsSorted();
+        if (now === false) column.toggleSorting(false);
+        else if (now === "asc") column.toggleSorting(true);
         else column.clearSorting();
       }}
       className={cn(

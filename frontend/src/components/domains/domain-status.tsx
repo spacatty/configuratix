@@ -12,27 +12,31 @@ import { cn } from "@/lib/utils";
 import { APPLY_META, HEALTH_LABEL, domainApplyState, domainHealth } from "./domain-utils";
 
 /** Dot + label + last-check time; tooltip carries the detail. */
-export function DomainHealthCell({ domain }: { domain: Domain }) {
+const HEALTH_EXPLAIN: Record<ReturnType<typeof domainHealth>, string> = {
+  healthy: "Responding with the expected status.",
+  unhealthy: "Last check failed: wrong status, timeout or connection error.",
+  unknown: "Assigned, but not checked yet.",
+  unassigned: "Not assigned to a machine, so it isn't checked.",
+};
+
+function DomainHealthTooltipBody({ domain }: { domain: Domain }) {
   const h = domainHealth(domain);
-  if (h === "unassigned") return <span className="text-muted-foreground">—</span>;
   const expected = domain.health_check_expected_status ?? 200;
   const code = domain.last_check_status_code;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex cursor-default items-center gap-2" data-no-row-click>
-          <StatusDot status={h} />
-          <span className={cn("text-[13px]", h === "unknown" && "text-muted-foreground")}>{HEALTH_LABEL[h]}</span>
-          {domain.last_check_at && (
-            <RelativeTime date={domain.last_check_at} noTooltip className="text-[11px] text-subtle-foreground" />
-          )}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs">
-        <div className="space-y-0.5 text-xs">
+    <div className="space-y-0.5 text-xs">
+      <div className="flex items-center gap-1.5 font-medium">
+        <StatusDot status={h === "unassigned" ? "unknown" : h} pulse={false} size="xs" />
+        {HEALTH_LABEL[h]}
+      </div>
+      <div className="text-muted-foreground">{HEALTH_EXPLAIN[h]}</div>
+      {h !== "unassigned" && (
+        <>
           <div>
             {domain.last_check_at ? (
-              <>Last check <span className="font-data">{formatDateTime(domain.last_check_at)}</span></>
+              <>
+                Last check <span className="font-data">{formatDateTime(domain.last_check_at)}</span>
+              </>
             ) : (
               "Not checked yet"
             )}
@@ -52,7 +56,54 @@ export function DomainHealthCell({ domain }: { domain: Domain }) {
             Healthy when <span className="font-data">{domain.health_check_path || "/"}</span> returns{" "}
             <span className="font-data">{expected}</span>
           </div>
-        </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Health as a status light (used before the domain name). */
+export function DomainHealthLight({ domain }: { domain: Domain }) {
+  const h = domainHealth(domain);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="inline-flex size-4 shrink-0 cursor-default items-center justify-center"
+          aria-label={`Health: ${HEALTH_LABEL[h]}`}
+          data-no-row-click
+        >
+          {h === "unassigned" ? (
+            <span className="size-1.5 rounded-full border border-subtle-foreground/60" />
+          ) : (
+            <StatusDot status={h} pulse={h === "unhealthy"} />
+          )}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="max-w-xs">
+        <DomainHealthTooltipBody domain={domain} />
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Health label + last-check time (detail sheet). */
+export function DomainHealthCell({ domain }: { domain: Domain }) {
+  const h = domainHealth(domain);
+  if (h === "unassigned") return <span className="text-muted-foreground">—</span>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex cursor-default items-center gap-2" data-no-row-click>
+          <StatusDot status={h} />
+          <span className={cn("text-[13px]", h === "unknown" && "text-muted-foreground")}>{HEALTH_LABEL[h]}</span>
+          {domain.last_check_at && (
+            <RelativeTime date={domain.last_check_at} noTooltip className="text-[11px] text-subtle-foreground" />
+          )}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs">
+        <DomainHealthTooltipBody domain={domain} />
       </TooltipContent>
     </Tooltip>
   );

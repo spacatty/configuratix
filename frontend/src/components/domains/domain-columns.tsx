@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { CopyButton, RelativeTime, openJobLogs } from "@/components/app";
 
-import { DomainApplyCell, DomainHealthCell } from "./domain-status";
+import { DomainApplyCell, DomainHealthLight } from "./domain-status";
 import { GroupChips } from "./group-chip";
 import { APPLY_META, HEALTH_LABEL, domainApplyState, domainHealth, getApexDomain, isApplyActive } from "./domain-utils";
 
@@ -59,6 +59,7 @@ export function FqdnCell({ domain, nested }: { domain: Domain; nested: boolean }
       {nested && !isApex && (
         <span aria-hidden className="ml-1 h-3 w-3 shrink-0 rounded-bl-[3px] border-b border-l border-border-strong" />
       )}
+      <DomainHealthLight domain={domain} />
       <span className="font-data min-w-0 truncate text-[12.5px]">
         {isApex ? (
           <span className="font-medium text-foreground">{domain.fqdn}</span>
@@ -160,12 +161,13 @@ export function buildDomainColumns({
       id: "health",
       accessorFn: (d) => HEALTH_LABEL[domainHealth(d)],
       header: "Health",
+      enableHiding: false,
       meta: { label: "Health" },
       sortingFn: (a, b) => {
         const rank = { unhealthy: 0, unknown: 1, healthy: 2, unassigned: 3 } as const;
         return rank[domainHealth(a.original)] - rank[domainHealth(b.original)];
       },
-      cell: ({ row }) => <DomainHealthCell domain={row.original} />,
+      cell: () => null,
     },
     {
       id: "apply",
@@ -194,10 +196,45 @@ export function buildDomainColumns({
       id: "actions",
       enableHiding: false,
       enableSorting: false,
-      meta: { align: "right", className: "w-10" },
-      cell: ({ row }) => <DomainActionsMenu domain={row.original} actions={actions} />,
+      meta: { align: "right", className: "w-[92px]" },
+      cell: ({ row }) => <DomainRowActionsCell domain={row.original} actions={actions} />,
     },
   ];
+}
+
+/** Frequent actions inline, the rest in the ⋯ menu. */
+export function DomainRowActionsCell({ domain: d, actions }: { domain: Domain; actions: DomainRowActions }) {
+  const assigned = !!d.assigned_machine_id;
+  return (
+    <div className="flex items-center justify-end gap-0.5" data-no-row-click>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label={assigned ? `Reassign ${d.fqdn}` : `Assign ${d.fqdn}`} onClick={() => actions.assign(d)}>
+            <Link2 />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{assigned ? "Reassign" : "Assign to machine"}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {/* span keeps the tooltip working on a disabled button */}
+          <span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Check health of ${d.fqdn}`}
+              disabled={!assigned}
+              onClick={() => actions.checkHealth(d)}
+            >
+              <HeartPulse />
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{assigned ? "Check health now" : "Assign first to check health"}</TooltipContent>
+      </Tooltip>
+      <DomainActionsMenu domain={d} actions={actions} />
+    </div>
+  );
 }
 
 export function DomainActionsMenu({ domain: d, actions }: { domain: Domain; actions: DomainRowActions }) {
@@ -211,10 +248,6 @@ export function DomainActionsMenu({ domain: d, actions }: { domain: Domain; acti
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem onClick={() => actions.assign(d)}>
-          <Link2 />
-          {assigned ? "Reassign…" : "Assign…"}
-        </DropdownMenuItem>
         <DropdownMenuItem disabled={!assigned || !d.config_id || busy} onClick={() => actions.reapply(d)}>
           <RotateCw />
           Re-apply config
@@ -226,10 +259,6 @@ export function DomainActionsMenu({ domain: d, actions }: { domain: Domain; acti
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem disabled={!assigned} onClick={() => actions.checkHealth(d)}>
-          <HeartPulse />
-          Check health now
-        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => actions.healthSettings(d)}>
           <SlidersHorizontal />
           Health check settings…
