@@ -1,225 +1,293 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, SecurityIPWhitelist } from "@/lib/api";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
+import { useEffect, useMemo, useState } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
 import { toast } from "sonner";
-import { Plus, ShieldCheck, Trash2, Info } from "lucide-react";
+import { Info, MoreHorizontal, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { api, type SecurityIPWhitelist } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { DataTable, DataTableColumnHeader } from "@/components/ui/data-table";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  CopyableMono,
+  EmptyState,
+  ErrorState,
+  PageHeader,
+  RelativeTime,
+  Spinner,
+  errorMessage,
+  useConfirm,
+  usePolling,
+} from "@/components/app";
+import { formatNumber } from "@/lib/format";
+import { SecurityNav, isValidIpOrCidr } from "@/components/security/shared";
+import { FormField } from "@/components/security/form-field";
+
+function rangeInfo(ipCidr: string): { kind: "ip" | "range"; size?: string } {
+  const [ip, bits] = ipCidr.split("/");
+  if (bits === undefined) return { kind: "ip" };
+  const n = Number(bits);
+  const v6 = ip.includes(":");
+  const max = v6 ? 128 : 32;
+  if (n === max) return { kind: "ip" };
+  const hostBits = max - n;
+  if (hostBits > 40) return { kind: "range", size: `2^${hostBits}` };
+  return { kind: "range", size: formatNumber(2 ** hostBits) };
+}
 
 export default function WhitelistPage() {
-  const [loading, setLoading] = useState(true);
-  const [entries, setEntries] = useState<SecurityIPWhitelist[]>([]);
-  const [showAddDialog, setShowAddDialog] = useState(false);
-  const [newIP, setNewIP] = useState("");
-  const [newDescription, setNewDescription] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const confirm = useConfirm();
+  const [addOpen, setAddOpen] = useState(false);
+  const { data, loading, error, refresh } = usePolling(() => api.listSecurityWhitelist(), 60000);
+  const entries = data ?? [];
 
-  const loadWhitelist = async () => {
-    setLoading(true);
-    try {
-      const result = await api.listSecurityWhitelist();
-      setEntries(result);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load whitelist");
-    } finally {
-      setLoading(false);
+  const remove = async (rows: SecurityIPWhitelist[], clear?: () => void) => {
+    const one = rows.length === 1;
+    const ok = await confirm({
+      title: one ? `Remove ${rows[0].ip_cidr} from the whitelist?` : `Remove ${rows.length} entries?`,
+      description: "These addresses can be banned again by UA and endpoint rules.",
+      destructive: true,
+      confirmText: "Remove",
+      onConfirm: async () => {
+        for (const r of rows) await api.deleteSecurityWhitelistEntry(r.id);
+      },
+    });
+    if (ok) {
+      toast.success(one ? "Removed from whitelist" : `${rows.length} entries removed`);
+      clear?.();
+      refresh();
     }
   };
 
+  const columns = useMemo<ColumnDef<SecurityIPWhitelist>[]>(
+    () => [
+      {
+        accessorKey: "ip_cidr",
+        header: "IP / CIDR",
+        cell: ({ row }) => <CopyableMono value={row.original.ip_cidr} monoClassName="font-medium" />,
+      },
+      {
+        id: "kind",
+        accessorFn: (r) => (rangeInfo(r.ip_cidr).kind === "range" ? "Range" : "Single IP"),
+        header: "Type",
+        cell: ({ row }) => {
+          const info = rangeInfo(row.original.ip_cidr);
+          return info.kind === "range" ? (
+            <span className="flex items-center gap-2">
+              <Badge variant="info">Range</Badge>
+              <span className="font-data text-xs text-muted-foreground">{info.size} addresses</span>
+            </span>
+          ) : (
+            <Badge variant="muted">Single IP</Badge>
+          );
+        },
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue(id)),
+      },
+      {
+        accessorKey: "description",
+        header: "Description",
+        cell: ({ row }) =>
+          row.original.description ? (
+            <span className="block max-w-[420px] truncate text-[13px]" title={row.original.description}>
+              {row.original.description}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          ),
+      },
+      {
+        accessorKey: "created_at",
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Added" />,
+        cell: ({ row }) => <RelativeTime date={row.original.created_at} />,
+        sortingFn: "datetime",
+      },
+      {
+        id: "actions",
+        enableHiding: false,
+        meta: { align: "right" },
+        cell: ({ row }) => (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label="Actions">
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem variant="destructive" onClick={() => remove([row.original])}>
+                <Trash2 />
+                Remove
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        icon={ShieldCheck}
+        title="Whitelist"
+        description="Addresses that are never banned, on any machine."
+        badge={data ? <Badge variant="muted" className="font-data">{formatNumber(entries.length)}</Badge> : undefined}
+        actions={
+          <Button onClick={() => setAddOpen(true)}>
+            <Plus />
+            Add entry
+          </Button>
+        }
+      />
+
+      <SecurityNav />
+
+      <Alert variant="info">
+        <Info />
+        <AlertTitle>How the whitelist works</AlertTitle>
+        <AlertDescription>
+          Whitelisted IPs and CIDR ranges can never be banned; adding one lifts any existing ban automatically. The list is
+          shared by all machines and agents.
+        </AlertDescription>
+      </Alert>
+
+      {error && !data ? (
+        <ErrorState error={error} onRetry={refresh} />
+      ) : (
+        <DataTable
+          columns={columns}
+          data={entries}
+          loading={loading}
+          getRowId={(r) => r.id}
+          searchKeys={["ip_cidr", "description"]}
+          searchPlaceholder="Search IP or description…"
+          facets={[{ columnId: "kind", title: "Type" }]}
+          initialState={{ sorting: [{ id: "created_at", desc: true }] }}
+          enableRowSelection
+          bulkActions={(rows, clear) => (
+            <Button size="sm" variant="destructive" onClick={() => remove(rows, clear)}>
+              <Trash2 />
+              Remove {rows.length}
+            </Button>
+          )}
+          emptyState={
+            <EmptyState
+              icon={ShieldCheck}
+              title="Whitelist is empty"
+              description="Add your office, monitoring and CI addresses so they're never locked out."
+              action={
+                <Button onClick={() => setAddOpen(true)}>
+                  <Plus />
+                  Add entry
+                </Button>
+              }
+            />
+          }
+        />
+      )}
+
+      <AddWhitelistDialog open={addOpen} onOpenChange={setAddOpen} onAdded={refresh} existing={entries} />
+    </div>
+  );
+}
+
+function AddWhitelistDialog({
+  open,
+  onOpenChange,
+  onAdded,
+  existing,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  onAdded: () => void;
+  existing: SecurityIPWhitelist[];
+}) {
+  const [value, setValue] = useState("");
+  const [description, setDescription] = useState("");
+  const [touched, setTouched] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
   useEffect(() => {
-    loadWhitelist();
-  }, []);
-
-  const handleAdd = async () => {
-    if (!newIP.trim()) {
-      toast.error("IP or CIDR is required");
-      return;
+    if (open) {
+      setValue("");
+      setDescription("");
+      setTouched(false);
     }
+  }, [open]);
 
+  const v = value.trim();
+  const valid = isValidIpOrCidr(v);
+  const duplicate = existing.some((e) => e.ip_cidr === v);
+  const info = valid ? rangeInfo(v) : null;
+  const err = touched && !valid ? "Enter an IP (203.0.113.7) or CIDR range (10.0.0.0/8)" : duplicate ? "Already whitelisted" : undefined;
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTouched(true);
+    if (!valid || duplicate) return;
     setSubmitting(true);
     try {
-      await api.createSecurityWhitelistEntry({
-        ip_cidr: newIP.trim(),
-        description: newDescription.trim(),
-      });
-      toast.success("Added to whitelist");
-      setShowAddDialog(false);
-      setNewIP("");
-      setNewDescription("");
-      loadWhitelist();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to add");
+      await api.createSecurityWhitelistEntry({ ip_cidr: v, description: description.trim() });
+      toast.success(`${v} whitelisted`);
+      onOpenChange(false);
+      onAdded();
+    } catch (error) {
+      toast.error("Couldn't add entry", { description: errorMessage(error) });
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleDelete = async (entry: SecurityIPWhitelist) => {
-    try {
-      await api.deleteSecurityWhitelistEntry(entry.id);
-      toast.success("Removed from whitelist");
-      loadWhitelist();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to remove");
-    }
-  };
-
-  const isCIDR = (ip: string) => ip.includes("/") && !ip.endsWith("/32");
-
   return (
-    <div className="container mx-auto py-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <ShieldCheck className="h-8 w-8 text-green-500" />
-          <div>
-            <h1 className="text-2xl font-bold">IP Whitelist</h1>
-            <p className="text-muted-foreground">
-              {entries.length} whitelisted {entries.length === 1 ? "entry" : "entries"}
-            </p>
-          </div>
-        </div>
-        <Button onClick={() => setShowAddDialog(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          Add to Whitelist
-        </Button>
-      </div>
-
-      {/* Info Box */}
-      <div className="flex items-start gap-3 p-4 bg-muted/50 rounded-lg border">
-        <Info className="h-5 w-5 text-blue-500 mt-0.5" />
-        <div className="text-sm text-muted-foreground">
-          <p className="font-medium text-foreground mb-1">About Whitelist</p>
-          <ul className="list-disc list-inside space-y-1">
-            <li>Whitelisted IPs can never be banned</li>
-            <li>If a whitelisted IP is already banned, the ban is automatically removed</li>
-            <li>You can add single IPs or CIDR ranges (e.g., 192.168.1.0/24)</li>
-            <li>Whitelist is shared across all machines and agents</li>
-          </ul>
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="border rounded-lg overflow-hidden">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-48">IP / CIDR</TableHead>
-              <TableHead>Description</TableHead>
-              <TableHead className="w-48">Added</TableHead>
-              <TableHead className="w-16"></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {loading ? (
-              <TableRow>
-                <TableCell colSpan={4} className="text-center py-8">
-                  Loading...
-                </TableCell>
-              </TableRow>
-            ) : entries.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={4} className="text-center py-8">
-                  <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                    <ShieldCheck className="h-8 w-8" />
-                    <p>No whitelisted IPs</p>
-                    <p className="text-sm">Add IPs that should never be banned</p>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ) : (
-              entries.map((entry) => (
-                <TableRow key={entry.id}>
-                  <TableCell className="font-mono font-medium">
-                    <div className="flex items-center gap-2">
-                      {entry.ip_cidr}
-                      {isCIDR(entry.ip_cidr) && (
-                        <Badge variant="outline" className="text-xs">
-                          CIDR
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {entry.description || "-"}
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    {new Date(entry.created_at).toLocaleString()}
-                  </TableCell>
-                  <TableCell>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDelete(entry)}
-                      className="text-destructive hover:text-destructive"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
-
-      {/* Add Dialog */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add to Whitelist</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>IP Address or CIDR</Label>
-              <Input
-                placeholder="192.168.1.100 or 10.0.0.0/8"
-                value={newIP}
-                onChange={(e) => setNewIP(e.target.value)}
-                className="font-mono"
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Single IP (e.g., 192.168.1.1) or CIDR range (e.g., 192.168.1.0/24)
-              </p>
-            </div>
-            <div>
-              <Label>Description (optional)</Label>
-              <Input
-                placeholder="Office network, VPN server, etc."
-                value={newDescription}
-                onChange={(e) => setNewDescription(e.target.value)}
-              />
-            </div>
-          </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add to whitelist</DialogTitle>
+          <DialogDescription>Any active ban matching this address or range is lifted.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          <FormField
+            label="IP or CIDR"
+            htmlFor="wl-ip"
+            required
+            error={err}
+            hint={info?.kind === "range" ? `Range of ${info.size} addresses` : "Single address or a range like 192.168.1.0/24"}
+          >
+            <Input
+              id="wl-ip"
+              autoFocus
+              className="font-data"
+              placeholder="192.168.1.0/24"
+              value={value}
+              aria-invalid={!!err}
+              onChange={(e) => setValue(e.target.value)}
+              onBlur={() => value && setTouched(true)}
+            />
+          </FormField>
+          <FormField label="Description" htmlFor="wl-desc" hint="Who or what this is — e.g. “Office VPN”, “Uptime monitor”.">
+            <Input id="wl-desc" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional" />
+          </FormField>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddDialog(false)}>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button onClick={handleAdd} disabled={submitting}>
-              {submitting ? "Adding..." : "Add to Whitelist"}
+            <Button type="submit" disabled={submitting || duplicate || (touched && !valid)}>
+              {submitting ? <Spinner /> : <ShieldCheck />}
+              Add to whitelist
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
-

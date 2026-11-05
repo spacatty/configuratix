@@ -1,376 +1,497 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, UAPatternsByCategory, SecurityUAPattern } from "@/lib/api";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
-import { Badge } from "@/components/ui/badge";
+import { useEffect, useMemo, useState } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
 import { toast } from "sonner";
-import { Bot, Plus, Trash2, Shield, Info, Code, Search, Zap, Globe, Lock, Eye } from "lucide-react";
+import { Bot, CheckCircle2, Info, MoreHorizontal, Plus, Trash2, X, XCircle } from "lucide-react";
+import { api, type SecurityUAPattern, type UAPatternsByCategory } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Combobox } from "@/components/ui/combobox";
+import { DataTable } from "@/components/ui/data-table";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  CardSkeleton,
+  EmptyState,
+  ErrorState,
+  Mono,
+  PageHeader,
+  Spinner,
+  errorMessage,
+  useConfirm,
+  usePolling,
+} from "@/components/app";
+import { cn } from "@/lib/utils";
+import { formatNumber } from "@/lib/format";
+import { SecurityNav, UA_CATEGORIES, uaCategoryMeta } from "@/components/security/shared";
+import { FormField } from "@/components/security/form-field";
 
-const categoryInfo: Record<string, { label: string; icon: React.ReactNode; description: string }> = {
-  http_clients: {
-    label: "HTTP Clients",
-    icon: <Code className="h-4 w-4" />,
-    description: "Programming libraries like requests, axios, httpx",
-  },
-  scrapers: {
-    label: "Scrapers & Headless",
-    icon: <Search className="h-4 w-4" />,
-    description: "Web scrapers and headless browsers",
-  },
-  scanners: {
-    label: "Security Scanners",
-    icon: <Lock className="h-4 w-4" />,
-    description: "Vulnerability and port scanners",
-  },
-  seo_bots: {
-    label: "SEO & Marketing",
-    icon: <Zap className="h-4 w-4" />,
-    description: "Aggressive SEO crawlers",
-  },
-  ai_crawlers: {
-    label: "AI Crawlers",
-    icon: <Bot className="h-4 w-4" />,
-    description: "AI training data collectors",
-  },
-  generic_bad: {
-    label: "Generic Bad",
-    icon: <Eye className="h-4 w-4" />,
-    description: "Generic bot/spider identifiers",
-  },
-  suspicious: {
-    label: "Suspicious",
-    icon: <Shield className="h-4 w-4" />,
-    description: "Empty or missing user agents",
-  },
-  custom: {
-    label: "Custom Patterns",
-    icon: <Globe className="h-4 w-4" />,
-    description: "Your custom patterns",
-  },
-};
+type Row = SecurityUAPattern & { category_enabled: boolean };
+
+function matches(pattern: string, type: string, ua: string): boolean | null {
+  if (!pattern) return null;
+  if (type === "exact") return ua === pattern;
+  if (type === "regex") {
+    try {
+      return new RegExp(pattern, "i").test(ua);
+    } catch {
+      return null;
+    }
+  }
+  return ua.toLowerCase().includes(pattern.toLowerCase());
+}
 
 export default function UAPatternsPage() {
-  const [loading, setLoading] = useState(true);
-  const [categories, setCategories] = useState<UAPatternsByCategory[]>([]);
-  const [showAddDialog, setShowAddDialog] = useState(false);
-  const [newPattern, setNewPattern] = useState("");
-  const [newCategory, setNewCategory] = useState("custom");
-  const [newMatchType, setNewMatchType] = useState("contains");
-  const [newDescription, setNewDescription] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [expandedCategories, setExpandedCategories] = useState<string[]>([]);
+  const confirm = useConfirm();
+  const [addOpen, setAddOpen] = useState(false);
+  const [addCategory, setAddCategory] = useState("custom");
+  const [selected, setSelected] = useState<string | null>(null);
+  const [pending, setPending] = useState<Record<string, boolean>>({});
+  const { data, loading, error, refresh, setData } = usePolling(() => api.listSecurityUAPatterns(), 120000);
+  const categories = useMemo(() => data ?? [], [data]);
 
-  const loadPatterns = async () => {
-    setLoading(true);
+  const rows = useMemo<Row[]>(
+    () =>
+      categories.flatMap((c) =>
+        c.patterns.map((p) => ({ ...p, category_enabled: c.is_enabled }))
+      ),
+    [categories]
+  );
+  const visible = selected ? rows.filter((r) => r.category === selected) : rows;
+  const customCount = rows.filter((r) => !r.is_system).length;
+  const enabledCount = categories.filter((c) => c.is_enabled).length;
+
+  const toggle = async (cat: UAPatternsByCategory, enabled: boolean) => {
+    const label = uaCategoryMeta(cat.category).label;
+    setPending((p) => ({ ...p, [cat.category]: true }));
+    setData((prev) => prev?.map((c) => (c.category === cat.category ? { ...c, is_enabled: enabled } : c)));
     try {
-      const result = await api.listSecurityUAPatterns();
-      setCategories(result);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load patterns");
+      await api.toggleSecurityUACategory(cat.category, enabled);
+      toast.success(`${label} ${enabled ? "enabled" : "disabled"}`, { description: "Agents pick this up on the next sync." });
+    } catch (e) {
+      setData((prev) => prev?.map((c) => (c.category === cat.category ? { ...c, is_enabled: !enabled } : c)));
+      toast.error(`Couldn't update ${label}`, { description: errorMessage(e) });
     } finally {
-      setLoading(false);
+      setPending((p) => ({ ...p, [cat.category]: false }));
     }
   };
+
+  const remove = async (list: Row[], clear?: () => void) => {
+    const deletable = list.filter((r) => !r.is_system);
+    if (!deletable.length) return;
+    const one = deletable.length === 1;
+    const ok = await confirm({
+      title: one ? "Delete pattern?" : `Delete ${deletable.length} patterns?`,
+      description: one ? (
+        <>
+          <Mono>{deletable[0].pattern}</Mono> stops blocking new requests.
+        </>
+      ) : (
+        "These custom patterns stop blocking new requests. System patterns in the selection are skipped."
+      ),
+      destructive: true,
+      confirmText: "Delete",
+      onConfirm: async () => {
+        for (const r of deletable) await api.deleteSecurityUAPattern(r.id);
+      },
+    });
+    if (ok) {
+      toast.success(one ? "Pattern deleted" : `${deletable.length} patterns deleted`);
+      clear?.();
+      refresh();
+    }
+  };
+
+  const columns = useMemo<ColumnDef<Row>[]>(
+    () => [
+      {
+        accessorKey: "pattern",
+        header: "Pattern",
+        cell: ({ row }) => (
+          <Mono className={cn("block max-w-[360px] truncate font-medium", !row.original.category_enabled && "text-muted-foreground")} title={row.original.pattern}>
+            {row.original.pattern || <span className="italic text-muted-foreground">(empty)</span>}
+          </Mono>
+        ),
+      },
+      {
+        id: "category",
+        accessorFn: (r) => uaCategoryMeta(r.category).label,
+        header: "Category",
+        cell: ({ row }) => {
+          const meta = uaCategoryMeta(row.original.category);
+          return (
+            <span className="flex items-center gap-1.5 text-[13px]">
+              <meta.icon className="size-3.5 text-muted-foreground" />
+              {meta.label}
+              {!row.original.category_enabled && <Badge variant="muted">Off</Badge>}
+            </span>
+          );
+        },
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue(id)),
+      },
+      {
+        accessorKey: "match_type",
+        header: "Match",
+        cell: ({ row }) => <Badge variant="outline" className="font-data">{row.original.match_type}</Badge>,
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue(id)),
+      },
+      {
+        id: "origin",
+        accessorFn: (r) => (r.is_system ? "System" : "Custom"),
+        header: "Origin",
+        cell: ({ getValue }) => <Badge variant={getValue() === "System" ? "secondary" : "default"}>{getValue() as string}</Badge>,
+        filterFn: (row, id, value: string[]) => !value?.length || value.includes(row.getValue(id)),
+      },
+      {
+        accessorKey: "description",
+        header: "Description",
+        cell: ({ row }) =>
+          row.original.description ? (
+            <span className="block max-w-[320px] truncate text-[13px] text-muted-foreground" title={row.original.description}>
+              {row.original.description}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          ),
+      },
+      {
+        id: "actions",
+        enableHiding: false,
+        meta: { align: "right" },
+        cell: ({ row }) =>
+          row.original.is_system ? null : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="Actions">
+                  <MoreHorizontal />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem variant="destructive" onClick={() => remove([row.original])}>
+                  <Trash2 />
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        icon={Bot}
+        title="User-agent patterns"
+        description="Requests matching an enabled pattern get their IP banned on the spot."
+        meta={
+          data ? (
+            <>
+              <span>
+                <span className="font-data">{formatNumber(rows.length - customCount)}</span> system
+              </span>
+              <span>
+                <span className="font-data">{formatNumber(customCount)}</span> custom
+              </span>
+              <span>
+                <span className="font-data">{enabledCount}</span>/<span className="font-data">{categories.length}</span> categories on
+              </span>
+            </>
+          ) : undefined
+        }
+        actions={
+          <Button
+            onClick={() => {
+              setAddCategory(selected ?? "custom");
+              setAddOpen(true);
+            }}
+          >
+            <Plus />
+            Add pattern
+          </Button>
+        }
+      />
+
+      <SecurityNav />
+
+      {error && !data ? (
+        <ErrorState error={error} onRetry={refresh} />
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {loading
+              ? Array.from({ length: 8 }).map((_, i) => <CardSkeleton key={i} lines={1} />)
+              : categories.map((c) => {
+                  const meta = uaCategoryMeta(c.category);
+                  const isSel = selected === c.category;
+                  return (
+                    <div
+                      key={c.category}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={isSel}
+                      onClick={() => setSelected(isSel ? null : c.category)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setSelected(isSel ? null : c.category);
+                        }
+                      }}
+                      className={cn(
+                        "group relative flex cursor-pointer flex-col gap-2 rounded-lg border border-border bg-card px-4 py-3 text-left outline-none transition-colors hover:border-border-strong focus-visible:ring-[3px] focus-visible:ring-ring/30",
+                        isSel && "border-primary/60 bg-primary/[0.04]"
+                      )}
+                    >
+                      <div className="flex items-center gap-2">
+                        <meta.icon className={cn("size-4", c.is_enabled ? "text-foreground" : "text-subtle-foreground")} />
+                        <span className={cn("flex-1 truncate text-[13px] font-medium", !c.is_enabled && "text-muted-foreground")}>
+                          {meta.label}
+                        </span>
+                        <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                          <Switch
+                            checked={c.is_enabled}
+                            disabled={pending[c.category]}
+                            onCheckedChange={(v) => toggle(c, v)}
+                            aria-label={`${c.is_enabled ? "Disable" : "Enable"} ${meta.label}`}
+                          />
+                        </div>
+                      </div>
+                      <p className="line-clamp-1 text-xs text-muted-foreground">{meta.description}</p>
+                      <div className="flex items-center gap-2 text-xs text-subtle-foreground">
+                        <span>
+                          <span className="font-data text-foreground">{formatNumber(c.pattern_count)}</span> patterns
+                        </span>
+                        {!c.is_enabled && <Badge variant="muted">Disabled</Badge>}
+                      </div>
+                    </div>
+                  );
+                })}
+          </div>
+
+          <DataTable
+            columns={columns}
+            data={visible}
+            loading={loading}
+            getRowId={(r) => r.id}
+            searchKeys={["pattern", "description", (r) => uaCategoryMeta(r.category).label]}
+            searchPlaceholder="Search patterns…"
+            facets={[
+              ...(selected ? [] : [{ columnId: "category", title: "Category" }]),
+              { columnId: "match_type", title: "Match" },
+              { columnId: "origin", title: "Origin" },
+            ]}
+            toolbar={
+              selected ? (
+                <Badge variant="outline" className="h-7 gap-1.5 px-2 text-xs">
+                  {uaCategoryMeta(selected).label}
+                  <button
+                    type="button"
+                    aria-label="Show all categories"
+                    onClick={() => setSelected(null)}
+                    className="rounded-sm text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </Badge>
+              ) : null
+            }
+            getRowClassName={(r) => (!r.category_enabled ? "opacity-60" : undefined)}
+            enableRowSelection={(r) => !r.original.is_system}
+            bulkActions={(sel, clear) => (
+              <Button size="sm" variant="destructive" onClick={() => remove(sel, clear)}>
+                <Trash2 />
+                Delete {sel.length}
+              </Button>
+            )}
+            emptyState={
+              <EmptyState
+                icon={Bot}
+                title={selected ? "No patterns in this category" : "No patterns"}
+                action={
+                  <Button
+                    onClick={() => {
+                      setAddCategory(selected ?? "custom");
+                      setAddOpen(true);
+                    }}
+                  >
+                    <Plus />
+                    Add pattern
+                  </Button>
+                }
+              />
+            }
+          />
+
+          <Alert>
+            <Info />
+            <AlertDescription>
+              System patterns can't be deleted, but their category can be switched off. Patterns sync to all agents every
+              2 minutes.
+            </AlertDescription>
+          </Alert>
+        </>
+      )}
+
+      <AddPatternDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        defaultCategory={addCategory}
+        categories={categories.map((c) => c.category)}
+        onAdded={refresh}
+      />
+    </div>
+  );
+}
+
+function AddPatternDialog({
+  open,
+  onOpenChange,
+  defaultCategory,
+  categories,
+  onAdded,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  defaultCategory: string;
+  categories: string[];
+  onAdded: () => void;
+}) {
+  const [pattern, setPattern] = useState("");
+  const [matchType, setMatchType] = useState("contains");
+  const [category, setCategory] = useState(defaultCategory);
+  const [description, setDescription] = useState("");
+  const [test, setTest] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    loadPatterns();
-  }, []);
+    if (open) {
+      setPattern("");
+      setMatchType("contains");
+      setCategory(defaultCategory);
+      setDescription("");
+      setTest("");
+    }
+  }, [open, defaultCategory]);
 
-  const handleToggleCategory = async (category: string, enabled: boolean) => {
+  const catItems = useMemo(
+    () => [...new Set([...Object.keys(UA_CATEGORIES), ...categories])].map((key) => ({ key, ...uaCategoryMeta(key) })),
+    [categories]
+  );
+
+  let regexError: string | null = null;
+  if (matchType === "regex" && pattern) {
     try {
-      await api.toggleSecurityUACategory(category, enabled);
-      setCategories((prev) =>
-        prev.map((c) =>
-          c.category === category ? { ...c, is_enabled: enabled } : c
-        )
-      );
-      toast.success(`${categoryInfo[category]?.label || category} ${enabled ? "enabled" : "disabled"}`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to toggle");
+      new RegExp(pattern);
+    } catch (e) {
+      regexError = e instanceof Error ? e.message : "Invalid regular expression";
     }
-  };
+  }
+  const result = test ? matches(pattern.trim(), matchType, test) : null;
 
-  const handleAddPattern = async () => {
-    if (!newPattern.trim()) {
-      toast.error("Pattern is required");
-      return;
-    }
-
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pattern.trim() || regexError) return;
     setSubmitting(true);
     try {
-      await api.createSecurityUAPattern({
-        pattern: newPattern.trim(),
-        category: newCategory,
-        match_type: newMatchType,
-        description: newDescription.trim(),
-      });
+      await api.createSecurityUAPattern({ pattern: pattern.trim(), category, match_type: matchType, description: description.trim() });
       toast.success("Pattern added");
-      setShowAddDialog(false);
-      setNewPattern("");
-      setNewDescription("");
-      loadPatterns();
+      onOpenChange(false);
+      onAdded();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to add pattern");
+      toast.error("Couldn't add pattern", { description: errorMessage(err) });
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleDeletePattern = async (pattern: SecurityUAPattern) => {
-    if (pattern.is_system) {
-      toast.error("Cannot delete system patterns");
-      return;
-    }
-
-    try {
-      await api.deleteSecurityUAPattern(pattern.id);
-      toast.success("Pattern deleted");
-      loadPatterns();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
-    }
-  };
-
-  const getCategoryInfo = (category: string) => {
-    return categoryInfo[category] || {
-      label: category,
-      icon: <Bot className="h-4 w-4" />,
-      description: "",
-    };
-  };
-
-  const systemPatternCount = categories.reduce(
-    (acc, c) => acc + c.patterns.filter((p) => p.is_system).length,
-    0
-  );
-  const customPatternCount = categories.reduce(
-    (acc, c) => acc + c.patterns.filter((p) => !p.is_system).length,
-    0
-  );
-
   return (
-    <div className="container mx-auto py-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Bot className="h-8 w-8 text-orange-500" />
-          <div>
-            <h1 className="text-2xl font-bold">User-Agent Patterns</h1>
-            <p className="text-muted-foreground">
-              {systemPatternCount} system patterns, {customPatternCount} custom
-            </p>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add pattern</DialogTitle>
+          <DialogDescription>Matching requests are banned immediately while the category is enabled.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          <FormField label="Pattern" htmlFor="ua-pattern" required error={regexError ?? undefined}>
+            <Input
+              id="ua-pattern"
+              autoFocus
+              className="font-data"
+              placeholder="python-httpx"
+              value={pattern}
+              aria-invalid={!!regexError}
+              onChange={(e) => setPattern(e.target.value)}
+            />
+          </FormField>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField label="Match type">
+              <ToggleGroup type="single" variant="outline" value={matchType} onValueChange={(v) => v && setMatchType(v)}>
+                <ToggleGroupItem value="contains">Contains</ToggleGroupItem>
+                <ToggleGroupItem value="exact">Exact</ToggleGroupItem>
+                <ToggleGroupItem value="regex">Regex</ToggleGroupItem>
+              </ToggleGroup>
+            </FormField>
+            <FormField label="Category">
+              <Combobox
+                items={catItems}
+                getValue={(c) => c.key}
+                getLabel={(c) => c.label}
+                getKeywords={(c) => [c.key, c.description]}
+                renderItem={(c) => (
+                  <span className="flex items-center gap-2">
+                    <c.icon className="size-3.5 text-muted-foreground" />
+                    {c.label}
+                  </span>
+                )}
+                value={category}
+                onValueChange={(v) => v && setCategory(v)}
+                searchPlaceholder="Search categories…"
+              />
+            </FormField>
           </div>
-        </div>
-        <Button onClick={() => setShowAddDialog(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          Add Pattern
-        </Button>
-      </div>
-
-      {/* Info Box */}
-      <div className="flex items-start gap-3 p-4 bg-muted/50 rounded-lg border">
-        <Info className="h-5 w-5 text-blue-500 mt-0.5" />
-        <div className="text-sm text-muted-foreground">
-          <p className="font-medium text-foreground mb-1">How UA Blocking Works</p>
-          <ul className="list-disc list-inside space-y-1">
-            <li>Enable/disable entire categories with the toggle</li>
-            <li>When a request matches a pattern, the IP is permanently banned</li>
-            <li>System patterns cannot be deleted, but categories can be disabled</li>
-            <li>Patterns are synced to all agents every 2 minutes</li>
-          </ul>
-        </div>
-      </div>
-
-      {/* Categories */}
-      {loading ? (
-        <div className="text-center py-8">Loading...</div>
-      ) : (
-        <Accordion
-          type="multiple"
-          value={expandedCategories}
-          onValueChange={setExpandedCategories}
-          className="space-y-3"
-        >
-          {categories.map((cat) => {
-            const info = getCategoryInfo(cat.category);
-            return (
-              <AccordionItem
-                key={cat.category}
-                value={cat.category}
-                className="border rounded-lg overflow-hidden"
-              >
-                <div className="flex items-center gap-3 px-4 py-2 bg-muted/30">
-                  <AccordionTrigger className="flex-1 hover:no-underline">
-                    <div className="flex items-center gap-3">
-                      <span className="text-muted-foreground">{info.icon}</span>
-                      <div className="text-left">
-                        <div className="font-medium">{info.label}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {cat.pattern_count} patterns
-                          {!cat.is_enabled && (
-                            <Badge variant="outline" className="ml-2 text-xs">
-                              Disabled
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </AccordionTrigger>
-                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                    <Label className="text-xs text-muted-foreground">
-                      {cat.is_enabled ? "Enabled" : "Disabled"}
-                    </Label>
-                    <Switch
-                      checked={cat.is_enabled}
-                      onCheckedChange={(checked) =>
-                        handleToggleCategory(cat.category, checked)
-                      }
-                    />
-                  </div>
-                </div>
-                <AccordionContent className="px-4 py-3">
-                  <p className="text-sm text-muted-foreground mb-3">
-                    {info.description}
-                  </p>
-                  <div className="space-y-2">
-                    {cat.patterns.map((pattern) => (
-                      <div
-                        key={pattern.id}
-                        className="flex items-center justify-between p-2 rounded border bg-background"
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <code className="text-sm font-mono bg-muted px-2 py-0.5 rounded truncate">
-                            {pattern.pattern}
-                          </code>
-                          <Badge variant="outline" className="text-xs shrink-0">
-                            {pattern.match_type}
-                          </Badge>
-                          {pattern.is_system && (
-                            <Badge variant="secondary" className="text-xs shrink-0">
-                              System
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          {pattern.description && (
-                            <span className="text-xs text-muted-foreground max-w-[200px] truncate">
-                              {pattern.description}
-                            </span>
-                          )}
-                          {!pattern.is_system && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeletePattern(pattern)}
-                              className="text-destructive hover:text-destructive h-6 w-6 p-0"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    {cat.patterns.length === 0 && (
-                      <p className="text-sm text-muted-foreground text-center py-4">
-                        No patterns in this category
-                      </p>
-                    )}
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            );
-          })}
-        </Accordion>
-      )}
-
-      {/* Add Dialog */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add Custom Pattern</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>Pattern</Label>
-              <Input
-                placeholder="python-httpx"
-                value={newPattern}
-                onChange={(e) => setNewPattern(e.target.value)}
-                className="font-mono"
-              />
+          <FormField label="Description" htmlFor="ua-desc">
+            <Input id="ua-desc" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional" />
+          </FormField>
+          <div className="space-y-1.5 rounded-lg border border-dashed border-border-strong p-3">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>Test against a user agent</span>
+              {result !== null && (
+                <span className={cn("flex items-center gap-1 font-medium", result ? "text-destructive" : "text-success")}>
+                  {result ? <XCircle className="size-3.5" /> : <CheckCircle2 className="size-3.5" />}
+                  {result ? "Would be banned" : "Allowed"}
+                </span>
+              )}
             </div>
-            <div>
-              <Label>Match Type</Label>
-              <Select value={newMatchType} onValueChange={setNewMatchType}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="contains">Contains (substring)</SelectItem>
-                  <SelectItem value="exact">Exact Match</SelectItem>
-                  <SelectItem value="regex">Regex</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Category</Label>
-              <Select value={newCategory} onValueChange={setNewCategory}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(categoryInfo).map(([key, { label }]) => (
-                    <SelectItem key={key} value={key}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Description (optional)</Label>
-              <Input
-                placeholder="Describe this pattern"
-                value={newDescription}
-                onChange={(e) => setNewDescription(e.target.value)}
-              />
-            </div>
+            <Input
+              className="font-data h-8 text-xs"
+              placeholder="Mozilla/5.0 (compatible; python-httpx/0.27)"
+              value={test}
+              onChange={(e) => setTest(e.target.value)}
+            />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddDialog(false)}>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button onClick={handleAddPattern} disabled={submitting}>
-              {submitting ? "Adding..." : "Add Pattern"}
+            <Button type="submit" disabled={submitting || !pattern.trim() || !!regexError}>
+              {submitting ? <Spinner /> : <Plus />}
+              Add pattern
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
-

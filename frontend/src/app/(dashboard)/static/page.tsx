@@ -1,116 +1,148 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { ColumnDef } from "@tanstack/react-table";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEffect, useMemo, useState } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { toast } from "sonner";
+import { Download, ExternalLink, FolderArchive, LayoutGrid, Link2, MoreHorizontal, Rows3, Search, Trash2, UploadCloud, X } from "lucide-react";
+import { api, type Landing } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { DataTable } from "@/components/ui/data-table";
-import { api, Landing } from "@/lib/api";
-import { toast } from "sonner";
-import { 
-  Plus, 
-  FileArchive,
-  MoreHorizontal,
-  ExternalLink,
-  Trash2,
-  Download,
-  Eye,
-  Upload
-} from "lucide-react";
+import { DataTable, DataTableColumnHeader } from "@/components/ui/data-table";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { CardSkeleton, EmptyState, ErrorState, Mono, PageHeader, RelativeTime, errorMessage, useConfirm, usePolling } from "@/components/app";
+import { formatBytes } from "@/lib/format";
+import { copyToClipboard } from "@/lib/clipboard";
+import { cn } from "@/lib/utils";
+import { LandingThumbnail, landingPreviewUrl, landingTypeIcon } from "@/components/static/landing-thumbnail";
+import { LandingUploadDialog } from "@/components/static/landing-upload-dialog";
 
-export default function LandingsPage() {
-  const [landings, setLandings] = useState<Landing[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showUploadDialog, setShowUploadDialog] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [landingName, setLandingName] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [landingToDelete, setLandingToDelete] = useState<Landing | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+type View = "grid" | "table";
+const VIEW_KEY = "static.view";
+
+const TYPE_VARIANT: Record<string, "info" | "default" | "warning" | "muted"> = {
+  html: "info",
+  php: "default",
+  asset: "warning",
+};
+
+function TypeBadge({ type }: { type: string }) {
+  return (
+    <Badge variant={TYPE_VARIANT[type] ?? "muted"} className="font-data">
+      {type}
+    </Badge>
+  );
+}
+
+export default function StaticContentPage() {
+  const confirm = useConfirm();
+  const { data, loading, error, refresh, setData } = usePolling(() => api.listLandings(), 60000);
+  const landings = useMemo(() => data ?? [], [data]);
+  const [view, setView] = useState<View>("grid");
+  const [query, setQuery] = useState("");
+  const [type, setType] = useState("all");
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   useEffect(() => {
-    loadLandings();
+    try {
+      const v = localStorage.getItem(VIEW_KEY);
+      if (v === "grid" || v === "table") setView(v);
+    } catch {
+      /* ignore */
+    }
   }, []);
-
-  const loadLandings = async () => {
+  const changeView = (v: View) => {
+    setView(v);
     try {
-      const data = await api.listLandings();
-      setLandings(data);
-    } catch (err) {
-      console.error("Failed to load landings:", err);
-      toast.error("Failed to load content");
-    } finally {
-      setLoading(false);
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* ignore */
     }
   };
 
-  const handleUpload = async () => {
-    if (!landingName.trim()) {
-      toast.error("Name is required");
-      return;
-    }
-    if (!selectedFile) {
-      toast.error("Please select a ZIP file");
-      return;
-    }
-    if (!selectedFile.name.toLowerCase().endsWith(".zip")) {
-      toast.error("Only ZIP files are allowed");
-      return;
-    }
+  const types = useMemo(() => [...new Set(landings.map((l) => l.type))].sort(), [landings]);
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return landings.filter(
+      (l) =>
+        (type === "all" || l.type === type) &&
+        (!q || [l.name, l.file_name, l.owner_name, l.owner_email].some((s) => s?.toLowerCase().includes(q)))
+    );
+  }, [landings, query, type]);
 
-    setUploading(true);
+  const download = async (l: Landing) => {
     try {
-      await api.uploadLanding(landingName, selectedFile);
-      toast.success("Static content uploaded successfully");
-      setShowUploadDialog(false);
-      setLandingName("");
-      setSelectedFile(null);
-      loadLandings();
-    } catch (err) {
-      console.error("Failed to upload landing:", err);
-      toast.error("Failed to upload static content");
-    } finally {
-      setUploading(false);
+      await api.downloadStatic(l.id, l.file_name);
+    } catch (e) {
+      toast.error("Download failed", { description: errorMessage(e) });
     }
   };
 
-  const openDeleteDialog = (landing: Landing) => {
-    setLandingToDelete(landing);
-    setShowDeleteDialog(true);
-  };
-
-  const handleDelete = async () => {
-    if (!landingToDelete) return;
-    try {
-      await api.deleteLanding(landingToDelete.id);
-      toast.success("Static content deleted");
-      setShowDeleteDialog(false);
-      setLandingToDelete(null);
-      loadLandings();
-    } catch (err) {
-      console.error("Failed to delete landing:", err);
-      toast.error("Failed to delete content");
+  const remove = async (list: Landing[], clear?: () => void) => {
+    const one = list.length === 1;
+    const ok = await confirm({
+      title: one ? `Delete ${list[0].name}?` : `Delete ${list.length} uploads?`,
+      description: "The archive and its preview are removed. Domains serving this content stop working until reassigned.",
+      destructive: true,
+      confirmText: "Delete",
+      onConfirm: async () => {
+        for (const l of list) await api.deleteLanding(l.id);
+      },
+    });
+    if (ok) {
+      toast.success(one ? `${list[0].name} deleted` : `${list.length} uploads deleted`);
+      const ids = new Set(list.map((l) => l.id));
+      setData((prev) => prev?.filter((l) => !ids.has(l.id)));
+      clear?.();
+      refresh();
     }
   };
 
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  const actions = (l: Landing) => {
+    const url = landingPreviewUrl(l);
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label="Actions" onClick={(e) => e.stopPropagation()}>
+            <MoreHorizontal />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {url && (
+            <>
+              <DropdownMenuItem onClick={() => window.open(url, "_blank", "noopener")}>
+                <ExternalLink />
+                Open preview
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={async () => {
+                  if (await copyToClipboard(url)) toast.success("Preview link copied");
+                }}
+              >
+                <Link2 />
+                Copy preview link
+              </DropdownMenuItem>
+            </>
+          )}
+          <DropdownMenuItem onClick={() => download(l)}>
+            <Download />
+            Download ZIP
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" onClick={() => remove([l])}>
+            <Trash2 />
+            Delete
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
   };
 
   const columns: ColumnDef<Landing>[] = [
@@ -118,245 +150,207 @@ export default function LandingsPage() {
       accessorKey: "name",
       header: "Name",
       cell: ({ row }) => {
-        const landing = row.original;
+        const l = row.original;
+        const Icon = landingTypeIcon(l.type);
         return (
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-purple-500/20 to-purple-500/5 flex items-center justify-center">
-              <FileArchive className="h-5 w-5 text-purple-500" />
-            </div>
-            <div>
-              <div className="font-medium">{landing.name}</div>
-              <div className="text-xs text-muted-foreground">{landing.file_name}</div>
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Icon className="size-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <div className="truncate text-[13px] font-medium">{l.name}</div>
+              <Mono muted className="block truncate text-xs">{l.file_name}</Mono>
             </div>
           </div>
         );
       },
     },
-    {
-      accessorKey: "type",
-      header: "Type",
-      cell: ({ row }) => {
-        const type = row.original.type;
-        const badgeClass = type === "php" 
-          ? "bg-purple-500/20 text-purple-400 border-purple-500/30"
-          : type === "asset"
-          ? "bg-orange-500/20 text-orange-400 border-orange-500/30"
-          : "bg-blue-500/20 text-blue-400 border-blue-500/30";
-        return (
-          <Badge className={badgeClass}>
-            {type.toUpperCase()}
-          </Badge>
-        );
-      },
-    },
+    { accessorKey: "type", header: "Type", cell: ({ row }) => <TypeBadge type={row.original.type} /> },
     {
       accessorKey: "file_size",
-      header: "Size",
-      cell: ({ row }) => (
-        <span className="text-muted-foreground">
-          {formatFileSize(row.original.file_size)}
-        </span>
-      ),
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Size" align="right" />,
+      meta: { align: "right" },
+      cell: ({ row }) => <Mono>{formatBytes(row.original.file_size)}</Mono>,
     },
     {
-      accessorKey: "owner_name",
+      id: "owner",
+      accessorFn: (l) => l.owner_name || l.owner_email || "",
       header: "Owner",
-      cell: ({ row }) => (
-        <span className="text-muted-foreground">
-          {row.original.owner_name || row.original.owner_email || "-"}
-        </span>
-      ),
+      cell: ({ getValue }) => <span className="text-[13px] text-muted-foreground">{(getValue() as string) || "—"}</span>,
     },
     {
       accessorKey: "created_at",
-      header: "Uploaded",
-      cell: ({ row }) => (
-        <span className="text-sm text-muted-foreground">
-          {new Date(row.original.created_at).toLocaleDateString()}
-        </span>
-      ),
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Uploaded" />,
+      cell: ({ row }) => <RelativeTime date={row.original.created_at} />,
+      sortingFn: "datetime",
     },
-    {
-      id: "actions",
-      cell: ({ row }) => {
-        const landing = row.original;
-        return (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="h-8 w-8 p-0">
-                <span className="sr-only">Open menu</span>
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Actions</DropdownMenuLabel>
-              {landing.preview_path && (
-                <DropdownMenuItem 
-                  onClick={() => window.open(api.getApiUrl() + landing.preview_path, "_blank")}
-                >
-                  <Eye className="mr-2 h-4 w-4" />
-                  Preview
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem 
-                onClick={async () => {
-                  try {
-                    await api.downloadStatic(landing.id, landing.file_name);
-                    toast.success("Download started");
-                  } catch {
-                    toast.error("Download failed");
-                  }
-                }}
-              >
-                <Download className="mr-2 h-4 w-4" />
-                Download
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem 
-                className="text-destructive"
-                onClick={() => openDeleteDialog(landing)}
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        );
-      },
-    },
+    { id: "actions", enableHiding: false, meta: { align: "right" }, cell: ({ row }) => actions(row.original) },
   ];
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" />
-      </div>
-    );
-  }
+  const openPreview = (l: Landing) => {
+    const url = landingPreviewUrl(l);
+    if (url) window.open(url, "_blank", "noopener");
+  };
+
+  const totalSize = landings.reduce((a, l) => a + (l.file_size || 0), 0);
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Static Content</h1>
-          <p className="text-muted-foreground mt-1">
-            Upload and manage static files, HTML pages, or PHP apps for your domains.
-          </p>
+      <PageHeader
+        icon={FolderArchive}
+        title="Static content"
+        description="Landing pages, PHP apps and asset bundles you can serve from any domain."
+        meta={
+          data ? (
+            <>
+              <span>
+                <span className="font-data">{landings.length}</span> uploads
+              </span>
+              <span className="font-data">{formatBytes(totalSize)}</span>
+            </>
+          ) : undefined
+        }
+        actions={
+          <Button onClick={() => setUploadOpen(true)}>
+            <UploadCloud />
+            Upload
+          </Button>
+        }
+      />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[220px] flex-1 sm:max-w-sm">
+          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name, file, owner…" className="pl-8" />
+          {query && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => setQuery("")}
+              className="absolute top-1/2 right-2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
         </div>
-        <Button onClick={() => setShowUploadDialog(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Upload Content
-        </Button>
+        {types.length > 1 && (
+          <ToggleGroup type="single" variant="outline" value={type} onValueChange={(v) => v && setType(v)}>
+            <ToggleGroupItem value="all">All</ToggleGroupItem>
+            {types.map((t) => (
+              <ToggleGroupItem key={t} value={t} className="font-data">
+                {t}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        )}
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          value={view}
+          onValueChange={(v) => v && changeView(v as View)}
+          className="ml-auto"
+          aria-label="View"
+        >
+          <ToggleGroupItem value="grid" aria-label="Grid view">
+            <LayoutGrid />
+          </ToggleGroupItem>
+          <ToggleGroupItem value="table" aria-label="Table view">
+            <Rows3 />
+          </ToggleGroupItem>
+        </ToggleGroup>
       </div>
 
-      {/* Static Content Table */}
-      <Card className="border-border/50 bg-card/50">
-        <CardHeader>
-          <CardTitle className="text-lg">Your Static Content</CardTitle>
-          <CardDescription>
-            Upload ZIP files with your content. Type is auto-detected: PHP → HTML → Asset.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <DataTable 
-            columns={columns} 
-            data={landings}
-            searchKey="name"
-            searchPlaceholder="Search content..."
-          />
-        </CardContent>
-      </Card>
-
-      {/* Upload Dialog */}
-      <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Upload Static Content</DialogTitle>
-            <DialogDescription>
-              Upload a ZIP file with your static content (HTML, PHP, or assets).
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="content-name">Name</Label>
-              <Input
-                id="content-name"
-                placeholder="e.g., Marketing Site v2"
-                value={landingName}
-                onChange={(e) => setLandingName(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Type</Label>
-              <p className="text-sm text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
-                Auto-detected: PHP → HTML → Asset (files for download)
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label>ZIP File</Label>
-              <input
-                type="file"
-                ref={fileInputRef}
-                accept=".zip"
-                className="hidden"
-                onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-              />
-              <div 
-                className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors"
-                onClick={() => fileInputRef.current?.click()}
+      {error && !data ? (
+        <ErrorState error={error} onRetry={refresh} />
+      ) : !loading && landings.length === 0 ? (
+        <EmptyState
+          icon={FolderArchive}
+          title="No static content yet"
+          description="Upload a ZIP with an index.html (or index.php) and assign it to a domain."
+          action={
+            <Button onClick={() => setUploadOpen(true)}>
+              <UploadCloud />
+              Upload ZIP
+            </Button>
+          }
+        />
+      ) : view === "table" ? (
+        <DataTable
+          columns={columns}
+          data={filtered}
+          loading={loading}
+          hideSearch
+          getRowId={(l) => l.id}
+          initialState={{ sorting: [{ id: "created_at", desc: true }] }}
+          onRowClick={openPreview}
+          enableRowSelection
+          bulkActions={(rows, clear) => (
+            <Button size="sm" variant="destructive" onClick={() => remove(rows, clear)}>
+              <Trash2 />
+              Delete {rows.length}
+            </Button>
+          )}
+          emptyMessage="No uploads match your filters."
+        />
+      ) : loading ? (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <CardSkeleton key={i} lines={2} />
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
+        <EmptyState icon={Search} title="No uploads match" size="compact" />
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {filtered.map((l) => {
+            const url = landingPreviewUrl(l);
+            return (
+              <div
+                key={l.id}
+                className="group overflow-hidden rounded-lg border border-border bg-card transition-colors hover:border-border-strong"
               >
-                {selectedFile ? (
-                  <div className="flex items-center justify-center gap-2">
-                    <FileArchive className="h-5 w-5 text-primary" />
-                    <span className="font-medium">{selectedFile.name}</span>
-                    <span className="text-muted-foreground">
-                      ({formatFileSize(selectedFile.size)})
-                    </span>
+                <button
+                  type="button"
+                  onClick={() => openPreview(l)}
+                  disabled={!url}
+                  className={cn("block w-full border-b border-border text-left", url ? "cursor-zoom-in" : "cursor-default")}
+                  aria-label={url ? `Open preview of ${l.name}` : undefined}
+                >
+                  <LandingThumbnail landing={l} />
+                </button>
+                <div className="flex items-start gap-2 px-3 py-2.5">
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-[13px] font-medium">{l.name}</span>
+                      <TypeBadge type={l.type} />
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span className="font-data">{formatBytes(l.file_size)}</span>
+                      <span className="text-subtle-foreground">·</span>
+                      <RelativeTime date={l.created_at} className="text-xs" />
+                      {(l.owner_name || l.owner_email) && (
+                        <>
+                          <span className="text-subtle-foreground">·</span>
+                          <span className="truncate">{l.owner_name || l.owner_email}</span>
+                        </>
+                      )}
+                    </div>
                   </div>
-                ) : (
-                  <div className="flex flex-col items-center gap-2">
-                    <Upload className="h-8 w-8 text-muted-foreground" />
-                    <span className="text-muted-foreground">
-                      Click to select a ZIP file
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      Max 50MB
-                    </span>
-                  </div>
-                )}
+                  {actions(l)}
+                </div>
               </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowUploadDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleUpload} disabled={uploading}>
-              {uploading ? "Uploading..." : "Upload"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            );
+          })}
+        </div>
+      )}
 
-      {/* Delete Confirmation */}
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Static Content</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete &quot;{landingToDelete?.name}&quot;? 
-              This will also remove it from any nginx configurations using it.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <LandingUploadDialog
+        open={uploadOpen}
+        onOpenChange={setUploadOpen}
+        existingNames={landings.map((l) => l.name)}
+        onUploaded={(l) => {
+          setData((prev) => (prev ? [l, ...prev] : [l]));
+          refresh();
+        }}
+      />
     </div>
   );
 }
-

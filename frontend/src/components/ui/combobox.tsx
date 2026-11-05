@@ -55,6 +55,8 @@ export interface ComboboxBaseProps<T> {
   /** Rendered at the bottom of the list (e.g. "Create new…" item). */
   footer?: React.ReactNode
   size?: "sm" | "default"
+  /** Called when the search text changes (e.g. to offer "Create “query”" in `footer`). */
+  onSearchChange?: (search: string) => void
 }
 
 export interface ComboboxProps<T> extends ComboboxBaseProps<T> {
@@ -152,7 +154,14 @@ function ComboboxList<T>({
 
   return (
     <Command filter={fuzzyFilter} loop>
-      <CommandInput placeholder={searchPlaceholder} value={search} onValueChange={setSearch} />
+      <CommandInput
+        placeholder={searchPlaceholder}
+        value={search}
+        onValueChange={(s) => {
+          setSearch(s)
+          props.onSearchChange?.(s)
+        }}
+      />
       <CommandList>
         {loading ? (
           <div className="space-y-1.5 p-2">
