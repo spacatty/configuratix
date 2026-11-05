@@ -1,0 +1,5 @@
+# Shell scripts and container files must keep LF endings (they run inside Linux containers)
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.template text eol=lf
+docker-compose.yml text eol=lf

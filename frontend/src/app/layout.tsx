@@ -31,6 +31,9 @@ export const viewport: Viewport = {
   colorScheme: "dark",
 };
 
+// Read PUBLIC_API_URL per request (runtime env), not at build time.
+export const dynamic = "force-dynamic";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -38,6 +41,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`dark ${fontSans.variable} ${fontMono.variable}`} suppressHydrationWarning>
+      <head>
+        {/* Runtime backend URL for the browser bundle; empty means "same origin". */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `window.__CFX_API_URL__=${JSON.stringify(process.env.PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_URL || "").replace(/</g, String.fromCharCode(92) + "u003c")};`,
+          }}
+        />
+      </head>
       <body className="font-sans antialiased">{children}</body>
     </html>
   );

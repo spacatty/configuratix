@@ -1,0 +1,76 @@
+# Configuratix: docker compose up -d --build
+#
+# Everything is configured through .env (same file as before). The database is external:
+# DATABASE_URL keeps pointing at your existing Postgres, migrations run on backend start.
+#
+# Host ports (all optional, see .env.example):
+#   APP_PORT       single-origin gateway: UI + /api + websockets + install.sh  (recommended)
+#   BACKEND_PORT   backend published directly (keeps old agent / proxy URLs working)
+#   FRONTEND_PORT  UI published directly (keeps an old "UI on its own port" proxy working)
+#   BIND_ADDR      host address to bind the ports to (127.0.0.1 when only a local proxy connects)
+
+name: configuratix
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: configuratix-backend:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: ${TZ:-UTC}
+    # Lets DATABASE_URL use host.docker.internal for a Postgres running on the host itself.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Landing uploads/previews: the existing backend/data directory is used in place.
+      - ${DATA_DIR:-./backend/data}:/app/backend/data
+      # Built agent binaries (rebuilt automatically when the image ships a new agent version).
+      - agent-binaries:/app/backend/agent-binaries
+      - go-build-cache:/root/.cache/go-build
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${BACKEND_PORT:-8080}:8080"
+    logging: *logging
+
+  frontend:
+    build:
+      context: ./frontend
+    image: configuratix-frontend:latest
+    restart: unless-stopped
+    environment:
+      # Empty = same origin (via the gateway). Set to the backend's public URL to keep a split
+      # UI/API setup (e.g. https://api.example.com). Read at runtime, no rebuild needed.
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-${NEXT_PUBLIC_API_URL:-}}
+      TZ: ${TZ:-UTC}
+    depends_on:
+      - backend
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${FRONTEND_PORT:-3000}:3000"
+    logging: *logging
+
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    environment:
+      GATEWAY_MAX_BODY_SIZE: ${GATEWAY_MAX_BODY_SIZE:-512m}
+      NGINX_ENVSUBST_FILTER: ^GATEWAY_
+    volumes:
+      - ./deploy/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${APP_PORT:-8000}:80"
+    logging: *logging
+
+volumes:
+  agent-binaries:
+  go-build-cache:

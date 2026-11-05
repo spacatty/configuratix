@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { ArrowRight, CheckCircle2, KeyRound, Plus, Terminal } from "lucide-react";
-import { api, BACKEND_URL, type EnrollmentToken, type Machine } from "@/lib/api";
+import { api, getBackendUrl, type EnrollmentToken, type Machine } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { CopyButton, RelativeTime, Spinner, StatusDot, errorMessage, invalidatePickerCache, machineDisplayName, machineIp, usePolling } from "@/components/app";
 
 export function installCommand(token: string) {
-  return `curl -sSL ${BACKEND_URL}/install.sh | sudo bash -s -- ${token}`;
+  return `curl -sSL ${getBackendUrl()}/install.sh | sudo bash -s -- ${token}`;
 }
 
 /** Copyable shell one-liner block. */

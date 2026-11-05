@@ -1,0 +1,50 @@
+# Single-origin gateway: the UI and the API share one host/port, so the frontend needs no API URL.
+# Rendered by the nginx image's envsubst (only ${GATEWAY_*} variables are substituted).
+
+# Trust the outer reverse proxy's scheme/host if it sends them; otherwise use our own.
+map $http_x_forwarded_proto $cfx_proto {
+    default $http_x_forwarded_proto;
+    ""      $scheme;
+}
+map $http_x_forwarded_host $cfx_host {
+    default $http_x_forwarded_host;
+    ""      $http_host;
+}
+map $http_upgrade $cfx_connection {
+    default upgrade;
+    ""      close;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    client_max_body_size ${GATEWAY_MAX_BODY_SIZE};
+    proxy_http_version 1.1;
+    proxy_set_header Host              $cfx_host;
+    proxy_set_header X-Forwarded-Host  $cfx_host;
+    proxy_set_header X-Forwarded-Proto $cfx_proto;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Real-IP         $remote_addr;
+
+    # API, agent endpoints and websockets (terminal / files). Long timeouts keep shells alive.
+    location /api/ {
+        proxy_pass http://backend:8080;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $cfx_connection;
+        proxy_read_timeout  3600s;
+        proxy_send_timeout  3600s;
+        proxy_buffering     off;
+        proxy_request_buffering off;
+    }
+
+    location = /install.sh {
+        proxy_pass http://backend:8080;
+    }
+
+    location / {
+        proxy_pass http://frontend:3000;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $cfx_connection;
+    }
+}

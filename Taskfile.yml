@@ -57,35 +57,25 @@ tasks:
   # PRODUCTION
   # ============================================
   prod:
-    desc: Start production environment (installs deps, builds, runs backend + frontend)
+    desc: Build and (re)start production in Docker (docker compose up -d --build)
     cmds:
-      - task: deps
-      - task: db:check
-      - task: prod:run
+      - docker compose up -d --build
+      - docker compose ps
 
-  prod:run:
-    desc: Run backend and frontend in parallel (production)
-    deps: [prod:backend, prod:frontend]
-
-  prod:backend:
-    desc: Build and run backend in production mode
-    dir: backend
+  prod:logs:
+    desc: Follow production logs (task prod:logs -- backend)
     cmds:
-      - echo "Building backend..."
-      - go build -o bin/server.exe cmd/server/main.go
-      - echo "Starting backend on port {{.BACKEND_PORT}}..."
-      - bin/server.exe
+      - docker compose logs -f --tail=200 {{.CLI_ARGS}}
 
-  prod:frontend:
-    desc: Build and run frontend in production mode
-    dir: frontend
-    env:
-      NEXT_PUBLIC_API_URL: '{{.NEXT_PUBLIC_API_URL}}'
+  prod:down:
+    desc: Stop production containers (data and DB untouched)
     cmds:
-      - echo "Building frontend with API URL {{.NEXT_PUBLIC_API_URL}}..."
-      - pnpm build
-      - echo "Starting frontend on port {{.FRONTEND_PORT}}..."
-      - pnpm start -p {{.FRONTEND_PORT}}
+      - docker compose down
+
+  prod:ps:
+    desc: Show production container status
+    cmds:
+      - docker compose ps
 
   # ============================================
   # DEPENDENCY MANAGEMENT

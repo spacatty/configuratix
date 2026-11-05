@@ -1,0 +1,20 @@
+# Build context is the repo root (backend image needs agent/ sources)
+.git
+.claude
+.cursor
+.task
+.env
+.env.*
+!.env.example
+**/node_modules
+frontend/.next
+backend/bin
+backend/server
+backend/server.exe
+backend/cmd/server/server.exe
+backend/data
+backend/agent-binaries/configuratix-agent*
+agent/agent
+agent/bin
+**/*.exe
+dev

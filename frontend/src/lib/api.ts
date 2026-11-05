@@ -1,8 +1,24 @@
-// Backend API URL - used for all API calls and agent install script
-export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+/**
+ * Backend origin, resolved at call time (not import time):
+ *   1. window.__CFX_API_URL__  - injected by the root layout from the server's runtime env
+ *                                (PUBLIC_API_URL / NEXT_PUBLIC_API_URL), so Docker images need no rebuild
+ *   2. NEXT_PUBLIC_API_URL     - inlined at build time (local dev via Taskfile)
+ *   3. the page's own origin   - single-origin deployments (gateway routes /api to the backend)
+ */
+export function getApiUrl(): string {
+  if (typeof window !== "undefined") {
+    const injected = (window as Window & { __CFX_API_URL__?: string }).__CFX_API_URL__;
+    if (injected) return injected.replace(/\/+$/, "");
+    if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, "");
+    return window.location.origin;
+  }
+  return (process.env.PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080").replace(/\/+$/, "");
+}
 
-// Backend URL without /api suffix - for install script and direct backend access
-export const BACKEND_URL = API_URL.replace(/\/api\/?$/, "");
+/** Backend URL without an /api suffix - for the install one-liner and direct backend access. */
+export function getBackendUrl(): string {
+  return getApiUrl().replace(/\/api\/?$/, "");
+}
 
 export interface LoginRequest {
   email: string;
@@ -910,11 +926,9 @@ export interface AdminStats {
 }
 
 class ApiClient {
-  private baseUrl: string;
   private token: string | null = null;
 
-  constructor(baseUrl: string) {
-    this.baseUrl = baseUrl;
+  constructor() {
     if (typeof window !== "undefined") {
       this.token = localStorage.getItem("auth_token");
     }
@@ -931,8 +945,12 @@ class ApiClient {
     }
   }
 
+  private get baseUrl(): string {
+    return getApiUrl();
+  }
+
   getApiUrl(): string {
-    return this.baseUrl;
+    return getApiUrl();
   }
 
   getToken(): string | null {
@@ -2857,4 +2875,4 @@ export interface TrackerDashboardSummary {
   overdue_count: number;
 }
 
-export const api = new ApiClient(API_URL);
+export const api = new ApiClient();

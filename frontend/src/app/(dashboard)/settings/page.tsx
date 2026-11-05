@@ -20,7 +20,7 @@ import {
   StatusBadge,
   usePolling,
 } from "@/components/app";
-import { API_URL, BACKEND_URL, api } from "@/lib/api";
+import { api, getApiUrl, getBackendUrl } from "@/lib/api";
 import { formatBytes, formatNumber } from "@/lib/format";
 
 /**
@@ -103,8 +103,8 @@ export default function SettingsPage() {
           >
             <KeyValueList
               items={[
-                { label: "API URL", value: <CopyableMono value={API_URL} /> },
-                { label: "Backend origin", value: <CopyableMono value={BACKEND_URL} />, hidden: BACKEND_URL === API_URL },
+                { label: "API URL", value: <CopyableMono value={getApiUrl()} /> },
+                { label: "Backend origin", value: <CopyableMono value={getBackendUrl()} />, hidden: getBackendUrl() === getApiUrl() },
                 {
                   label: "Round-trip",
                   value: agent.data ? <Mono>{agent.data.latency} ms</Mono> : <Mono muted>—</Mono>,
@@ -114,7 +114,7 @@ export default function SettingsPage() {
                     </>
                   ) : undefined,
                 },
-                { label: "Source", value: <span className="text-muted-foreground">NEXT_PUBLIC_API_URL (build time)</span> },
+                { label: "Source", value: <span className="text-muted-foreground">PUBLIC_API_URL (runtime) · same origin when unset</span> },
               ]}
             />
             {agent.error && !agent.data ? <ErrorState className="mt-4" size="compact" title="Control plane didn't respond" error={agent.error} onRetry={agent.refresh} /> : null}
