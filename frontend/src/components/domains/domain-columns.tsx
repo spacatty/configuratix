@@ -147,7 +147,7 @@ export function buildDomainColumns({
         if (!d.config_id) return <span className="text-muted-foreground">—</span>;
         return (
           <Link
-            href={`/configs/nginx?edit=${d.config_id}`}
+            href={`/configs/nginx/${d.config_id}`}
             className="inline-flex max-w-[180px] items-center gap-1.5 truncate text-[13px] hover:underline"
           >
             <FileCog className="size-3.5 shrink-0 text-muted-foreground" />

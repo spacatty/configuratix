@@ -47,26 +47,7 @@ export function DNSZonesView() {
   const zones = React.useMemo(() => zonesQ.data ?? [], [zonesQ.data]);
   const accounts = React.useMemo(() => accountsQ.data ?? [], [accountsQ.data]);
 
-  // Record counts (best effort, one request per zone)
-  const zoneKey = zones.map((z) => z.id).join(",");
-  const countsQ = usePolling(
-    async () => {
-      const entries = await Promise.all(
-        zones.map(async (z) => {
-          try {
-            const r = await api.listDNSRecords(z.id);
-            return [z.id, r.length] as const;
-          } catch {
-            return [z.id, null] as const;
-          }
-        })
-      );
-      return Object.fromEntries(entries) as Record<string, number | null>;
-    },
-    0,
-    { enabled: zones.length > 0, deps: [zoneKey] }
-  );
-  const counts = React.useMemo(() => countsQ.data ?? {}, [countsQ.data]);
+
 
   const [addOpen, setAddOpen] = React.useState(false);
   const [accountDialog, setAccountDialog] = React.useState<{ open: boolean; account: DNSAccount | null }>({ open: false, account: null });
@@ -167,13 +148,12 @@ export function DNSZonesView() {
       },
       {
         id: "records",
-        accessorFn: (z) => counts[z.id] ?? -1,
+        accessorFn: (z) => z.records_count ?? -1,
         header: "Records",
         meta: { align: "right" },
         cell: ({ row }) => {
-          const n = counts[row.original.id];
-          if (countsQ.loading && n === undefined) return <span className="text-muted-foreground">…</span>;
-          return <span className="font-data">{n ?? "—"}</span>;
+          const n = row.original.records_count;
+          return <span className="font-data">{typeof n === "number" ? n : "—"}</span>;
         },
       },
       {
@@ -215,7 +195,7 @@ export function DNSZonesView() {
         },
       },
     ],
-    [counts, countsQ.loading, checking, router, checkNS, remove]
+    [checking, router, checkNS, remove]
   );
 
   const stats = React.useMemo(() => {
@@ -248,7 +228,7 @@ export function DNSZonesView() {
         back={{ href: "/domains", label: "Domains" }}
         actions={
           <>
-            <Button variant="ghost" size="icon" aria-label="Refresh" onClick={() => { void zonesQ.refresh(); void accountsQ.refresh(); void countsQ.refresh(); }}>
+            <Button variant="ghost" size="icon" aria-label="Refresh" onClick={() => { void zonesQ.refresh(); void accountsQ.refresh(); }}>
               {zonesQ.refreshing ? <Spinner /> : <RefreshCw />}
             </Button>
             <Button variant="outline" onClick={() => setAccountDialog({ open: true, account: null })}>

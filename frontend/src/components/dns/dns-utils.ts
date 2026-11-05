@@ -1,4 +1,6 @@
-import type { StatusTone } from "@/components/app";
+import { toast } from "sonner";
+
+import { trackJob, type StatusTone } from "@/components/app";
 import type { DomainJobsResponse } from "@/lib/api";
 
 export type DNSProviderId = "cloudflare" | "desec" | "njalla" | "cloudns" | "dnspod";
@@ -196,4 +198,19 @@ export function jobIdsOf(res: unknown): string[] {
     if (anyJ.id ?? anyJ.job_id) ids.add((anyJ.id ?? anyJ.job_id)!);
   }
   return [...ids];
+}
+
+/**
+ * Track every job in a `{jobs, errors}` response (passthrough apply / L7 issue).
+ * Uses the server's job titles; per-machine errors are surfaced in one toast.
+ */
+export function trackJobsFrom(res: unknown, fallbackTitle: string, onDone?: () => void): number {
+  const r = (res ?? {}) as { jobs?: Array<{ id?: string; job_id?: string; title?: string | null }>; errors?: string[] };
+  const ids = jobIdsOf(res);
+  const titles = new Map<string, string | null | undefined>();
+  for (const j of r.jobs ?? []) if (j.id ?? j.job_id) titles.set((j.id ?? j.job_id)!, j.title);
+  ids.forEach((id) => trackJob(id, { title: titles.get(id) ?? fallbackTitle, onDone: () => onDone?.() }));
+  if (r.errors?.length) toast.warning(`${fallbackTitle}: ${r.errors.length} machine(s) skipped`, { description: r.errors.join("\n") });
+  else if (!ids.length) toast.info(`${fallbackTitle}: nothing to do`, { description: "No pool machines needed changes." });
+  return ids.length;
 }

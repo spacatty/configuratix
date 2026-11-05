@@ -45,12 +45,11 @@ import {
   StatusBadge,
   StatusDot,
   errorMessage,
-  trackJob,
   useConfirm,
   usePolling,
 } from "@/components/app";
 
-import { jobIdsOf, recordHost } from "./dns-utils";
+import { recordHost, trackJobsFrom } from "./dns-utils";
 import { L7CertificatesCard } from "./l7-certificates-card";
 import { PoolEditorSheet } from "./pool-editor-sheet";
 import { EMPTY_POOL, PoolFields, draftFromPool, validatePool, type PoolDraft } from "./pool-fields";
@@ -61,10 +60,8 @@ type HistoryTarget = { poolId: string; wildcard: boolean; label: string } | null
 /** Regenerate nginx for a pool; tracks jobs when the backend returns them. */
 async function regenerate(poolId: string, wildcard: boolean, label: string) {
   try {
-    const res: unknown = await api.regeneratePoolConfigs(poolId, wildcard);
-    const ids = jobIdsOf(res);
-    if (ids.length) ids.forEach((id) => trackJob(id, { title: `Regenerate nginx · ${label}` }));
-    else toast.success(`Config push queued for ${label}`, { description: "Each pool machine rewrites, tests and reloads nginx." });
+    const res = await api.regeneratePoolConfigs(poolId, wildcard);
+    trackJobsFrom(res, `Push nginx configs · ${label}`);
   } catch (e) {
     toast.error("Couldn't regenerate configs", { description: errorMessage(e) });
   }

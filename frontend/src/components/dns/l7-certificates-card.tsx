@@ -15,13 +15,12 @@ import {
   StatusBadge,
   errorMessage,
   openJobLogs,
-  trackJob,
   usePolling,
   useConfirm,
 } from "@/components/app";
 import { formatDate } from "@/lib/format";
 
-import { jobIdsOf } from "./dns-utils";
+import { trackJobsFrom } from "./dns-utils";
 
 const CERT_TONE: Record<string, "success" | "warning" | "destructive" | "info" | "muted"> = {
   valid: "success",
@@ -56,13 +55,7 @@ export function L7CertificatesCard({ domainId }: { domainId: string }) {
     setIssuing(true);
     try {
       const res = await api.issueDomainL7Certificates(domainId);
-      const ids = jobIdsOf(res);
-      if (ids.length) ids.forEach((id) => trackJob(id, { title: "Issue L7 certificates", onDone: () => void q.refresh() }));
-      else
-        toast.info("Certificate jobs queued on pool machines", {
-          description: "Status updates here as each machine reports back.",
-          action: { label: "Jobs", onClick: () => (window.location.href = "/jobs") },
-        });
+      trackJobsFrom(res, "Issue L7 certificates", () => void q.refresh());
       setTimeout(() => void q.refresh(), 2000);
     } catch (e) {
       toast.error("Couldn't queue issuance", { description: errorMessage(e) });

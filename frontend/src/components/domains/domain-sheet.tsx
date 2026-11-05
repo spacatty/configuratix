@@ -180,7 +180,20 @@ export function DomainSheet({
                   labelWidth={120}
                   items={[
                     { label: "Status", value: <DomainHealthCell domain={d} /> },
-                    { label: "Expected status", value: String(d.health_check_expected_status ?? 200), mono: true },
+                    { label: "Check", value: `${d.health_check_path || "/"} → ${d.health_check_expected_status ?? 200}`, mono: true },
+                    {
+                      label: "Last response",
+                      value:
+                        typeof d.last_check_status_code === "number"
+                          ? `HTTP ${d.last_check_status_code}${typeof d.last_check_response_ms === "number" ? ` · ${d.last_check_response_ms} ms` : ""}`
+                          : "—",
+                      mono: true,
+                    },
+                    {
+                      label: "Last error",
+                      value: <span className="font-data text-[12px] break-words text-destructive">{d.last_check_error}</span>,
+                      hidden: !d.last_check_error,
+                    },
                   ]}
                 />
               </SectionCard>

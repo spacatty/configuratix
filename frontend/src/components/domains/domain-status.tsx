@@ -40,10 +40,17 @@ export function DomainHealthCell({ domain }: { domain: Domain }) {
           {typeof code === "number" && (
             <div>
               Response <span className="font-data">HTTP {code}</span>
+              {typeof domain.last_check_response_ms === "number" && (
+                <span className="font-data text-muted-foreground"> · {domain.last_check_response_ms} ms</span>
+              )}
             </div>
           )}
+          {domain.last_check_error && (
+            <div className="font-data max-w-xs text-[11px] text-destructive">{domain.last_check_error.slice(0, 300)}</div>
+          )}
           <div className="text-muted-foreground">
-            Healthy when HTTPS returns <span className="font-data">{expected}</span>
+            Healthy when <span className="font-data">{domain.health_check_path || "/"}</span> returns{" "}
+            <span className="font-data">{expected}</span>
           </div>
         </div>
       </TooltipContent>

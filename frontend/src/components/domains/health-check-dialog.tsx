@@ -25,6 +25,7 @@ export interface HealthCheckDialogProps {
 
 export function HealthCheckDialog({ open, onOpenChange, domain, onChanged }: HealthCheckDialogProps) {
   const [expected, setExpected] = React.useState("200");
+  const [path, setPath] = React.useState("/");
   const [saving, setSaving] = React.useState(false);
   const [checking, setChecking] = React.useState(false);
   const [lastResult, setLastResult] = React.useState<string | null>(null);
@@ -32,13 +33,19 @@ export function HealthCheckDialog({ open, onOpenChange, domain, onChanged }: Hea
   React.useEffect(() => {
     if (open && domain) {
       setExpected(String(domain.health_check_expected_status ?? 200));
+      setPath(domain.health_check_path || "/");
       setLastResult(null);
     }
   }, [open, domain]);
 
   const code = Number.parseInt(expected, 10);
   const invalid = Number.isNaN(code) || code < 100 || code > 599;
-  const dirty = !!domain && !invalid && code !== (domain.health_check_expected_status ?? 200);
+  const pathInvalid = !path.startsWith("/") || /\s/.test(path) || path.length > 512;
+  const dirty =
+    !!domain &&
+    !invalid &&
+    !pathInvalid &&
+    (code !== (domain.health_check_expected_status ?? 200) || path !== (domain.health_check_path || "/"));
 
   const runCheck = async () => {
     if (!domain) return;
@@ -58,8 +65,8 @@ export function HealthCheckDialog({ open, onOpenChange, domain, onChanged }: Hea
     if (!domain || invalid) return;
     setSaving(true);
     try {
-      await api.updateDomainHealthCheck(domain.id, code);
-      toast.success("Health check updated", { description: `${domain.fqdn} is healthy on HTTP ${code}` });
+      await api.updateDomainHealthCheck(domain.id, code, path);
+      toast.success("Health check updated", { description: `https://${domain.fqdn}${path === "/" ? "" : path} → HTTP ${code}` });
       onChanged();
       if (andCheck) await runCheck();
       else onOpenChange(false);
@@ -100,12 +107,43 @@ export function HealthCheckDialog({ open, onOpenChange, domain, onChanged }: Hea
               {
                 label: "Last response",
                 value:
-                  typeof domain?.last_check_status_code === "number" ? `HTTP ${domain.last_check_status_code}` : "—",
-                mono: true,
+                  typeof domain?.last_check_status_code === "number" ? (
+                    <span className="font-data">
+                      HTTP {domain.last_check_status_code}
+                      {typeof domain.last_check_response_ms === "number" && (
+                        <span className="text-muted-foreground"> · {domain.last_check_response_ms} ms</span>
+                      )}
+                    </span>
+                  ) : (
+                    "—"
+                  ),
                 hidden: typeof domain?.last_check_status_code !== "number",
+              },
+              {
+                label: "Last error",
+                value: <span className="font-data text-[12px] text-destructive">{domain?.last_check_error}</span>,
+                hidden: !domain?.last_check_error,
               },
             ]}
           />
+
+          <div className="space-y-2">
+            <Label htmlFor="check-path">Path</Label>
+            <div className="flex items-center rounded-md border border-input focus-within:ring-2 focus-within:ring-ring/40">
+              <span className="font-data max-w-[45%] shrink-0 truncate pl-3 text-[12px] text-subtle-foreground">
+                https://{domain?.fqdn}
+              </span>
+              <Input
+                id="check-path"
+                className="font-data border-0 pl-0.5 focus-visible:ring-0"
+                value={path}
+                aria-invalid={pathInvalid}
+                placeholder="/"
+                onChange={(e) => setPath(e.target.value.trim() || "/")}
+              />
+            </div>
+            {pathInvalid && <p className="text-xs text-destructive">Must start with / and contain no spaces.</p>}
+          </div>
 
           <div className="space-y-2">
             <Label htmlFor="expected-status">Expected HTTP status</Label>

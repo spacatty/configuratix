@@ -425,6 +425,18 @@ export interface MachineNginxInventory {
   fetched_at: string;
 }
 
+export interface NginxExpectedFile {
+  path: string;
+  content: string;
+  /** sha256 of content; compare with NginxFileEntry.sha256. */
+  sha256: string;
+  source: {
+    kind: "domain" | "passthrough_stream" | "passthrough_http" | "passthrough_l7";
+    domain_id?: string;
+    nginx_config_id?: string;
+  };
+}
+
 /** 202 response when the inventory job did not finish within ~20s. */
 export interface MachineNginxPending {
   pending: true;
@@ -1487,6 +1499,13 @@ class ApiClient {
     return this.request<NginxJobResult | JobCreated>(
       `/api/machines/${encodeURIComponent(machineId)}/nginx/reload${wait ? "?wait=1" : ""}`,
       { method: "POST" },
+    );
+  }
+
+  /** What Configuratix would write for a managed nginx file (rejects with a 404 message for unmanaged paths). */
+  async getMachineNginxExpected(machineId: string, path: string): Promise<NginxExpectedFile> {
+    return this.request<NginxExpectedFile>(
+      `/api/machines/${encodeURIComponent(machineId)}/nginx/expected?path=${encodeURIComponent(path)}`,
     );
   }
 
