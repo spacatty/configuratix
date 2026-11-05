@@ -6,15 +6,26 @@ import (
 	"errors"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
-var jwtSecret []byte
+var (
+	jwtSecret     []byte
+	jwtSecretOnce sync.Once
+)
 
-func init() {
+// secret resolves JWT_SECRET lazily: package init runs before main loads .env,
+// which made every restart fall back to a random secret and log all users out.
+func secret() []byte {
+	jwtSecretOnce.Do(loadSecret)
+	return jwtSecret
+}
+
+func loadSecret() {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		log.Println("WARNING: JWT_SECRET not set! Using random secret (tokens will not persist across restarts)")
@@ -58,7 +69,7 @@ func GenerateToken(userID, email, role string) (string, error) {
 	if role == "" {
 		role = "user"
 	}
-	
+
 	now := time.Now()
 	claims := Claims{
 		UserID: userID,
@@ -74,7 +85,7 @@ func GenerateToken(userID, email, role string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
+	return token.SignedString(secret())
 }
 
 func ValidateToken(tokenString string) (*Claims, error) {
@@ -83,7 +94,7 @@ func ValidateToken(tokenString string) (*Claims, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, errors.New("unexpected signing method")
 		}
-		return jwtSecret, nil
+		return secret(), nil
 	})
 
 	if err != nil {

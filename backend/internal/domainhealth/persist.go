@@ -63,9 +63,9 @@ func RunCheckAndPersist(db *database.DB, id uuid.UUID) (newStatus string, err er
 
 	// updated_at only changes with the status (it feeds other change tracking).
 	_, err = db.Exec(`
-		UPDATE domains SET status = $1, last_check_at = NOW(),
+		UPDATE domains SET status = $1::text, last_check_at = NOW(),
 			last_check_status_code = $3, last_check_response_ms = $4, last_check_error = $5,
-			updated_at = CASE WHEN status IS DISTINCT FROM $1 THEN NOW() ELSE updated_at END
+			updated_at = CASE WHEN status::text IS DISTINCT FROM $1::text THEN NOW() ELSE updated_at END
 		WHERE id = $2
 	`, newStatus, id, res.StatusCode, res.ResponseMS, checkErr)
 	return newStatus, err

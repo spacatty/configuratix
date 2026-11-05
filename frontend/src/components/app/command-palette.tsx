@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Globe, LogOut, Search, Server } from "lucide-react";
+import { FileCode2, Globe, KeyRound, ListChecks, LogOut, Search, Server, Terminal, type LucideIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { api, type Domain, type Machine } from "@/lib/api";
@@ -22,8 +22,68 @@ import { Kbd } from "@/components/ui/kbd";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusDot } from "@/components/app/status";
 import { visibleSections } from "@/components/app/nav";
+import { AddMachineDialog } from "@/components/machines/add-machine-dialog";
 
-const PaletteCtx = React.createContext<{ open: () => void } | null>(null);
+const PaletteCtx = React.createContext<{ open: (initialSearch?: string) => void } | null>(null);
+
+type QuickAction = {
+  slash: string;
+  title: string;
+  hint: string;
+  icon: LucideIcon;
+  keywords: string[];
+  run: (ctx: { go: (href: string) => void; newToken: () => void }) => void;
+};
+
+/** Slash commands: type "/new" (or press "/" anywhere) and hit Enter. */
+const QUICK_ACTIONS: QuickAction[] = [
+  {
+    slash: "/new",
+    title: "New enrollment token",
+    hint: "Add a machine with a one-line install command",
+    icon: KeyRound,
+    keywords: ["token", "enroll", "enrollment", "add machine", "install", "agent", "server"],
+    run: ({ newToken }) => newToken(),
+  },
+  {
+    slash: "/domain",
+    title: "Add domains",
+    hint: "Paste one or many hostnames",
+    icon: Globe,
+    keywords: ["domain", "add", "create", "hostname"],
+    run: ({ go }) => go("/domains?new=1"),
+  },
+  {
+    slash: "/config",
+    title: "New nginx config",
+    hint: "Open the config editor",
+    icon: FileCode2,
+    keywords: ["nginx", "config", "create"],
+    run: ({ go }) => go("/configs/nginx/new"),
+  },
+  {
+    slash: "/run",
+    title: "Run a command",
+    hint: "Execute a template on a machine",
+    icon: Terminal,
+    keywords: ["command", "exec", "execute", "run"],
+    run: ({ go }) => go("/commands"),
+  },
+  {
+    slash: "/jobs",
+    title: "Open jobs",
+    hint: "Live activity across the fleet",
+    icon: ListChecks,
+    keywords: ["jobs", "activity", "logs"],
+    run: ({ go }) => go("/jobs"),
+  },
+];
+
+function isTypingTarget(t: EventTarget | null) {
+  const el = t as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  return el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || !!el.closest?.(".monaco-editor, .xterm");
+}
 
 /** Open the ⌘K palette programmatically. */
 export function useCommandPalette() {
@@ -40,14 +100,40 @@ export function CommandPaletteProvider({
   role?: string | null;
   onLogout?: () => void;
 }) {
+  const router = useRouter();
   const [open, setOpen] = React.useState(false);
-  const value = React.useMemo(() => ({ open: () => setOpen(true) }), []);
+  const [initialSearch, setInitialSearch] = React.useState("");
+  const [tokenOpen, setTokenOpen] = React.useState(false);
+  const [knownIds, setKnownIds] = React.useState<string[]>([]);
+  const value = React.useMemo(
+    () => ({
+      open: (s?: string) => {
+        setInitialSearch(s ?? "");
+        setOpen(true);
+      },
+    }),
+    []
+  );
+
+  // The dialog detects enrollment by diffing against the machines that existed when it opened.
+  const newToken = React.useCallback(() => {
+    api
+      .listMachines()
+      .then((ms) => setKnownIds(ms.map((m) => m.id)))
+      .catch(() => setKnownIds([]))
+      .finally(() => setTokenOpen(true));
+  }, []);
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
+        setInitialSearch("");
         setOpen((o) => !o);
+      } else if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey && !isTypingTarget(e.target)) {
+        e.preventDefault();
+        setInitialSearch("/");
+        setOpen(true);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -57,7 +143,20 @@ export function CommandPaletteProvider({
   return (
     <PaletteCtx.Provider value={value}>
       {children}
-      <CommandPalette open={open} onOpenChange={setOpen} role={role} onLogout={onLogout} />
+      <CommandPalette
+        open={open}
+        onOpenChange={setOpen}
+        initialSearch={initialSearch}
+        role={role}
+        onLogout={onLogout}
+        onNewToken={newToken}
+      />
+      <AddMachineDialog
+        open={tokenOpen}
+        onOpenChange={setTokenOpen}
+        knownMachineIds={knownIds}
+        onEnrolled={(m) => router.push(`/machines/${m.id}`)}
+      />
     </PaletteCtx.Provider>
   );
 }
@@ -65,13 +164,17 @@ export function CommandPaletteProvider({
 function CommandPalette({
   open,
   onOpenChange,
+  initialSearch,
   role,
   onLogout,
+  onNewToken,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
+  initialSearch: string;
   role?: string | null;
   onLogout?: () => void;
+  onNewToken: () => void;
 }) {
   const router = useRouter();
   const [machines, setMachines] = React.useState<Machine[] | null>(null);
@@ -85,11 +188,13 @@ function CommandPalette({
       setSearch("");
       return;
     }
+    setSearch(initialSearch);
     if (Date.now() - loadedAt.current < 60_000 && machines && domains) return;
     loadedAt.current = Date.now();
     api.listMachines().then(setMachines).catch(() => setMachines([]));
     api.listDomains().then(setDomains).catch(() => setDomains([]));
-  }, [open, machines, domains]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const go = (href: string) => {
     onOpenChange(false);
@@ -98,6 +203,14 @@ function CommandPalette({
 
   const sections = visibleSections(role);
   const q = search.trim();
+  // "/..." switches the palette into command mode: only quick actions, matched by slash prefix.
+  const slashMode = q.startsWith("/");
+  const slashWord = q.toLowerCase().split(/\s+/)[0];
+  const actions = slashMode ? QUICK_ACTIONS.filter((a) => a.slash.startsWith(slashWord)) : QUICK_ACTIONS;
+  const runAction = (a: QuickAction) => {
+    onOpenChange(false);
+    a.run({ go: (href) => router.push(href), newToken: onNewToken });
+  };
   // Keep entity groups small until the user types
   const machineLimit = q ? 30 : 5;
   const domainLimit = q ? 30 : 5;
@@ -108,10 +221,10 @@ function CommandPalette({
       onOpenChange={onOpenChange}
       title="Command palette"
       description="Jump to pages, machines and domains"
-      commandProps={{ filter: fuzzyFilter, loop: true }}
+      commandProps={{ filter: slashMode ? () => 1 : fuzzyFilter, loop: true }}
     >
       <CommandInput
-        placeholder="Search pages, machines, domains, IPs…"
+        placeholder="Search pages, machines, domains, IPs… or type / for actions"
         value={search}
         onValueChange={setSearch}
         wrapperClassName="h-12"
@@ -125,7 +238,25 @@ function CommandPalette({
           </div>
         </CommandEmpty>
 
-        {sections.map((s) => (
+        {actions.length > 0 && (
+          <CommandGroup heading="Quick actions">
+            {actions.map((a) => (
+              <CommandItem
+                key={a.slash}
+                value={`action:${a.slash}`}
+                keywords={[a.slash, a.title, ...a.keywords]}
+                onSelect={() => runAction(a)}
+              >
+                <a.icon />
+                <span>{a.title}</span>
+                <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">{a.hint}</span>
+                <CommandShortcut className="font-data tracking-normal text-primary/90">{a.slash}</CommandShortcut>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
+
+        {!slashMode && sections.map((s) => (
           <CommandGroup key={s.title} heading={s.title}>
             {s.items.flatMap((item) => {
               const rows = item.children?.length ? item.children.map((c) => ({ ...c, parent: item.title })) : [{ ...item, parent: undefined as string | undefined }];
@@ -145,6 +276,8 @@ function CommandPalette({
           </CommandGroup>
         ))}
 
+        {!slashMode && (
+        <>
         <CommandSeparator className="my-1" />
         <CommandGroup heading="Machines">
           {machines === null ? (
@@ -207,7 +340,10 @@ function CommandPalette({
           )}
         </CommandGroup>
 
-        {onLogout && (
+        </>
+        )}
+
+        {onLogout && !slashMode && (
           <CommandGroup heading="Session">
             <CommandItem
               value="action:logout"
@@ -234,6 +370,9 @@ function CommandPalette({
         <span className="inline-flex items-center gap-1">
           <Kbd>esc</Kbd> close
         </span>
+        <span className="ml-auto inline-flex items-center gap-1">
+          <Kbd>/</Kbd> actions
+        </span>
       </div>
     </CommandDialog>
   );
@@ -249,7 +388,7 @@ export function CommandPaletteTrigger({ className }: { className?: string }) {
   return (
     <button
       type="button"
-      onClick={open}
+      onClick={() => open()}
       className={cn(
         "group inline-flex h-8 items-center gap-2 rounded-md border border-border bg-card/60 pr-1.5 pl-2.5 text-[13px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/30 outline-none",
         className

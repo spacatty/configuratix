@@ -30,7 +30,8 @@ const textSizeMap = {
 
 /** The Configuratix mark: a "C" arc routing to two config nodes. Flat brand red. */
 function Mark({ className }: { className?: string }) {
-  const id = React.useId();
+  // Static id: every instance draws the identical clip, and useId mismatches across the auth gate during hydration.
+  const id = "cfx-logo";
   return (
     <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden>
       <defs>

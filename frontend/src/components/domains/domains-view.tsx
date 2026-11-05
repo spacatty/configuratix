@@ -129,6 +129,16 @@ export function DomainsView() {
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [dialog, setDialog] = React.useState<DialogState>(null);
   const [createOpen, setCreateOpen] = React.useState(false);
+  // ?new=1 (the "/domain" palette action) opens the create dialog once, then drops the param.
+  const wantsNew = searchParams.get("new") === "1";
+  React.useEffect(() => {
+    if (!wantsNew) return;
+    setCreateOpen(true);
+    const sp = new URLSearchParams(searchParams.toString());
+    sp.delete("new");
+    const qs = sp.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [wantsNew, searchParams, router, pathname]);
   const [groupsSheet, setGroupsSheet] = React.useState<{ open: boolean; edit: string | "new" | null }>({ open: false, edit: null });
   const [sheetId, setSheetId] = React.useState<string | null>(null);
   const [retrying, setRetrying] = React.useState<Set<string>>(new Set());
