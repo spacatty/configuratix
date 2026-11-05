@@ -37,7 +37,7 @@ import { formatDateTime, formatNumber } from "@/lib/format";
 import { BAN_REASONS, BanReasonBadge, SecurityNav, banReasonLabel, fetchBans } from "@/components/security/shared";
 import { AddBanDialog, ExportBansDialog, ImportBansDialog } from "@/components/security/ban-dialogs";
 
-const PAGE_LIMIT = 1000;
+const PAGE_LIMIT = 2000;
 const NEVER_MS = 10 * 365 * 24 * 3600 * 1000;
 
 function banStatus(b: SecurityIPBan): "active" | "expired" | "inactive" {
@@ -152,6 +152,13 @@ function BansPageInner() {
       setDetail(null);
       refresh();
     }
+  };
+
+  const clearFilters = () => {
+    setSearch("");
+    setServerSearch("");
+    setReason(null);
+    router.replace("/security/bans");
   };
 
   const unbanAll = async () => {
@@ -372,24 +379,55 @@ function BansPageInner() {
               </Button>
             </>
           )}
+          emptyMessage="No bans match these filters."
           emptyState={
-            <EmptyState
-              icon={Ban}
-              title={serverSearch || reason ? "No bans match" : activeOnly ? "No active bans" : "No bans yet"}
-              description="IPs are banned automatically when they hit a blocked user agent or an invalid endpoint, or manually here."
-              action={
-                <Button onClick={() => setAddOpen(true)}>
-                  <Plus />
-                  Ban IP
-                </Button>
-              }
-              secondaryAction={
-                <Button variant="outline" onClick={() => setImportOpen(true)}>
-                  <Upload />
-                  Import list
-                </Button>
-              }
-            />
+            serverSearch || reason ? (
+              <EmptyState
+                icon={Ban}
+                title="No bans match these filters"
+                description={activeOnly ? "Only active bans are searched — try All." : undefined}
+                action={
+                  <Button variant="outline" onClick={clearFilters}>
+                    Clear filters
+                  </Button>
+                }
+              />
+            ) : activeOnly ? (
+              <EmptyState
+                icon={Ban}
+                title="No active bans"
+                description="Expired and lifted bans are hidden."
+                action={
+                  <Button variant="outline" onClick={() => setActiveOnly(false)}>
+                    Show all bans
+                  </Button>
+                }
+                secondaryAction={
+                  <Button onClick={() => setAddOpen(true)}>
+                    <Plus />
+                    Ban IP
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                icon={Ban}
+                title="No bans yet"
+                description="IPs are banned automatically when they hit a blocked user agent or an invalid endpoint, or manually here."
+                action={
+                  <Button onClick={() => setAddOpen(true)}>
+                    <Plus />
+                    Ban IP
+                  </Button>
+                }
+                secondaryAction={
+                  <Button variant="outline" onClick={() => setImportOpen(true)}>
+                    <Upload />
+                    Import list
+                  </Button>
+                }
+              />
+            )
           }
         />
       )}

@@ -77,6 +77,11 @@ export default function StaticContentPage() {
     );
   }, [landings, query, type]);
 
+  const clearFilters = () => {
+    setQuery("");
+    setType("all");
+  };
+
   const download = async (l: Landing) => {
     try {
       await api.downloadStatic(l.id, l.file_name);
@@ -288,7 +293,19 @@ export default function StaticContentPage() {
               Delete {rows.length}
             </Button>
           )}
-          emptyMessage="No uploads match your filters."
+          emptyMessage="No uploads match these filters."
+          emptyState={
+            <EmptyState
+              icon={Search}
+              title="No uploads match these filters"
+              size="compact"
+              action={
+                <Button variant="outline" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              }
+            />
+          }
         />
       ) : loading ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -297,7 +314,16 @@ export default function StaticContentPage() {
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <EmptyState icon={Search} title="No uploads match" size="compact" />
+        <EmptyState
+          icon={Search}
+          title="No uploads match these filters"
+          size="compact"
+          action={
+            <Button variant="outline" onClick={clearFilters}>
+              Clear filters
+            </Button>
+          }
+        />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filtered.map((l) => {

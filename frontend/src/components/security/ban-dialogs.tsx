@@ -16,7 +16,7 @@ import { Spinner, errorMessage } from "@/components/app";
 import { formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { FormField } from "./form-field";
-import { downloadText, fetchBans, isValidIp } from "./shared";
+import { isValidIp } from "./shared";
 
 /* -------------------------------------------------------------------------- */
 /* Add ban                                                                    */
@@ -491,19 +491,15 @@ export function ExportBansDialog({
   const run = async () => {
     setExporting(true);
     try {
-      const all = await fetchBans({ active_only: scope === "active" }, Number.MAX_SAFE_INTEGER);
+      const blob = await api.exportSecurityBans({ format, active_only: scope === "active" });
       const date = new Date().toISOString().split("T")[0];
-      if (format === "csv") {
-        const esc = (v: unknown) => String(v ?? "").replace(/"/g, '""');
-        const rows = all.bans.map(
-          (b) =>
-            `${b.ip_address},"${esc(b.reason)}","${esc(b.details?.user_agent)}","${esc(b.details?.path)}",${b.expires_at},${b.banned_at}`
-        );
-        downloadText(["ip_address,reason,user_agent,path,expires_at,banned_at", ...rows].join("\n"), `ip-bans-${date}.csv`, "text/csv");
-      } else {
-        downloadText(all.bans.map((b) => b.ip_address).join("\n"), `ip-bans-${date}.txt`);
-      }
-      toast.success(`Exported ${formatNumber(all.bans.length)} bans`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ip-bans-${date}.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Export downloaded");
       onOpenChange(false);
     } catch (err) {
       toast.error("Export failed", { description: errorMessage(err) });

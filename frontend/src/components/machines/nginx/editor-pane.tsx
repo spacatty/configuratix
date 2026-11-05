@@ -414,7 +414,7 @@ export function EditorPane({
               {file.nginxConfigId && (
                 <>
                   {" "}from{" "}
-                  <Link href={`/configs/nginx?config=${encodeURIComponent(file.nginxConfigId)}`} className="underline-offset-4 hover:text-foreground hover:underline">
+                  <Link href={`/configs/nginx/${encodeURIComponent(file.nginxConfigId)}`} className="underline-offset-4 hover:text-foreground hover:underline">
                     its nginx config
                   </Link>
                 </>

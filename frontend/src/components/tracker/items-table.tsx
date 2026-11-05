@@ -38,7 +38,12 @@ export function ItemsTable({
   onPaid,
   onOpenResource,
   onCreate,
+  filtered,
+  onClearFilters,
 }: {
+  /** True when an outside filter (category quick-filter) is narrowing `items`. */
+  filtered?: boolean;
+  onClearFilters?: () => void;
   items: TrackerItemWithCategory[];
   categories: TrackerCategoryWithCount[];
   loading?: boolean;
@@ -263,7 +268,26 @@ export function ItemsTable({
           Delete {rows.length}
         </Button>
       )}
+      emptyMessage="No items match these filters."
       emptyState={
+        filtered ? (
+          <EmptyState
+            icon={CalendarClock}
+            title="No items match these filters"
+            description="Nothing in this category yet."
+            action={
+              <Button variant="outline" onClick={onClearFilters}>
+                Clear filters
+              </Button>
+            }
+            secondaryAction={
+              <Button onClick={onCreate}>
+                <Plus />
+                New item
+              </Button>
+            }
+          />
+        ) : (
         <EmptyState
           icon={CalendarClock}
           title="Nothing tracked yet"
@@ -275,6 +299,7 @@ export function ItemsTable({
             </Button>
           }
         />
+        )
       }
     />
   );

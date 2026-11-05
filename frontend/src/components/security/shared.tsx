@@ -144,7 +144,7 @@ export function SecurityNav({ counts }: { counts?: Partial<Record<string, number
 /* Paged fetch                                                                */
 /* -------------------------------------------------------------------------- */
 
-const BAN_PAGE = 100; // backend caps page_size at 100
+const BAN_PAGE = 500; // backend clamps page_size to 1–500
 
 /**
  * Fetch up to `max` bans by walking the server's pages (newest first). Returns the rows and

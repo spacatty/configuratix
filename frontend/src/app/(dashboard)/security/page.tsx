@@ -25,7 +25,7 @@ const TIMELINE_DAYS = 14;
 export default function SecurityOverviewPage() {
   const stats = usePolling(() => api.getSecurityStats(), 30000);
   // Recent bans (incl. expired) → bars-over-time. Slower cadence; it's a heavier call.
-  const recent = usePolling(() => fetchBans({ active_only: false }, 500), 120000);
+  const recent = usePolling(() => fetchBans({ active_only: false }, 1000), 60000);
 
   const buckets = useMemo(
     () => (recent.data ? bucketByDay(recent.data.bans.map((b) => b.banned_at), TIMELINE_DAYS) : null),

@@ -361,6 +361,8 @@ export default function TrackerPage() {
                 onPaid={setPaidItem}
                 onOpenResource={openResource}
                 onCreate={openCreate}
+                filtered={categoryFilter !== "all" && items.length > 0}
+                onClearFilters={() => setCategoryFilter("all")}
               />
             </TabsContent>
 

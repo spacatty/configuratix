@@ -315,10 +315,18 @@ export default function UAPatternsPage() {
                 Delete {sel.length}
               </Button>
             )}
+            emptyMessage="No patterns match these filters."
             emptyState={
               <EmptyState
                 icon={Bot}
-                title={selected ? "No patterns in this category" : "No patterns"}
+                title={selected ? "No patterns in this category" : "No patterns yet"}
+                secondaryAction={
+                  selected ? (
+                    <Button variant="outline" onClick={() => setSelected(null)}>
+                      Show all categories
+                    </Button>
+                  ) : undefined
+                }
                 action={
                   <Button
                     onClick={() => {

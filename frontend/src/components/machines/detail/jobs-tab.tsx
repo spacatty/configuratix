@@ -265,7 +265,7 @@ export function JobsTab({ machineId, machineName, active }: { machineId: string;
             <TooltipContent>Refresh</TooltipContent>
           </Tooltip>
           <Button variant="ghost" size="sm" asChild>
-            <Link href={`/jobs?machine_id=${machineId}`}>
+            <Link href={`/jobs?machine=${machineId}`}>
               Open in Jobs
               <ArrowUpRight />
             </Link>

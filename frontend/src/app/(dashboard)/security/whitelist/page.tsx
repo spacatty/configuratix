@@ -180,6 +180,7 @@ export default function WhitelistPage() {
               Remove {rows.length}
             </Button>
           )}
+          emptyMessage="No entries match these filters."
           emptyState={
             <EmptyState
               icon={ShieldCheck}

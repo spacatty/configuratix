@@ -138,6 +138,7 @@ export function ResourcesTable({
           New resource
         </Button>
       }
+      emptyMessage="No resources match these filters."
       emptyState={
         <EmptyState
           icon={Link2}
