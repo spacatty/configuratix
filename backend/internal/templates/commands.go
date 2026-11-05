@@ -325,13 +325,9 @@ type RunPayload struct {
 
 // ToPayload converts template + variables to a run job payload
 func (t *CommandTemplate) ToPayload(vars map[string]string) json.RawMessage {
-	payload := RunPayload{
-		Steps:   t.Steps,
-		Vars:    vars,
-		OnError: t.OnError,
-	}
-	data, _ := json.Marshal(payload)
-	return data
+	// Variables are validated (and b64/secret vars encoded) before they reach the agent, which
+	// substitutes them verbatim into shell. Invalid input yields a payload that fails safely.
+	return t.SafeToPayload(vars)
 }
 
 // Built-in command templates
@@ -355,19 +351,6 @@ var Commands = map[string]*CommandTemplate{
 		},
 	},
 
-	"change_root_password": {
-		ID:          "change_root_password",
-		Name:        "Change Root Password",
-		Description: "Change the root user password",
-		Category:    "security",
-		Variables: []VariableDef{
-			{Name: "password", Type: "string", Required: true, Description: "New root password"},
-		},
-		OnError: "stop",
-		Steps: []Step{
-			{Action: "exec", Command: `echo "root:{{password}}" | chpasswd`, Timeout: 30},
-		},
-	},
 
 	"toggle_ufw": {
 		ID:          "toggle_ufw",
@@ -413,70 +396,9 @@ var Commands = map[string]*CommandTemplate{
 		},
 	},
 
-	"toggle_fail2ban": {
-		ID:          "toggle_fail2ban",
-		Name:        "Toggle Fail2ban",
-		Description: "Enable or disable Fail2ban service with optional config",
-		Category:    "security",
-		Variables: []VariableDef{
-			{Name: "enabled", Type: "bool", Required: true, Description: "Enable (true) or disable (false)"},
-			{Name: "config", Type: "text", Required: false, Description: "Custom jail.local config (optional)"},
-		},
-		OnError: "stop",
-		Steps: []Step{
-			{Action: "exec", Command: `if [ -n "{{config}}" ]; then echo '{{config}}' > /etc/fail2ban/jail.local; fi`, Timeout: 30},
-			{Action: "exec", Command: `if [ "{{enabled}}" = "true" ]; then systemctl enable fail2ban && systemctl restart fail2ban; else systemctl stop fail2ban && systemctl disable fail2ban; fi`, Timeout: 60},
-		},
-	},
 
-	"apply_nginx_config": {
-		ID:          "apply_nginx_config",
-		Name:        "Apply Nginx Config",
-		Description: "Write nginx config for a domain and reload",
-		Category:    "nginx",
-		Variables: []VariableDef{
-			{Name: "domain", Type: "string", Required: true, Description: "Domain name"},
-			{Name: "config", Type: "text", Required: true, Description: "Nginx config content"},
-		},
-		OnError: "rollback",
-		Steps: []Step{
-			{Action: "file", Op: "backup", Path: "/etc/nginx/conf.d/configuratix/{{domain}}.conf"},
-			{Action: "file", Op: "write", Path: "/etc/nginx/conf.d/configuratix/{{domain}}.conf", Content: "{{config}}", Mode: "0644"},
-			{Action: "exec", Command: ensureNginxBansSnippetCommand, Timeout: 10},
-			{Action: "exec", Command: "nginx -t", Timeout: 30},
-			{Action: "service", Name: "nginx", Op: "reload"},
-		},
-	},
 
-	"remove_nginx_config": {
-		ID:          "remove_nginx_config",
-		Name:        "Remove Nginx Config",
-		Description: "Remove nginx config for a domain",
-		Category:    "nginx",
-		Variables: []VariableDef{
-			{Name: "domain", Type: "string", Required: true, Description: "Domain name"},
-		},
-		OnError: "continue",
-		Steps: []Step{
-			{Action: "file", Op: "delete", Path: "/etc/nginx/conf.d/configuratix/{{domain}}.conf"},
-			{Action: "service", Name: "nginx", Op: "reload"},
-		},
-	},
 
-	"issue_ssl_cert": {
-		ID:          "issue_ssl_cert",
-		Name:        "Issue SSL Certificate",
-		Description: "Issue SSL certificate via Certbot for a domain",
-		Category:    "ssl",
-		Variables: []VariableDef{
-			{Name: "domain", Type: "string", Required: true, Description: "Domain name"},
-			{Name: "email", Type: "string", Required: false, Default: "", Description: "Email for Let's Encrypt notifications"},
-		},
-		OnError: "stop",
-		Steps: []Step{
-			{Action: "exec", Command: `certbot --nginx -d {{domain}} --non-interactive --agree-tos --email "{{email}}" --redirect || certbot --nginx -d {{domain}} --non-interactive --agree-tos --register-unsafely-without-email --redirect`, Timeout: 300},
-		},
-	},
 
 	"bootstrap_machine": {
 		ID:          "bootstrap_machine",
@@ -549,19 +471,6 @@ var Commands = map[string]*CommandTemplate{
 		},
 	},
 
-	"read_file": {
-		ID:          "read_file",
-		Name:        "Read File",
-		Description: "Read content from a file",
-		Category:    "files",
-		Variables: []VariableDef{
-			{Name: "path", Type: "string", Required: true, Description: "File path"},
-		},
-		OnError: "stop",
-		Steps: []Step{
-			{Action: "exec", Command: "cat {{path}}", Timeout: 30},
-		},
-	},
 
 	"list_nginx_configs": {
 		ID:          "list_nginx_configs",
@@ -612,24 +521,6 @@ var Commands = map[string]*CommandTemplate{
 		},
 	},
 
-	"write_nginx_config": {
-		ID:          "write_nginx_config",
-		Name:        "Write Nginx Config",
-		Description: "Write nginx configuration and reload",
-		Category:    "nginx",
-		Variables: []VariableDef{
-			{Name: "path", Type: "string", Required: true, Description: "Config file path"},
-			{Name: "content", Type: "text", Required: true, Description: "Config content"},
-		},
-		OnError: "rollback",
-		Steps: []Step{
-			{Action: "file", Op: "backup", Path: "{{path}}"},
-			{Action: "file", Op: "write", Path: "{{path}}", Content: "{{content}}", Mode: "0644"},
-			{Action: "exec", Command: ensureNginxBansSnippetCommand, Timeout: 10},
-			{Action: "exec", Command: "nginx -t", Timeout: 30},
-			{Action: "exec", Command: "systemctl reload nginx", Timeout: 30},
-		},
-	},
 
 	"write_sshd_config": {
 		ID:          "write_sshd_config",
@@ -743,151 +634,8 @@ var Commands = map[string]*CommandTemplate{
 		},
 	},
 
-	"deploy_landing": {
-		ID:          "deploy_landing",
-		Name:        "Deploy Landing Page",
-		Description: "Download and extract a landing page archive to the target directory",
-		Category:    "landings",
-		Variables: []VariableDef{
-			{Name: "url", Type: "string", Required: true, Description: "URL to download the landing zip"},
-			{Name: "target_path", Type: "string", Required: true, Description: "Target directory path"},
-		},
-		OnError: "rollback",
-		Steps: []Step{
-			{Action: "exec", Command: "mkdir -p {{target_path}}", Timeout: 10},
-			{Action: "exec", Command: "rm -rf {{target_path}}/* 2>/dev/null || true", Timeout: 30},
-			{Action: "fetch", URL: "{{url}}", Path: "/tmp/landing_download.zip"},
-			{Action: "exec", Command: "unzip -o /tmp/landing_download.zip -d {{target_path}}", Timeout: 60},
-			{Action: "exec", Command: "rm /tmp/landing_download.zip", Timeout: 10},
-			{Action: "exec", Command: "chown -R www-data:www-data {{target_path}}", Timeout: 30},
-		},
-	},
 
-	"apply_domain": {
-		ID:          "apply_domain",
-		Name:        "Apply Domain Configuration",
-		Description: "Apply nginx config for a domain, issuing SSL certificate if needed",
-		Category:    "domains",
-		Variables: []VariableDef{
-			{Name: "domain", Type: "string", Required: true, Description: "Domain name"},
-			{Name: "nginx_config", Type: "text", Required: true, Description: "Nginx configuration content"},
-			{Name: "ssl_enabled", Type: "bool", Required: false, Default: "true", Description: "Whether SSL is enabled"},
-			{Name: "ssl_email", Type: "string", Required: false, Default: "admin@example.com", Description: "Email for SSL certificate"},
-		},
-		OnError: "stop",
-		Steps: []Step{
-			// Create config directory
-			{Action: "exec", Command: "mkdir -p /etc/nginx/conf.d/configuratix", Timeout: 10},
-			{Action: "exec", Command: ensureNginxBansSnippetCommand, Timeout: 10},
-			// Issue SSL cert if needed - remove old config first to avoid PHP socket issues
-			{Action: "exec", Command: `
-DOMAIN="{{domain}}"
-SSL_ENABLED="{{ssl_enabled}}"
-SSL_EMAIL="{{ssl_email}}"
-CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
-CONFIG_PATH="/etc/nginx/conf.d/configuratix/$DOMAIN.conf"
 
-if [ "$SSL_ENABLED" = "true" ] && [ ! -f "$CERT_PATH" ]; then
-    echo "Issuing SSL certificate for $DOMAIN..."
-    # Backup and remove old config to prevent nginx start failures
-    if [ -f "$CONFIG_PATH" ]; then
-        mv "$CONFIG_PATH" "$CONFIG_PATH.bak" 2>/dev/null || true
-    fi
-    # Reload nginx without the problematic config, then stop for certbot
-    nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true
-    systemctl stop nginx 2>/dev/null || true
-    # Issue certificate
-    certbot certonly --standalone -d "$DOMAIN" \
-        --non-interactive --agree-tos --no-eff-email \
-        --email "$SSL_EMAIL" \
-        --cert-name "$DOMAIN"
-    # Don't start nginx yet - let the config write step handle it
-    echo "Certificate issued successfully"
-fi
-`, Timeout: 180},
-			// Write nginx config
-			{Action: "file", Op: "write", Path: "/etc/nginx/conf.d/configuratix/{{domain}}.conf", Content: "{{nginx_config}}", Mode: "0644", Log: "cat /etc/nginx/conf.d/configuratix/{{domain}}.conf"},
-			// Test nginx - temporarily disable configs with missing SSL certs
-			{Action: "exec", Command: `
-echo "Testing nginx configuration..."
-
-# Function to check if a config has missing SSL certs
-check_and_disable_broken_configs() {
-    DISABLED_CONFIGS=""
-    for conf in /etc/nginx/conf.d/configuratix/*.conf; do
-        [ -f "$conf" ] || continue
-        # Extract ssl_certificate paths from config
-        certs=$(grep -oP 'ssl_certificate\s+\K[^;]+' "$conf" 2>/dev/null || true)
-        for cert in $certs; do
-            if [ ! -f "$cert" ]; then
-                echo "WARNING: Disabling $conf - missing certificate: $cert"
-                mv "$conf" "$conf.disabled" 2>/dev/null || true
-                DISABLED_CONFIGS="$DISABLED_CONFIGS $conf"
-                break
-            fi
-        done
-    done
-    echo "$DISABLED_CONFIGS"
-}
-
-# Also check main nginx conf.d
-check_and_disable_broken_configs_main() {
-    for conf in /etc/nginx/conf.d/*.conf; do
-        [ -f "$conf" ] || continue
-        [[ "$conf" == *"/configuratix/"* ]] && continue  # Skip our managed configs
-        certs=$(grep -oP 'ssl_certificate\s+\K[^;]+' "$conf" 2>/dev/null || true)
-        for cert in $certs; do
-            if [ ! -f "$cert" ]; then
-                echo "WARNING: Disabling $conf - missing certificate: $cert"
-                mv "$conf" "$conf.disabled" 2>/dev/null || true
-                break
-            fi
-        done
-    done
-}
-
-# Disable broken configs before testing
-check_and_disable_broken_configs
-check_and_disable_broken_configs_main
-
-# Now test nginx
-nginx -t
-`, Timeout: 60},
-			// Start/reload nginx
-			{Action: "exec", Command: "systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || systemctl start nginx", Timeout: 30, Log: "systemctl status nginx --no-pager | head -5"},
-		},
-	},
-
-	"remove_domain": {
-		ID:          "remove_domain",
-		Name:        "Remove Domain Configuration",
-		Description: "Remove nginx configuration for a domain (both HTTP and passthrough) and regenerate consolidated config",
-		Category:    "domains",
-		Variables: []VariableDef{
-			{Name: "domain", Type: "string", Required: true, Description: "Domain name to remove"},
-		},
-		OnError: "continue",
-		Steps: []Step{
-			// Remove marker file and old HTTP config
-			{Action: "exec", Command: "rm -f /etc/nginx/stream.d/passthrough-{{domain}}.conf", Timeout: 10},
-			{Action: "exec", Command: "rm -f /etc/nginx/conf.d/configuratix/{{domain}}.conf", Timeout: 10},
-			// Regenerate consolidated config from remaining markers
-			{Action: "exec", Command: `
-#!/bin/bash
-set -e
-
-STREAM_DIR="/etc/nginx/stream.d"
-CONFIG_FILE="$STREAM_DIR/configuratix-passthrough-manual.conf"
-HTTP_CONFIG_FILE="/etc/nginx/conf.d/configuratix/passthrough-manual-http.conf"
-
-`+ passthroughRegenerateShell + `
-
-# Test and reload
-nginx -t
-systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || systemctl start nginx
-`, Timeout: 60},
-		},
-	},
 
 	"apply_passthrough_domain": {
 		ID:          "apply_passthrough_domain",
@@ -903,6 +651,7 @@ systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || systemctl
 			{Name: "proxy_protocol", Type: "string", Required: false, Default: "false", Description: "Send PROXY protocol to HTTPS backend"},
 			{Name: "http_client_max_body_size", Type: "string", Required: false, Default: "100M", Description: "client_max_body_size for the port 80 HTTP block"},
 			{Name: "http_extra_b64", Type: "string", Required: false, Default: "", Description: "Base64-encoded extra directives for location / of the port 80 HTTP block"},
+			{Name: "txn", Type: "txn", Required: false, Description: "Transaction id (auto-generated)"},
 		},
 		OnError: "stop",
 		Steps: []Step{
@@ -911,8 +660,9 @@ systemctl is-active nginx >/dev/null 2>&1 && systemctl reload nginx || systemctl
 #!/bin/bash
 set -e
 
-DOMAIN="{{domain}}"
-TARGET="{{target}}"
+DOMAIN='{{domain}}'
+TARGET='{{target}}'
+CFX_TXN='{{txn}}'
 HTTPS_PORT="{{https_port}}"
 HTTP_PORT="{{http_port}}"
 ENABLE_HTTP="{{enable_http}}"
@@ -957,6 +707,14 @@ HTTP_CONFIG_FILE="/etc/nginx/conf.d/configuratix/passthrough-manual-http.conf"
 MARKER_FILE="$STREAM_DIR/passthrough-${DOMAIN}.conf"
 DNS_MGMT_CONFIG="$STREAM_DIR/configuratix-passthrough.conf"
 DNS_MGMT_HTTP_CONFIG="/etc/nginx/conf.d/configuratix/passthrough-dns-http.conf"
+
+# Transactional: every file touched below is recorded first and restored if the script fails.
+` + TxnShellLib + `
+trap cfx_txn_trap EXIT
+cfx_backup "$NGINX_CONF" "$CONFIG_FILE" "$HTTP_CONFIG_FILE" "$MARKER_FILE" \
+    "$DNS_MGMT_CONFIG" "$DNS_MGMT_CONFIG.disabled-by-manual" \
+    "$DNS_MGMT_HTTP_CONFIG" "$DNS_MGMT_HTTP_CONFIG.disabled-by-manual" \
+    "/etc/nginx/conf.d/configuratix/${DOMAIN}.conf"
 
 echo "=== Configuratix Passthrough Setup for $DOMAIN ==="
 if [ "$ENABLE_HTTP" = "true" ]; then
@@ -1106,7 +864,7 @@ echo "Created marker: $MARKER_FILE"
 # 9. Test and reload nginx
 echo ""
 echo "=== Testing nginx config ==="
-nginx -t
+cfx_nginx_test || exit 1
 
 echo "=== Reloading nginx ==="
 if systemctl is-active nginx >/dev/null 2>&1; then
@@ -1285,34 +1043,6 @@ php -m 2>/dev/null | head -50 || echo "Cannot list extensions"
 		},
 	},
 
-	"configure_php_fpm_pool": {
-		ID:          "configure_php_fpm_pool",
-		Name:        "Configure PHP-FPM Pool",
-		Description: "Configure PHP-FPM pool settings",
-		Category:    "php",
-		Variables: []VariableDef{
-			{Name: "version", Type: "string", Required: true, Description: "PHP version"},
-			{Name: "max_children", Type: "int", Required: false, Default: "5", Description: "Max children processes"},
-			{Name: "start_servers", Type: "int", Required: false, Default: "2", Description: "Start servers"},
-			{Name: "min_spare_servers", Type: "int", Required: false, Default: "1", Description: "Min spare servers"},
-			{Name: "max_spare_servers", Type: "int", Required: false, Default: "3", Description: "Max spare servers"},
-		},
-		OnError: "rollback",
-		Steps: []Step{
-			{Action: "file", Op: "backup", Path: "/etc/php/{{version}}/fpm/pool.d/www.conf"},
-			{Action: "exec", Command: `
-VERSION="{{version}}"
-POOL_CONF="/etc/php/${VERSION}/fpm/pool.d/www.conf"
-
-sed -i 's/^pm.max_children.*/pm.max_children = {{max_children}}/' "$POOL_CONF"
-sed -i 's/^pm.start_servers.*/pm.start_servers = {{start_servers}}/' "$POOL_CONF"
-sed -i 's/^pm.min_spare_servers.*/pm.min_spare_servers = {{min_spare_servers}}/' "$POOL_CONF"
-sed -i 's/^pm.max_spare_servers.*/pm.max_spare_servers = {{max_spare_servers}}/' "$POOL_CONF"
-`, Timeout: 30},
-			{Action: "exec", Command: "php-fpm{{version}} -t", Timeout: 30},
-			{Action: "exec", Command: "systemctl restart php{{version}}-fpm", Timeout: 60},
-		},
-	},
 
 	// ==================== SPEED TEST TOOLS ====================
 

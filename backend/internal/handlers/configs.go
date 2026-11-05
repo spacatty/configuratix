@@ -1,14 +1,18 @@
 package handlers
 
 import (
-	"configuratix/backend/internal/database"
-	"configuratix/backend/internal/models"
-	"configuratix/backend/internal/templates"
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
+	"path"
 	"strings"
 	"time"
+
+	"configuratix/backend/internal/database"
+	"configuratix/backend/internal/jobs"
+	"configuratix/backend/internal/models"
+	"configuratix/backend/internal/templates"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -31,25 +35,59 @@ type ReadFileRequest struct {
 type WriteFileRequest struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+	// Async: return {job_id} immediately instead of waiting for the result.
+	Async bool `json:"async,omitempty"`
 }
 
 // ListConfigsResponse lists available config files on a machine
 type ConfigFile struct {
-	ID            string  `json:"id,omitempty"`      // Only for custom paths
+	ID            string  `json:"id,omitempty"` // Only for custom paths
 	Name          string  `json:"name"`
 	Path          string  `json:"path"`
-	Type          string  `json:"type"`              // nginx, nginx_site, php, ssh, text
+	Type          string  `json:"type"`                // nginx, nginx_site, php, ssh, text
 	FileType      string  `json:"file_type,omitempty"` // Alias for type (custom paths)
 	Readonly      bool    `json:"readonly"`
 	ReloadCommand *string `json:"reload_command,omitempty"`
 }
 
-// ReadConfig reads a configuration file from the machine
-func (h *ConfigsHandler) ReadConfig(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	machineID, err := uuid.Parse(vars["id"])
+// authorize checks the {id} machine in the route against the requester's permissions.
+// manage=true requires manage rights (writes / category changes).
+func (h *ConfigsHandler) authorize(w http.ResponseWriter, r *http.Request, manage bool) (uuid.UUID, bool) {
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return uuid.Nil, false
+	}
+	allowed := false
+	if manage {
+		allowed = canManageMachineID(h.db, r, machineID)
+	} else {
+		allowed = canAccessMachineID(h.db, r, machineID)
+	}
+	if !allowed {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return uuid.Nil, false
+	}
+	return machineID, true
+}
+
+// resolveConfigPath cleans the path and checks it against the built-in allowlist and the
+// machine's custom config paths. Returns the cleaned path.
+func (h *ConfigsHandler) resolveConfigPath(machineID uuid.UUID, p string) (string, bool) {
+	clean, ok := templates.CleanAbsPath(p)
+	if !ok {
+		return "", false
+	}
+	if isAllowedConfigPath(clean) || h.isCustomAllowedPath(machineID, clean) {
+		return clean, true
+	}
+	return "", false
+}
+
+// ReadConfig reads a configuration file from the machine
+func (h *ConfigsHandler) ReadConfig(w http.ResponseWriter, r *http.Request) {
+	machineID, ok := h.authorize(w, r, false)
+	if !ok {
 		return
 	}
 
@@ -59,58 +97,91 @@ func (h *ConfigsHandler) ReadConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate path - check built-in paths and custom paths
-	if !isAllowedConfigPath(req.Path) && !h.isCustomAllowedPath(machineID, req.Path) {
+	cleanPath, ok := h.resolveConfigPath(machineID, req.Path)
+	if !ok {
 		http.Error(w, "Path not allowed", http.StatusForbidden)
 		return
 	}
 
-	// Get agent ID for this machine
-	var agentID uuid.UUID
-	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1", machineID)
+	agentID, err := machineAgentID(h.db, machineID)
 	if err != nil {
-		http.Error(w, "Machine not found", http.StatusNotFound)
+		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
 		return
 	}
 
-	// Create a read_file job
-	template := templates.Commands["read_file"]
-	payload := template.ToPayload(map[string]string{"path": req.Path})
-
-	jobID := uuid.New()
-	_, err = h.db.Exec(`
-		INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
-		VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
-	`, jobID, agentID, payload)
+	spec, err := jobs.FromTemplate("read_file", map[string]string{"path": cleanPath})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	spec.AgentID = agentID
+	spec.EntityType = jobs.EntityFile
+	spec.EntityID = cleanPath
+	spec.CreatedBy = jobs.UserID(r)
+	job, err := jobs.Create(r.Context(), h.db, spec)
 	if err != nil {
 		log.Printf("Failed to create read job: %v", err)
 		http.Error(w, "Failed to create job", http.StatusInternalServerError)
 		return
 	}
 
-	// Poll for job completion (max 30 seconds)
-	rawLogs, err := h.waitForJobResult(jobID, 30*time.Second)
+	rawLogs, err := h.waitForJobResult(r.Context(), job.ID, 30*time.Second)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
-	// Extract just the file content from job logs
-	content := extractFileContent(rawLogs)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"content": content,
-		"path":    req.Path,
+	writeJSON(w, http.StatusOK, map[string]string{
+		"content": extractFileContent(rawLogs),
+		"path":    cleanPath,
+		"job_id":  job.ID.String(),
 	})
 }
 
-// WriteConfig writes a configuration file to the machine
+// writeConfigSpec picks the transactional template for a path.
+// nginx: staged write + nginx -t + restore on failure; php: php-fpm -t + restore;
+// sshd: sshd -t with agent-side rollback; others: write_file (+ optional custom reload job).
+func (h *ConfigsHandler) writeConfigSpec(machineID uuid.UUID, cleanPath, content string) (jobs.Spec, string, error) {
+	switch {
+	case strings.HasPrefix(cleanPath, "/etc/nginx/"):
+		spec, err := jobs.FromTemplate("write_nginx_config", map[string]string{"path": cleanPath, "content": content})
+		return spec, "", err
+	case cleanPath == "/etc/ssh/sshd_config":
+		spec, err := jobs.FromTemplate("write_sshd_config", map[string]string{"content": content})
+		return spec, "", err
+	case strings.HasPrefix(cleanPath, "/etc/php/"):
+		// /etc/php/<version>/fpm/... → php-fpm<version> -t
+		parts := strings.Split(cleanPath, "/")
+		if len(parts) >= 4 {
+			spec, err := jobs.FromTemplate("write_php_config", map[string]string{"path": cleanPath, "version": parts[3], "content": content})
+			if err == nil {
+				return spec, "", nil
+			}
+		}
+		spec, err := jobs.FromTemplate("write_file", map[string]string{"path": cleanPath, "content": content, "mode": "0644"})
+		return spec, "", err
+	case cleanPath == "/root/.ssh/authorized_keys":
+		spec, err := jobs.FromTemplate("write_file", map[string]string{"path": cleanPath, "content": content, "mode": "0600"})
+		return spec, "", err
+	}
+	var customReload *string
+	h.db.Get(&customReload, `
+		SELECT cp.reload_command FROM config_paths cp
+		JOIN config_categories cc ON cp.category_id = cc.id
+		WHERE cc.machine_id = $1 AND cp.path = $2
+	`, machineID, cleanPath)
+	spec, err := jobs.FromTemplate("write_file", map[string]string{"path": cleanPath, "content": content, "mode": "0644"})
+	reload := ""
+	if customReload != nil {
+		reload = strings.TrimSpace(*customReload)
+	}
+	return spec, reload, err
+}
+
+// WriteConfig writes a configuration file to the machine (transactional for nginx/php/sshd).
 func (h *ConfigsHandler) WriteConfig(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	machineID, err := uuid.Parse(vars["id"])
-	if err != nil {
-		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+	machineID, ok := h.authorize(w, r, true)
+	if !ok {
 		return
 	}
 
@@ -120,119 +191,94 @@ func (h *ConfigsHandler) WriteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate path - check built-in paths and custom paths
-	if !isAllowedConfigPath(req.Path) && !h.isCustomAllowedPath(machineID, req.Path) {
+	cleanPath, ok := h.resolveConfigPath(machineID, req.Path)
+	if !ok {
 		http.Error(w, "Path not allowed", http.StatusForbidden)
 		return
 	}
 
-	// Get agent ID for this machine
-	var agentID uuid.UUID
-	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1", machineID)
+	agentID, err := machineAgentID(h.db, machineID)
 	if err != nil {
-		http.Error(w, "Machine not found", http.StatusNotFound)
+		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
 		return
 	}
 
-	// Determine which template to use based on path and build reload command
-	var templateID string
-	var vars_map map[string]string
-	var reloadCommand string
-
-	if strings.HasPrefix(req.Path, "/etc/nginx/") {
-		templateID = "write_nginx_config"
-		vars_map = map[string]string{"path": req.Path, "content": req.Content}
-		reloadCommand = ""  // Template handles nginx reload
-	} else if req.Path == "/etc/ssh/sshd_config" {
-		// SSH config - need proper reload
-		templateID = "write_file"
-		vars_map = map[string]string{"path": req.Path, "content": req.Content, "mode": "0600"}
-		reloadCommand = "sshd -t && systemctl daemon-reload && systemctl restart sshd"
-	} else if strings.HasPrefix(req.Path, "/etc/php/") {
-		// PHP config - extract version and reload that specific fpm
-		templateID = "write_file"
-		vars_map = map[string]string{"path": req.Path, "content": req.Content, "mode": "0644"}
-		// Extract PHP version from path like /etc/php/8.2/fpm/php.ini
-		parts := strings.Split(req.Path, "/")
-		if len(parts) >= 4 {
-			phpVersion := parts[3]
-			reloadCommand = "systemctl reload php" + phpVersion + "-fpm || systemctl restart php" + phpVersion + "-fpm"
-		}
-	} else if req.Path == "/root/.ssh/authorized_keys" {
-		templateID = "write_file"
-		vars_map = map[string]string{"path": req.Path, "content": req.Content, "mode": "0600"}
-		reloadCommand = ""  // No reload needed for authorized_keys
-	} else {
-		// Custom path - check if it has a reload command
-		var customReload *string
-		h.db.Get(&customReload, `
-			SELECT cp.reload_command FROM config_paths cp
-			JOIN config_categories cc ON cp.category_id = cc.id
-			WHERE cc.machine_id = $1 AND cp.path = $2
-		`, machineID, req.Path)
-		
-		templateID = "write_file"
-		vars_map = map[string]string{"path": req.Path, "content": req.Content, "mode": "0644"}
-		if customReload != nil {
-			reloadCommand = *customReload
-		}
+	spec, reloadCommand, err := h.writeConfigSpec(machineID, cleanPath, req.Content)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
-
-	template := templates.Commands[templateID]
-	payload := template.ToPayload(vars_map)
-
-	jobID := uuid.New()
-	_, err = h.db.Exec(`
-		INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
-		VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
-	`, jobID, agentID, payload)
+	spec.AgentID = agentID
+	spec.EntityType = jobs.EntityFile
+	spec.EntityID = cleanPath
+	spec.Title = "Write file " + cleanPath
+	spec.CreatedBy = jobs.UserID(r)
+	job, err := jobs.Create(r.Context(), h.db, spec)
 	if err != nil {
 		log.Printf("Failed to create write job: %v", err)
 		http.Error(w, "Failed to create job", http.StatusInternalServerError)
 		return
 	}
 
-	// Poll for job completion (max 60 seconds for writes)
-	result, err := h.waitForJobResult(jobID, 60*time.Second)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if req.Async {
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{"success": true, "path": cleanPath, "job_id": job.ID})
 		return
 	}
 
-	// Run reload command if specified and different from template
+	result, err := h.waitForJobResult(r.Context(), job.ID, 90*time.Second)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": false,
+			"path":    cleanPath,
+			"job_id":  job.ID,
+			"error":   err.Error(),
+			"logs":    err.Error(),
+		})
+		return
+	}
+
+	// Custom paths may define a reload command (user-configured; intentionally arbitrary).
 	if reloadCommand != "" {
-		reloadJobID := uuid.New()
-		reloadPayload := `{"description":"Reload service","steps":[{"action":"exec","command":"` + reloadCommand + `","timeout":60}]}`
-		h.db.Exec(`
-			INSERT INTO jobs (id, agent_id, type, payload_json, status, created_at, updated_at)
-			VALUES ($1, $2, 'run', $3, 'pending', NOW(), NOW())
-		`, reloadJobID, agentID, reloadPayload)
-		
-		if reloadResult, err := h.waitForJobResult(reloadJobID, 60*time.Second); err == nil {
-			result = result + "\n\n=== Reload Output ===\n" + reloadResult
-		} else {
-			result = result + "\n\n=== Reload Failed ===\n" + err.Error()
+		payload, _ := json.Marshal(map[string]interface{}{
+			"steps":    []map[string]interface{}{{"action": "exec", "command": reloadCommand, "timeout": 60}},
+			"on_error": "stop",
+		})
+		reloadJob, err := jobs.Create(r.Context(), h.db, jobs.Spec{
+			AgentID:    agentID,
+			Payload:    payload,
+			Action:     "reload_service",
+			Title:      jobs.CommandTitle(reloadCommand),
+			EntityType: jobs.EntityFile,
+			EntityID:   cleanPath,
+			CreatedBy:  jobs.UserID(r),
+		})
+		if err == nil {
+			if reloadResult, err := h.waitForJobResult(r.Context(), reloadJob.ID, 60*time.Second); err == nil {
+				result = result + "\n\n=== Reload Output ===\n" + reloadResult
+			} else {
+				result = result + "\n\n=== Reload Failed ===\n" + err.Error()
+			}
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
-		"path":    req.Path,
+		"path":    cleanPath,
+		"job_id":  job.ID,
 		"logs":    result,
 	})
 }
 
 // ConfigCategoryResponse for the new API
 type ConfigCategoryResponse struct {
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	Emoji       string              `json:"emoji"`
-	Color       string              `json:"color"`
-	Description string              `json:"description,omitempty"`
-	IsBuiltIn   bool                `json:"is_built_in"`
+	ID            string                `json:"id"`
+	Name          string                `json:"name"`
+	Emoji         string                `json:"emoji"`
+	Color         string                `json:"color"`
+	Description   string                `json:"description,omitempty"`
+	IsBuiltIn     bool                  `json:"is_built_in"`
 	Subcategories []SubcategoryResponse `json:"subcategories,omitempty"`
-	Files       []ConfigFile        `json:"files,omitempty"`
+	Files         []ConfigFile          `json:"files,omitempty"`
 }
 
 type SubcategoryResponse struct {
@@ -241,91 +287,78 @@ type SubcategoryResponse struct {
 	Files []ConfigFile `json:"files"`
 }
 
-// ListConfigs returns config files organized by categories
-// This is now FAST - returns static structure immediately without waiting for jobs
+// ListConfigs returns config files organized by categories. Fast: no agent round trip.
+// "Configuratix Sites" is filled from the domains assigned to this machine; the complete
+// on-disk inventory is available from GET /api/machines/{id}/nginx.
 func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	machineID, err := uuid.Parse(vars["id"])
-	if err != nil {
-		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+	machineID, ok := h.authorize(w, r, false)
+	if !ok {
 		return
 	}
 
-	// Just verify machine exists, don't need agent ID for static list
 	var exists bool
-	err = h.db.Get(&exists, "SELECT EXISTS(SELECT 1 FROM machines WHERE id = $1)", machineID)
+	err := h.db.Get(&exists, "SELECT EXISTS(SELECT 1 FROM machines WHERE id = $1)", machineID)
 	if err != nil || !exists {
 		http.Error(w, "Machine not found", http.StatusNotFound)
 		return
 	}
 
-	// Return STATIC built-in categories immediately (no job polling)
-	builtInCategories := []ConfigCategoryResponse{}
+	siteFiles := []ConfigFile{}
+	var fqdns []string
+	h.db.Select(&fqdns, `SELECT fqdn FROM domains WHERE assigned_machine_id = $1 ORDER BY fqdn`, machineID)
+	for _, raw := range fqdns {
+		fqdn, err := templates.NormalizeFQDN(raw)
+		if err != nil {
+			continue
+		}
+		siteFiles = append(siteFiles, ConfigFile{
+			Name: fqdn + ".conf",
+			Path: "/etc/nginx/conf.d/configuratix/" + fqdn + ".conf",
+			Type: "nginx_site",
+		})
+	}
 
-	// 1. Nginx Category - static paths that exist on most servers
-	nginxCategory := ConfigCategoryResponse{
-		ID:          "nginx",
-		Name:        "Nginx",
-		Emoji:       "🌐",
-		Color:       "#22c55e",
-		Description: "Nginx web server configuration",
-		IsBuiltIn:   true,
-		Subcategories: []SubcategoryResponse{
-			{
-				ID:   "nginx_main",
-				Name: "Main Config",
-				Files: []ConfigFile{
-					{Name: "nginx.conf", Path: "/etc/nginx/nginx.conf", Type: "nginx", Readonly: false},
-				},
+	builtInCategories := []ConfigCategoryResponse{
+		{
+			ID:          "nginx",
+			Name:        "Nginx",
+			Emoji:       "🌐",
+			Color:       "#22c55e",
+			Description: "Nginx web server configuration",
+			IsBuiltIn:   true,
+			Subcategories: []SubcategoryResponse{
+				{ID: "nginx_main", Name: "Main Config", Files: []ConfigFile{
+					{Name: "nginx.conf", Path: "/etc/nginx/nginx.conf", Type: "nginx"},
+				}},
+				{ID: "nginx_sites_enabled", Name: "Sites Enabled", Files: []ConfigFile{
+					{Name: "default", Path: "/etc/nginx/sites-enabled/default", Type: "nginx_site"},
+				}},
+				{ID: "nginx_configuratix", Name: "Configuratix Sites", Files: siteFiles},
 			},
-			{
-				ID:   "nginx_sites_enabled",
-				Name: "Sites Enabled",
-				Files: []ConfigFile{
-					{Name: "default", Path: "/etc/nginx/sites-enabled/default", Type: "nginx_site", Readonly: false},
-				},
-			},
-			{
-				ID:   "nginx_configuratix",
-				Name: "Configuratix Sites",
-				Files: []ConfigFile{}, // Will be populated when reading
+		},
+		{
+			ID:            "php",
+			Name:          "PHP",
+			Emoji:         "🐘",
+			Color:         "#8b5cf6",
+			Description:   "PHP-FPM configuration (scan /etc/php for versions)",
+			IsBuiltIn:     true,
+			Subcategories: []SubcategoryResponse{},
+		},
+		{
+			ID:          "ssh",
+			Name:        "SSH",
+			Emoji:       "🔐",
+			Color:       "#f59e0b",
+			Description: "SSH daemon configuration",
+			IsBuiltIn:   true,
+			Files: []ConfigFile{
+				{Name: "sshd_config", Path: "/etc/ssh/sshd_config", Type: "ssh"},
+				{Name: "authorized_keys", Path: "/root/.ssh/authorized_keys", Type: "text"},
 			},
 		},
 	}
 
-	// 2. PHP Category - will be populated dynamically via file module
-	// For now, create empty category - frontend will scan for PHP versions
-	phpCategory := ConfigCategoryResponse{
-		ID:          "php",
-		Name:        "PHP",
-		Emoji:       "🐘",
-		Color:       "#8b5cf6",
-		Description: "PHP-FPM configuration (scan /etc/php for versions)",
-		IsBuiltIn:   true,
-		Subcategories: []SubcategoryResponse{},
-		// Hint to frontend to scan /etc/php directory
-	}
-
-	// Add built-in categories (no job waiting - instant response!)
-	builtInCategories = append(builtInCategories, nginxCategory)
-	builtInCategories = append(builtInCategories, phpCategory)
-
-	// 3. SSH Category
-	sshCategory := ConfigCategoryResponse{
-		ID:          "ssh",
-		Name:        "SSH",
-		Emoji:       "🔐",
-		Color:       "#f59e0b",
-		Description: "SSH daemon configuration",
-		IsBuiltIn:   true,
-		Files: []ConfigFile{
-			{Name: "sshd_config", Path: "/etc/ssh/sshd_config", Type: "ssh", Readonly: false},
-			{Name: "authorized_keys", Path: "/root/.ssh/authorized_keys", Type: "text", Readonly: false},
-		},
-	}
-	builtInCategories = append(builtInCategories, sshCategory)
-
-	// 4. Get custom categories from database
 	var customCategories []models.ConfigCategory
 	h.db.Select(&customCategories, `
 		SELECT * FROM config_categories WHERE machine_id = $1 ORDER BY position, name
@@ -346,7 +379,6 @@ func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 				Path:          p.Path,
 				Type:          p.FileType,
 				FileType:      p.FileType,
-				Readonly:      false,
 				ReloadCommand: p.ReloadCommand,
 			})
 		}
@@ -361,38 +393,27 @@ func (h *ConfigsHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Return combined response
-	response := struct {
+	writeJSON(w, http.StatusOK, struct {
 		Categories []ConfigCategoryResponse `json:"categories"`
 	}{
 		Categories: append(builtInCategories, customCategoryResponses...),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	})
 }
 
-// waitForJobResult polls until a job completes and returns the logs
-func (h *ConfigsHandler) waitForJobResult(jobID uuid.UUID, timeout time.Duration) (string, error) {
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		var job models.Job
-		err := h.db.Get(&job, "SELECT * FROM jobs WHERE id = $1", jobID)
-		if err != nil {
-			return "", err
-		}
-
-		switch job.Status {
-		case "completed":
-			return nullStringToString(job.Logs), nil
-		case "failed":
-			return "", &ConfigError{Message: "Job failed: " + nullStringToString(job.Logs)}
-		}
-		time.Sleep(500 * time.Millisecond)
+// waitForJobResult waits for a job and returns its logs; failed/cancelled jobs and timeouts
+// are returned as errors (the error text includes the logs for failed jobs).
+func (h *ConfigsHandler) waitForJobResult(ctx context.Context, jobID uuid.UUID, timeout time.Duration) (string, error) {
+	job, err := waitForJob(ctx, h.db, jobID, timeout)
+	if err != nil && job == nil {
+		return "", err
 	}
-
-	return "", &ConfigError{Message: "Job timeout"}
+	switch job.Status {
+	case models.JobStatusCompleted:
+		return nullStringToString(job.Logs), nil
+	case models.JobStatusFailed, models.JobStatusCancelled:
+		return "", &ConfigError{Message: "Job " + job.Status + ": " + nullStringToString(job.Logs)}
+	}
+	return "", &ConfigError{Message: "Job timeout (job " + jobID.String() + " is still " + job.Status + ")"}
 }
 
 type ConfigError struct {
@@ -423,21 +444,17 @@ func extractFileContent(logs string) string {
 	inContent := false
 
 	for _, line := range lines {
-		// Start capturing after the "$ cat" or "$ " command line
 		if strings.HasPrefix(line, "$ ") {
 			inContent = true
 			continue
 		}
-		// Stop at the end marker or next step
 		if strings.HasPrefix(line, "===") {
 			inContent = false
 			continue
 		}
-		// Skip metadata lines
 		if line == "Starting..." || strings.HasPrefix(line, "ERROR:") {
 			continue
 		}
-		// Capture content
 		if inContent {
 			content = append(content, line)
 		}
@@ -446,18 +463,35 @@ func extractFileContent(logs string) string {
 	return strings.Join(content, "\n")
 }
 
-// isAllowedConfigPath checks if a path is allowed for reading/writing
-func isAllowedConfigPath(path string) bool {
-	allowedPrefixes := []string{
-		"/etc/nginx/",
-		"/etc/ssh/sshd_config",
-		"/etc/php/",
-		"/etc/fail2ban/",
-		"/root/.ssh/authorized_keys",
-	}
+// allowedConfigDirs are directories whose files may be read/written via the configs API.
+var allowedConfigDirs = []string{
+	"/etc/nginx",
+	"/etc/php",
+	"/etc/fail2ban",
+	"/etc/letsencrypt/renewal",
+}
 
-	for _, prefix := range allowedPrefixes {
-		if strings.HasPrefix(path, prefix) || path == prefix {
+// allowedConfigFiles are individual files that may be read/written.
+var allowedConfigFiles = map[string]bool{
+	"/etc/ssh/sshd_config":       true,
+	"/root/.ssh/authorized_keys": true,
+}
+
+// isAllowedConfigPath checks a cleaned absolute path against the allowlist. The path is
+// cleaned again here, so "/etc/nginx/../shadow" is rejected.
+func isAllowedConfigPath(p string) bool {
+	if p == "" || !strings.HasPrefix(p, "/") {
+		return false
+	}
+	clean := path.Clean(p)
+	if clean != p && clean+"/" != p {
+		return false
+	}
+	if allowedConfigFiles[clean] {
+		return true
+	}
+	for _, dir := range allowedConfigDirs {
+		if strings.HasPrefix(clean, dir+"/") {
 			return true
 		}
 	}
@@ -465,159 +499,14 @@ func isAllowedConfigPath(path string) bool {
 }
 
 // isCustomAllowedPath checks if a path is in the custom config paths for this machine
-func (h *ConfigsHandler) isCustomAllowedPath(machineID uuid.UUID, path string) bool {
+func (h *ConfigsHandler) isCustomAllowedPath(machineID uuid.UUID, p string) bool {
 	var count int
 	err := h.db.Get(&count, `
 		SELECT COUNT(*) FROM config_paths cp
 		JOIN config_categories cc ON cp.category_id = cc.id
 		WHERE cc.machine_id = $1 AND cp.path = $2
-	`, machineID, path)
+	`, machineID, p)
 	return err == nil && count > 0
-}
-
-// parseSiteConfigs extracts Configuratix site configs from output
-func parseSiteConfigs(output string) []ConfigFile {
-	configs := []ConfigFile{}
-	lines := strings.Split(output, "\n")
-	inSiteConfigs := false
-	
-	for _, line := range lines {
-		if strings.Contains(line, "Site Configs") || strings.Contains(line, "configuratix") {
-			inSiteConfigs = true
-			continue
-		}
-		if strings.Contains(line, "===") || strings.Contains(line, "Sites Enabled") {
-			inSiteConfigs = false
-			continue
-		}
-		if inSiteConfigs && strings.HasSuffix(strings.TrimSpace(line), ".conf") {
-			parts := strings.Fields(line)
-			if len(parts) > 0 {
-				lastPart := parts[len(parts)-1]
-				if strings.HasSuffix(lastPart, ".conf") {
-					var filename, fullPath string
-					if strings.HasPrefix(lastPart, "/") {
-						fullPath = lastPart
-						pathParts := strings.Split(lastPart, "/")
-						filename = pathParts[len(pathParts)-1]
-					} else {
-						filename = lastPart
-						fullPath = "/etc/nginx/conf.d/configuratix/" + filename
-					}
-					configs = append(configs, ConfigFile{
-						Name:     filename,
-						Path:     fullPath,
-						Type:     "nginx_site",
-						Readonly: false,
-					})
-				}
-			}
-		}
-	}
-	return configs
-}
-
-// parseSitesEnabled extracts sites-enabled configs from output
-func parseSitesEnabled(output string) []ConfigFile {
-	configs := []ConfigFile{}
-	lines := strings.Split(output, "\n")
-	inSitesEnabled := false
-	
-	for _, line := range lines {
-		if strings.Contains(line, "Sites Enabled") {
-			inSitesEnabled = true
-			continue
-		}
-		if strings.Contains(line, "===") {
-			inSitesEnabled = false
-			continue
-		}
-		trimmed := strings.TrimSpace(line)
-		
-		// Skip empty lines, command lines, total lines, metadata
-		if !inSitesEnabled || trimmed == "" {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "$") || strings.HasPrefix(trimmed, "total") {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "d") && strings.Contains(line, " . ") {
-			continue // Skip directory entries like . and ..
-		}
-		
-		// For ls -la output, get the filename (last part, or part before ->)
-		// Example: lrwxrwxrwx 1 root root 34 Jan 22 15:43 default -> /etc/nginx/sites-available/default
-		parts := strings.Fields(line)
-		if len(parts) < 9 {
-			continue // Not a valid ls -la line
-		}
-		
-		// Find the filename - it's after the date/time fields
-		// Format: permissions links owner group size month day time filename [-> target]
-		filename := ""
-		for i := 8; i < len(parts); i++ {
-			if parts[i] == "->" {
-				break
-			}
-			filename = parts[i]
-		}
-		
-		if filename == "" || filename == "." || filename == ".." {
-			continue
-		}
-		
-		fullPath := "/etc/nginx/sites-enabled/" + filename
-		configs = append(configs, ConfigFile{
-			Name:     filename,
-			Path:     fullPath,
-			Type:     "nginx_site",
-			Readonly: false,
-		})
-	}
-	return configs
-}
-
-// parsePHPVersions extracts PHP versions from ls /etc/php output
-func parsePHPVersions(output string) []string {
-	versions := []string{}
-	lines := strings.Split(output, "\n")
-	
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		
-		// Skip metadata lines from job output
-		if trimmed == "" || strings.HasPrefix(trimmed, "Starting") || 
-		   strings.HasPrefix(trimmed, "===") || strings.HasPrefix(trimmed, "$") ||
-		   strings.HasPrefix(trimmed, "ERROR") {
-			continue
-		}
-		
-		// Look for version patterns like 8.1, 8.2, 8.3
-		// Must match pattern X.Y where X and Y are digits
-		if len(trimmed) >= 3 && len(trimmed) <= 4 {
-			parts := strings.Split(trimmed, ".")
-			if len(parts) == 2 {
-				major := parts[0]
-				minor := parts[1]
-				if len(major) >= 1 && len(minor) >= 1 &&
-				   major[0] >= '5' && major[0] <= '9' &&
-				   minor[0] >= '0' && minor[0] <= '9' {
-					versions = append(versions, trimmed)
-				}
-			}
-		}
-	}
-	return versions
-}
-
-// parseConfigList is kept for backward compatibility
-func parseConfigList(output string) []ConfigFile {
-	configs := []ConfigFile{
-		{Name: "nginx.conf", Path: "/etc/nginx/nginx.conf", Type: "nginx", Readonly: false},
-		{Name: "sshd_config", Path: "/etc/ssh/sshd_config", Type: "ssh", Readonly: false},
-	}
-	configs = append(configs, parseSiteConfigs(output)...)
-	return configs
 }
 
 // ==================== Custom Config Categories ====================
@@ -630,6 +519,9 @@ type CreateConfigCategoryRequest struct {
 
 // CreateConfigCategory creates a new custom config category for a machine
 func (h *ConfigsHandler) CreateConfigCategory(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authorize(w, r, true); !ok {
+		return
+	}
 	machineID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {
 		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
@@ -675,6 +567,9 @@ func (h *ConfigsHandler) CreateConfigCategory(w http.ResponseWriter, r *http.Req
 
 // DeleteConfigCategory deletes a custom config category
 func (h *ConfigsHandler) DeleteConfigCategory(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authorize(w, r, true); !ok {
+		return
+	}
 	categoryID, err := uuid.Parse(mux.Vars(r)["categoryId"])
 	if err != nil {
 		http.Error(w, "Invalid category ID", http.StatusBadRequest)
@@ -699,6 +594,9 @@ type AddConfigPathRequest struct {
 
 // AddConfigPath adds a file path to a custom category
 func (h *ConfigsHandler) AddConfigPath(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authorize(w, r, true); !ok {
+		return
+	}
 	categoryID, err := uuid.Parse(mux.Vars(r)["categoryId"])
 	if err != nil {
 		http.Error(w, "Invalid category ID", http.StatusBadRequest)
@@ -741,6 +639,9 @@ func (h *ConfigsHandler) AddConfigPath(w http.ResponseWriter, r *http.Request) {
 
 // RemoveConfigPath removes a file path from a category
 func (h *ConfigsHandler) RemoveConfigPath(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authorize(w, r, true); !ok {
+		return
+	}
 	pathID, err := uuid.Parse(mux.Vars(r)["pathId"])
 	if err != nil {
 		http.Error(w, "Invalid path ID", http.StatusBadRequest)
@@ -764,6 +665,9 @@ type UpdateConfigCategoryRequest struct {
 
 // UpdateConfigCategory updates a custom config category
 func (h *ConfigsHandler) UpdateConfigCategory(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authorize(w, r, true); !ok {
+		return
+	}
 	categoryID, err := uuid.Parse(mux.Vars(r)["categoryId"])
 	if err != nil {
 		http.Error(w, "Invalid category ID", http.StatusBadRequest)
@@ -803,6 +707,9 @@ type UpdateConfigPathRequest struct {
 
 // UpdateConfigPath updates a file path in a category
 func (h *ConfigsHandler) UpdateConfigPath(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authorize(w, r, true); !ok {
+		return
+	}
 	pathID, err := uuid.Parse(mux.Vars(r)["pathId"])
 	if err != nil {
 		http.Error(w, "Invalid path ID", http.StatusBadRequest)

@@ -7,10 +7,10 @@ import (
 
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/domainhealth"
+	"configuratix/backend/internal/jobs"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
-	"github.com/lib/pq"
 )
 
 func (h *DomainsHandler) domainAccessible(claims *auth.Claims, userID uuid.UUID, domainID uuid.UUID) bool {
@@ -63,7 +63,7 @@ func (h *DomainsHandler) BulkAssignDomains(w http.ResponseWriter, r *http.Reques
 			continue
 		}
 		assignReq := AssignDomainRequest{MachineID: req.MachineID, ConfigID: req.ConfigID}
-		if err := h.assignDomainCore(id, assignReq); err != nil {
+		if _, err := h.assignDomainCore(id, assignReq, jobs.UserID(r)); err != nil {
 			log.Printf("bulk assign %s: %v", id, err)
 			errors = append(errors, itemErr{ID: sid, Error: err.Error()})
 			continue
@@ -105,18 +105,13 @@ func (h *DomainsHandler) BulkDeleteDomains(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	res, err := h.db.Exec(`
-		DELETE FROM domains d
-		WHERE d.id = ANY($1)
-	`, pq.Array(ids))
+	n, created, warnings, err := deleteDomainsWithCleanup(r.Context(), h.db, ids, &userID)
 	if err != nil {
 		log.Printf("bulk delete domains: %v", err)
 		http.Error(w, "Failed to delete domains", http.StatusInternalServerError)
 		return
 	}
-	n, _ := res.RowsAffected()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int64{"deleted": n})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"deleted": n, "jobs": jobsResponse(created), "warnings": warnings})
 }
 
 // BulkCheckDomains runs an immediate health check for each domain.

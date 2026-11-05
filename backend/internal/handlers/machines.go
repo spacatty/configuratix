@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"strconv"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -12,8 +14,8 @@ import (
 
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
+	"configuratix/backend/internal/jobs"
 	"configuratix/backend/internal/models"
-	"configuratix/backend/internal/templates"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -63,6 +65,15 @@ type MachineWithDetails struct {
 	AgentName    *string    `db:"agent_name" json:"agent_name"`
 	AgentVersion *string    `db:"agent_version" json:"agent_version"`
 	LastSeen     *time.Time `db:"last_seen" json:"last_seen"`
+	// Agent runtime (migration 040)
+	IsOnline               bool            `db:"is_online" json:"is_online"` // last_seen < 90s
+	AgentArch              *string         `db:"agent_arch" json:"agent_arch"`
+	AgentCapabilities      json.RawMessage `db:"agent_capabilities" json:"agent_capabilities"`
+	AgentUpdateState       *string         `db:"agent_update_state" json:"agent_update_state"`
+	AgentUpdateTarget      *string         `db:"agent_update_target_version" json:"agent_update_target_version"`
+	AgentLastUpdateError   *string         `db:"agent_last_update_error" json:"agent_last_update_error"`
+	AgentRunningJobID      *uuid.UUID      `db:"agent_running_job_id" json:"agent_running_job_id"`
+	AgentOutdated          bool            `db:"-" json:"agent_outdated"`
 	OwnerEmail   *string    `db:"owner_email" json:"owner_email"`
 	OwnerName    *string    `db:"owner_name" json:"owner_name"`
 	ProjectName  *string    `db:"project_name" json:"project_name"`
@@ -76,6 +87,8 @@ type MachineWithDetails struct {
 	ActiveDNSTargetCount   int             `db:"active_dns_target_count" json:"active_dns_target_count"`
 	GroupCount             int             `db:"group_count" json:"group_count"`
 	AssignedDomainsSummary json.RawMessage `db:"assigned_domains_summary" json:"assigned_domains_summary"`
+	// Groups this machine belongs to: [{id, name, color, emoji}]
+	GroupNames json.RawMessage `db:"group_names" json:"group_names"`
 }
 
 // ListMachines returns machines the user can access
@@ -95,6 +108,13 @@ func (h *MachinesHandler) ListMachines(w http.ResponseWriter, r *http.Request) {
 			a.name as agent_name,
 			a.version as agent_version,
 			a.last_seen,
+			(a.last_seen IS NOT NULL AND a.last_seen > NOW() - INTERVAL '90 seconds') as is_online,
+			a.arch as agent_arch,
+			COALESCE(a.capabilities, '[]'::jsonb) as agent_capabilities,
+			a.update_state as agent_update_state,
+			a.update_target_version as agent_update_target_version,
+			a.last_update_error as agent_last_update_error,
+			a.running_job_id as agent_running_job_id,
 			u.email as owner_email,
 			COALESCE(u.name, u.email) as owner_name,
 			p.name as project_name,
@@ -117,7 +137,8 @@ func (h *MachinesHandler) ListMachines(w http.ResponseWriter, r *http.Request) {
 			(SELECT COUNT(*)::int FROM dns_passthrough_pools WHERE current_machine_id = m.id)
 			+ (SELECT COUNT(*)::int FROM dns_wildcard_pools WHERE current_machine_id = m.id) as active_dns_target_count,
 			(SELECT COUNT(*)::int FROM machine_group_members WHERE machine_id = m.id) as group_count,
-			(SELECT COALESCE(json_agg(json_build_object('fqdn', d.fqdn, 'status', d.status)), '[]'::json) FROM domains d WHERE d.assigned_machine_id = m.id) as assigned_domains_summary
+			(SELECT COALESCE(json_agg(json_build_object('fqdn', d.fqdn, 'status', d.status)), '[]'::json) FROM domains d WHERE d.assigned_machine_id = m.id) as assigned_domains_summary,
+			(SELECT COALESCE(json_agg(json_build_object('id', g.id, 'name', g.name, 'color', g.color, 'emoji', g.emoji) ORDER BY g.position, g.name), '[]'::json) FROM machine_group_members gm JOIN machine_groups g ON g.id = gm.group_id WHERE gm.machine_id = m.id) as group_names
 		FROM machines m
 		LEFT JOIN agents a ON m.agent_id = a.id
 		LEFT JOIN users u ON m.owner_id = u.id
@@ -190,6 +211,9 @@ func (h *MachinesHandler) ListMachines(w http.ResponseWriter, r *http.Request) {
 	if machines == nil {
 		machines = []MachineWithDetails{}
 	}
+	for i := range machines {
+		machines[i].AgentOutdated = machines[i].AgentVersion != nil && IsAgentOutdated(*machines[i].AgentVersion)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(machines)
@@ -217,6 +241,13 @@ func (h *MachinesHandler) GetMachine(w http.ResponseWriter, r *http.Request) {
 			a.name as agent_name,
 			a.version as agent_version,
 			a.last_seen,
+			(a.last_seen IS NOT NULL AND a.last_seen > NOW() - INTERVAL '90 seconds') as is_online,
+			a.arch as agent_arch,
+			COALESCE(a.capabilities, '[]'::jsonb) as agent_capabilities,
+			a.update_state as agent_update_state,
+			a.update_target_version as agent_update_target_version,
+			a.last_update_error as agent_last_update_error,
+			a.running_job_id as agent_running_job_id,
 			u.email as owner_email,
 			COALESCE(u.name, u.email) as owner_name,
 			p.name as project_name,
@@ -239,7 +270,8 @@ func (h *MachinesHandler) GetMachine(w http.ResponseWriter, r *http.Request) {
 			(SELECT COUNT(*)::int FROM dns_passthrough_pools WHERE current_machine_id = m.id)
 			+ (SELECT COUNT(*)::int FROM dns_wildcard_pools WHERE current_machine_id = m.id) as active_dns_target_count,
 			(SELECT COUNT(*)::int FROM machine_group_members WHERE machine_id = m.id) as group_count,
-			(SELECT COALESCE(json_agg(json_build_object('fqdn', d.fqdn, 'status', d.status)), '[]'::json) FROM domains d WHERE d.assigned_machine_id = m.id) as assigned_domains_summary
+			(SELECT COALESCE(json_agg(json_build_object('fqdn', d.fqdn, 'status', d.status)), '[]'::json) FROM domains d WHERE d.assigned_machine_id = m.id) as assigned_domains_summary,
+			(SELECT COALESCE(json_agg(json_build_object('id', g.id, 'name', g.name, 'color', g.color, 'emoji', g.emoji) ORDER BY g.position, g.name), '[]'::json) FROM machine_group_members gm JOIN machine_groups g ON g.id = gm.group_id WHERE gm.machine_id = m.id) as group_names
 		FROM machines m
 		LEFT JOIN agents a ON m.agent_id = a.id
 		LEFT JOIN users u ON m.owner_id = u.id
@@ -250,6 +282,8 @@ func (h *MachinesHandler) GetMachine(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Machine not found", http.StatusNotFound)
 		return
 	}
+
+	machine.AgentOutdated = machine.AgentVersion != nil && IsAgentOutdated(*machine.AgentVersion)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(machine)
@@ -613,38 +647,32 @@ func (h *MachinesHandler) executeTemplate(w http.ResponseWriter, claims *auth.Cl
 		return
 	}
 
-	// Get command template
-	cmd := templates.GetCommand(templateID)
-	if cmd == nil {
-		http.Error(w, "Template not found: "+templateID, http.StatusInternalServerError)
-		return
-	}
-
 	// Get agent_id for this machine
-	var agentID uuid.UUID
-	err := h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
+	agentID, err := machineAgentID(h.db, machineID)
 	if err != nil {
 		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
 		return
 	}
 
-	// Create job with run type using template
-	payload := cmd.ToPayload(vars)
+	// Validate variables (rejects shell metacharacters) and build the payload
+	spec, err := jobs.FromTemplate(templateID, vars)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	spec.AgentID = agentID
+	spec.EntityType = jobs.EntityMachine
+	spec.EntityID = machineID.String()
+	spec.CreatedBy = &userID
 
-	var job models.Job
-	err = h.db.Get(&job, `
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'run', $2, 'pending')
-		RETURNING *
-	`, agentID, payload)
+	job, err := jobs.Create(context.Background(), h.db, spec)
 	if err != nil {
 		log.Printf("Failed to create job: %v", err)
 		http.Error(w, "Failed to create job", http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(job)
+	writeJSON(w, http.StatusOK, jobCreatedResponse(job))
 }
 
 // ChangeSSHPort creates a job to change the SSH port
@@ -865,7 +893,13 @@ func (h *MachinesHandler) GetMachineLogs(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	command := fmt.Sprintf("tail -n %s %s 2>/dev/null || echo 'Log file not found or empty'", lines, logPath)
+	lineCount, convErr := strconv.Atoi(lines)
+	if convErr != nil || lineCount < 1 || lineCount > 10000 {
+		http.Error(w, "Invalid lines (1-10000)", http.StatusBadRequest)
+		return
+	}
+
+	command := fmt.Sprintf("tail -n %d %s 2>/dev/null || echo 'Log file not found or empty'", lineCount, logPath)
 
 	payload, _ := json.Marshal(map[string]interface{}{
 		"steps": []map[string]interface{}{
@@ -874,28 +908,24 @@ func (h *MachinesHandler) GetMachineLogs(w http.ResponseWriter, r *http.Request)
 		"on_error": "stop",
 	})
 
-	var job models.Job
-	err = h.db.Get(&job, `
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'run', $2, 'pending')
-		RETURNING *
-	`, agentID, payload)
+	job, err := jobs.Create(r.Context(), h.db, jobs.Spec{
+		AgentID:    agentID,
+		Payload:    payload,
+		Action:     "read_logs",
+		Title:      "Read logs · " + logType,
+		EntityType: jobs.EntityMachine,
+		EntityID:   machineID.String(),
+		CreatedBy:  &userID,
+	})
 	if err != nil {
 		log.Printf("Failed to create job: %v", err)
 		http.Error(w, "Failed to create job", http.StatusInternalServerError)
 		return
 	}
 
-	// Wait for job to complete (poll for up to 30 seconds)
-	for i := 0; i < 60; i++ {
-		time.Sleep(500 * time.Millisecond)
-		err = h.db.Get(&job, "SELECT * FROM jobs WHERE id = $1", job.ID)
-		if err != nil {
-			break
-		}
-		if job.Status == "completed" || job.Status == "failed" {
-			break
-		}
+	// Wait for job to complete (up to 30 seconds)
+	if done, _ := waitForJob(r.Context(), h.db, job.ID, 30*time.Second); done != nil {
+		job = done
 	}
 
 	logs := ""
@@ -960,28 +990,24 @@ func (h *MachinesHandler) ExecTerminalCommand(w http.ResponseWriter, r *http.Req
 		"on_error": "stop",
 	})
 
-	var job models.Job
-	err = h.db.Get(&job, `
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'run', $2, 'pending')
-		RETURNING *
-	`, agentID, payload)
+	job, err := jobs.Create(r.Context(), h.db, jobs.Spec{
+		AgentID:    agentID,
+		Payload:    payload,
+		Action:     "exec_command",
+		Title:      jobs.CommandTitle(req.Command),
+		EntityType: jobs.EntityMachine,
+		EntityID:   machineID.String(),
+		CreatedBy:  &userID,
+	})
 	if err != nil {
 		log.Printf("Failed to create job: %v", err)
 		http.Error(w, "Failed to create job", http.StatusInternalServerError)
 		return
 	}
 
-	// Wait for job to complete
-	for i := 0; i < 120; i++ {
-		time.Sleep(500 * time.Millisecond)
-		err = h.db.Get(&job, "SELECT * FROM jobs WHERE id = $1", job.ID)
-		if err != nil {
-			break
-		}
-		if job.Status == "completed" || job.Status == "failed" {
-			break
-		}
+	// Wait for job to complete (up to 60 seconds)
+	if done, _ := waitForJob(r.Context(), h.db, job.ID, 60*time.Second); done != nil {
+		job = done
 	}
 
 	output := ""
@@ -989,7 +1015,7 @@ func (h *MachinesHandler) ExecTerminalCommand(w http.ResponseWriter, r *http.Req
 	if job.Logs != nil {
 		output = *job.Logs
 	}
-	if job.Status == "failed" {
+	if job.Status == "failed" || job.Status == "cancelled" {
 		exitCode = 1
 	}
 
@@ -1280,47 +1306,33 @@ func (h *MachinesHandler) RunSpeedTestAndWait(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Get command template
-	cmd := templates.GetCommand(templateID)
-	if cmd == nil {
-		http.Error(w, "Template not found: "+templateID, http.StatusInternalServerError)
-		return
-	}
-
 	// Get agent_id for this machine
-	var agentID uuid.UUID
-	err = h.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1 AND agent_id IS NOT NULL", machineID)
+	agentID, err := machineAgentID(h.db, machineID)
 	if err != nil {
 		http.Error(w, "Machine not found or no agent connected", http.StatusNotFound)
 		return
 	}
 
-	// Create job with run type using template
-	payload := cmd.ToPayload(vars)
+	spec, err := jobs.FromTemplate(templateID, vars)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	spec.AgentID = agentID
+	spec.EntityType = jobs.EntityMachine
+	spec.EntityID = machineID.String()
+	spec.CreatedBy = &userID
 
-	var job models.Job
-	err = h.db.Get(&job, `
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'run', $2, 'pending')
-		RETURNING *
-	`, agentID, payload)
+	job, err := jobs.Create(r.Context(), h.db, spec)
 	if err != nil {
 		log.Printf("Failed to create job: %v", err)
 		http.Error(w, "Failed to create job", http.StatusInternalServerError)
 		return
 	}
 
-	// Wait for job to complete (poll for up to 2 minutes)
-	maxWait := 240 // 120 seconds
-	for i := 0; i < maxWait; i++ {
-		time.Sleep(500 * time.Millisecond)
-		err = h.db.Get(&job, "SELECT * FROM jobs WHERE id = $1", job.ID)
-		if err != nil {
-			break
-		}
-		if job.Status == "completed" || job.Status == "failed" {
-			break
-		}
+	// Wait for job to complete (up to 2 minutes)
+	if done, _ := waitForJob(r.Context(), h.db, job.ID, 120*time.Second); done != nil {
+		job = done
 	}
 
 	result := map[string]interface{}{

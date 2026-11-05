@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,6 +9,9 @@ import (
 	"strings"
 
 	"configuratix/backend/internal/database"
+	"configuratix/backend/internal/jobs"
+	"configuratix/backend/internal/models"
+	"configuratix/backend/internal/templates"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -591,11 +595,29 @@ func (g *PassthroughNginxGenerator) GenerateForMachine(machineID uuid.UUID) (Pas
 	}, nil
 }
 
+// PassthroughJobMeta carries job metadata for passthrough apply/remove jobs (retries).
+type PassthroughJobMeta struct {
+	CreatedBy   *uuid.UUID
+	ParentJobID *uuid.UUID
+	Attempts    int
+}
+
 // ApplyToMachine sends a job to apply the config on a machine
 func (g *PassthroughNginxGenerator) ApplyToMachine(machineID uuid.UUID) error {
+	_, err := g.applyToMachine(machineID, PassthroughJobMeta{})
+	return err
+}
+
+// ApplyToMachineJob renders the passthrough config from current DB state (fresh transaction id)
+// and returns the created job.
+func (g *PassthroughNginxGenerator) ApplyToMachineJob(machineID uuid.UUID, meta PassthroughJobMeta) (*models.Job, error) {
+	return g.applyToMachine(machineID, meta)
+}
+
+func (g *PassthroughNginxGenerator) applyToMachine(machineID uuid.UUID, meta PassthroughJobMeta) (*models.Job, error) {
 	configs, err := g.GenerateForMachine(machineID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Create a job to write the config
@@ -610,8 +632,26 @@ func (g *PassthroughNginxGenerator) ApplyToMachine(machineID uuid.UUID) error {
 	var agentID *uuid.UUID
 	err = g.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1", machineID)
 	if err != nil || agentID == nil {
-		return fmt.Errorf("machine %s has no agent", machineID)
+		return nil, fmt.Errorf("machine %s has no agent", machineID)
 	}
+
+	// Domains are interpolated into shell below: drop anything that is not a valid FQDN.
+	validL7 := configs.L7Domains[:0:0]
+	for _, d := range configs.L7Domains {
+		if n, err := templates.NormalizeFQDN(d); err == nil && n == strings.ToLower(d) {
+			validL7 = append(validL7, n)
+		} else {
+			log.Printf("passthrough: skipping invalid L7 domain %q on machine %s", d, machineID)
+		}
+	}
+	configs.L7Domains = validL7
+
+	// Transaction id: every file touched is backed up under /var/lib/configuratix/backups/<txn>
+	// in the first step and restored by the final install step if nginx -t fails.
+	txn := templates.NewTxnID()
+	stagedStream := templates.StagingPath(txn, "stream.conf")
+	stagedHTTP := templates.StagingPath(txn, "http.conf")
+	stagedL7 := templates.StagingPath(txn, "l7.conf")
 
 	needsStream := configs.StreamConfig != ""
 	needsL7 := configs.L7Config != ""
@@ -693,6 +733,11 @@ fi
 
 echo "Passthrough setup complete"
 `, needsStream)
+	// Record the pre-change state of every file this job may touch (restored by the install step).
+	setupScript = "#!/bin/bash\n" + templates.TxnPrelude(txn) + fmt.Sprintf(
+		"rm -rf \"$CFX_STAGING_DIR\"\ncfx_backup /etc/nginx/nginx.conf %s %s %s %s\necho \"Backed up current passthrough configs (txn %s)\"\n",
+		shellQuote(streamConfigPath), shellQuote(httpConfigPath), shellQuote(l7ConfigPath), shellQuote(l7BootstrapPath), txn,
+	) + setupScript
 	ensureL7CertsScript := fmt.Sprintf(`
 #!/bin/bash
 set -e
@@ -852,42 +897,61 @@ trap - ERR
 rm -rf "$BACKUP_DIR"
 echo "L7 certificate bootstrap complete"
 `, strings.Join(configs.L7Domains, " "), l7BootstrapPath, streamConfigPath, httpConfigPath, l7ConfigPath, certEmailFunc.String())
-	// Final step: test config and restart nginx (not just reload, in case it's stopped)
-	restartScript := fmt.Sprintf(`
-#!/bin/bash
+	// Final step: atomically install the staged configs, test, and reload/start nginx.
+	// On failure every file recorded in step 1 is restored and nginx is brought back up.
+	restartScript := "#!/bin/bash\n" + templates.TxnPrelude(txn) + fmt.Sprintf(`
+trap cfx_txn_trap EXIT
 set -e
 
-L7_CONFIG_FILE="%s"
-L7_BOOTSTRAP_FILE="%s"
+L7_CONFIG_FILE=%s
+L7_BOOTSTRAP_FILE=%s
 CLEAN_L7_BOOTSTRAP="%t"
 
-# Remove temporary ACME bootstrap after final L7 config exists
-if [ "$CLEAN_L7_BOOTSTRAP" = "true" ] && [ -f "$L7_CONFIG_FILE" ] && [ -f "$L7_BOOTSTRAP_FILE" ]; then
-    rm -f "$L7_BOOTSTRAP_FILE"
+install_or_remove() {
+    if [ -f "$1" ]; then
+        cfx_install "$1" "$2"
+        echo "Installed $2"
+    elif [ -e "$2" ]; then
+        rm -f -- "$2"
+        echo "Removed $2"
+    fi
+}
+cfx_backup %s %s %s %s
+install_or_remove %s %s
+install_or_remove %s %s
+install_or_remove %s %s
+
+# Remove temporary ACME bootstrap after final L7 config exists (or when L7 is not used)
+if [ "$CLEAN_L7_BOOTSTRAP" != "true" ] || [ -f "$L7_CONFIG_FILE" ]; then
+    rm -f -- "$L7_BOOTSTRAP_FILE"
 fi
 
-# Test config
-nginx -t
-
-# Start or reload nginx
+cfx_nginx_test || exit 1
 if systemctl is-active --quiet nginx; then
     echo "Reloading nginx..."
-    systemctl reload nginx
 else
     echo "Starting nginx..."
-    systemctl start nginx
+fi
+if ! cfx_nginx_up; then
+    CFX_FAIL_REASON="nginx reload/start failed"
+    exit 1
 fi
 
 # Verify it's actually running
 sleep 1
 if ! systemctl is-active --quiet nginx; then
-    echo "ERROR: Nginx failed to start!"
-    journalctl -u nginx --no-pager -n 20
+    CFX_FAIL_REASON="nginx is not running after reload"
+    journalctl -u nginx --no-pager -n 20 || true
     exit 1
 fi
 
 echo "Nginx is running successfully"
-`, l7ConfigPath, l7BootstrapPath, needsL7)
+exit 0
+`, shellQuote(l7ConfigPath), shellQuote(l7BootstrapPath), needsL7,
+		shellQuote(streamConfigPath), shellQuote(httpConfigPath), shellQuote(l7ConfigPath), shellQuote(l7BootstrapPath),
+		shellQuote(stagedStream), shellQuote(streamConfigPath),
+		shellQuote(stagedHTTP), shellQuote(httpConfigPath),
+		shellQuote(stagedL7), shellQuote(l7ConfigPath))
 	l7StatusScript := fmt.Sprintf(`
 #!/bin/bash
 set -e
@@ -928,23 +992,17 @@ done
 	if needsL7 {
 		steps = append(steps, map[string]interface{}{"action": "exec", "command": ensureL7CertsScript, "timeout": l7CertTimeout})
 	}
+	// New configs are written to the staging dir; the install step moves them into place.
 	if configs.StreamConfig != "" {
-		steps = append(steps, map[string]interface{}{"action": "file", "op": "write", "path": streamConfigPath, "content": configs.StreamConfig, "mode": "0644"})
-	} else {
-		steps = append(steps, map[string]interface{}{"action": "file", "op": "delete", "path": streamConfigPath})
+		steps = append(steps, map[string]interface{}{"action": "file", "op": "write", "path": stagedStream, "content": configs.StreamConfig, "mode": "0644"})
 	}
 	if configs.HTTPConfig != "" {
-		steps = append(steps, map[string]interface{}{"action": "file", "op": "write", "path": httpConfigPath, "content": configs.HTTPConfig, "mode": "0644"})
-	} else {
-		steps = append(steps, map[string]interface{}{"action": "file", "op": "delete", "path": httpConfigPath})
+		steps = append(steps, map[string]interface{}{"action": "file", "op": "write", "path": stagedHTTP, "content": configs.HTTPConfig, "mode": "0644"})
 	}
 	if configs.L7Config != "" {
-		steps = append(steps, map[string]interface{}{"action": "file", "op": "write", "path": l7ConfigPath, "content": configs.L7Config, "mode": "0644"})
-	} else {
-		steps = append(steps, map[string]interface{}{"action": "file", "op": "delete", "path": l7ConfigPath})
-		steps = append(steps, map[string]interface{}{"action": "file", "op": "delete", "path": l7BootstrapPath})
+		steps = append(steps, map[string]interface{}{"action": "file", "op": "write", "path": stagedL7, "content": configs.L7Config, "mode": "0644"})
 	}
-	steps = append(steps, map[string]interface{}{"action": "exec", "command": restartScript, "timeout": 60})
+	steps = append(steps, map[string]interface{}{"action": "exec", "command": restartScript, "timeout": 120})
 	if needsL7 {
 		steps = append(steps, map[string]interface{}{"action": "exec", "command": l7StatusScript, "timeout": 60})
 	}
@@ -954,20 +1012,26 @@ done
 		"on_error": "stop",
 	})
 	if err != nil {
-		return fmt.Errorf("failed to build payload: %w", err)
+		return nil, fmt.Errorf("failed to build payload: %w", err)
 	}
-	payload := string(payloadBytes)
 
-	var jobID uuid.UUID
-	err = g.db.Get(&jobID, `
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'run', $2::jsonb, 'pending')
-		RETURNING id
-	`, agentID, payload)
-
+	var machineTitle string
+	g.db.Get(&machineTitle, "SELECT COALESCE(NULLIF(title, ''), hostname, '') FROM machines WHERE id = $1", machineID)
+	job, err := jobs.Create(context.Background(), g.db, jobs.Spec{
+		AgentID:    *agentID,
+		Payload:    json.RawMessage(payloadBytes),
+		Action:     "passthrough_apply",
+		Title:      "Apply DNS passthrough · " + machineTitle,
+		EntityType: jobs.EntityPassthrough,
+		EntityID:   machineID.String(),
+		CreatedBy:   meta.CreatedBy,
+		ParentJobID: meta.ParentJobID,
+		Attempts:    meta.Attempts,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create job: %w", err)
+		return nil, fmt.Errorf("failed to create job: %w", err)
 	}
+	jobID := job.ID
 
 	if len(configs.L7Domains) > 0 {
 		_, _ = g.db.Exec(`
@@ -990,25 +1054,26 @@ done
 		_, _ = g.db.Exec("DELETE FROM dns_l7_certificates WHERE machine_id = $1", machineID)
 	}
 
-	// Mark nginx config as applied for this machine in all its pools
-	g.db.Exec(`
-		UPDATE dns_passthrough_members 
-		SET nginx_config_applied = true 
-		WHERE machine_id = $1
-	`, machineID)
-
-	g.db.Exec(`
-		UPDATE dns_wildcard_pool_members 
-		SET nginx_config_applied = true 
-		WHERE machine_id = $1
-	`, machineID)
+	// nginx_config_applied is set by jobhooks.OnJobFinished once the agent confirms success.
+	g.db.Exec(`UPDATE dns_passthrough_members SET nginx_config_applied = false WHERE machine_id = $1`, machineID)
+	g.db.Exec(`UPDATE dns_wildcard_pool_members SET nginx_config_applied = false WHERE machine_id = $1`, machineID)
 
 	log.Printf("Created passthrough config job for machine %s", machineID)
-	return nil
+	return job, nil
 }
 
 // RemoveFromMachine removes passthrough config and re-enables disabled sites
 func (g *PassthroughNginxGenerator) RemoveFromMachine(machineID uuid.UUID) error {
+	_, err := g.removeFromMachine(machineID, PassthroughJobMeta{})
+	return err
+}
+
+// RemoveFromMachineJob is RemoveFromMachine returning the created job (nil when there was nothing to do).
+func (g *PassthroughNginxGenerator) RemoveFromMachineJob(machineID uuid.UUID, meta PassthroughJobMeta) (*models.Job, error) {
+	return g.removeFromMachine(machineID, meta)
+}
+
+func (g *PassthroughNginxGenerator) removeFromMachine(machineID uuid.UUID, meta PassthroughJobMeta) (*models.Job, error) {
 	// Check if machine is still in any pools
 	var count int
 	g.db.Get(&count, `
@@ -1021,76 +1086,73 @@ func (g *PassthroughNginxGenerator) RemoveFromMachine(machineID uuid.UUID) error
 
 	if count > 0 {
 		// Machine is still in pools, just regenerate the config
-		return g.ApplyToMachine(machineID)
+		return g.applyToMachine(machineID, meta)
 	}
 
 	// Machine is not in any pools, remove passthrough config
 	var agentID *uuid.UUID
 	err := g.db.Get(&agentID, "SELECT agent_id FROM machines WHERE id = $1", machineID)
 	if err != nil || agentID == nil {
-		return fmt.Errorf("machine %s has no agent", machineID)
+		return nil, fmt.Errorf("machine %s has no agent", machineID)
 	}
 
-	cleanupScript := `
-#!/bin/bash
+	txn := templates.NewTxnID()
+	cleanupScript := "#!/bin/bash\n" + templates.TxnPrelude(txn) + `
+trap cfx_txn_trap EXIT
 set -e
+CFX_SUCCESS_RESULT="removed"
 
 STREAM_CONFIG_FILE="/etc/nginx/stream.d/configuratix-passthrough.conf"
 HTTP_CONFIG_FILE="/etc/nginx/conf.d/configuratix/passthrough-dns-http.conf"
 L7_CONFIG_FILE="/etc/nginx/conf.d/configuratix/passthrough-dns-l7.conf"
 L7_BOOTSTRAP_FILE="/etc/nginx/conf.d/configuratix/passthrough-l7-bootstrap.conf"
 
-echo "=== Configuratix Passthrough Cleanup ==="
+echo "=== Configuratix Passthrough Cleanup (txn $CFX_TXN) ==="
+cfx_backup "$STREAM_CONFIG_FILE" "$HTTP_CONFIG_FILE" "$L7_CONFIG_FILE" "$L7_BOOTSTRAP_FILE"
 
-# 1. Remove generated passthrough configs
-if [ -f "$STREAM_CONFIG_FILE" ]; then
-    echo "Removing stream passthrough config..."
-    rm -f "$STREAM_CONFIG_FILE"
-fi
-if [ -f "$HTTP_CONFIG_FILE" ]; then
-    echo "Removing HTTP passthrough config..."
-    rm -f "$HTTP_CONFIG_FILE"
-fi
-if [ -f "$L7_CONFIG_FILE" ]; then
-    echo "Removing L7 passthrough config..."
-    rm -f "$L7_CONFIG_FILE"
-fi
-if [ -f "$L7_BOOTSTRAP_FILE" ]; then
-    echo "Removing L7 bootstrap config..."
-    rm -f "$L7_BOOTSTRAP_FILE"
-fi
+for f in "$STREAM_CONFIG_FILE" "$HTTP_CONFIG_FILE" "$L7_CONFIG_FILE" "$L7_BOOTSTRAP_FILE"; do
+    if [ -f "$f" ]; then
+        echo "Removing $f"
+        rm -f -- "$f"
+    fi
+done
 
-# 2. Restart nginx
-nginx -t
-if systemctl is-active --quiet nginx; then
-    systemctl reload nginx
-else
-    systemctl start nginx
+# Test and reload/start nginx; on failure the removed files are restored.
+cfx_nginx_test || exit 1
+if ! cfx_nginx_up; then
+    CFX_FAIL_REASON="nginx reload/start failed"
+    exit 1
 fi
 
 echo "Passthrough cleanup complete"
+exit 0
 `
 
-	payload := fmt.Sprintf(`{
-		"steps": [
-			{"action": "exec", "command": %q, "timeout": 120}
-		],
-		"on_error": "stop"
-	}`, cleanupScript)
-
-	_, err = g.db.Exec(`
-		INSERT INTO jobs (agent_id, type, payload_json, status)
-		VALUES ($1, 'run', $2::jsonb, 'pending')
-	`, agentID, payload)
-
+	payload, _ := json.Marshal(map[string]interface{}{
+		"steps":    []map[string]interface{}{{"action": "exec", "command": cleanupScript, "timeout": 120}},
+		"on_error": "stop",
+	})
+	var machineTitle string
+	g.db.Get(&machineTitle, "SELECT COALESCE(NULLIF(title, ''), hostname, '') FROM machines WHERE id = $1", machineID)
+	job, err := jobs.Create(context.Background(), g.db, jobs.Spec{
+		AgentID:    *agentID,
+		Payload:    json.RawMessage(payload),
+		Action:     "passthrough_remove",
+		Title:      "Remove DNS passthrough · " + machineTitle,
+		EntityType: jobs.EntityPassthrough,
+		EntityID:   machineID.String(),
+		CreatedBy:   meta.CreatedBy,
+		ParentJobID: meta.ParentJobID,
+		Attempts:    meta.Attempts,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create cleanup job: %w", err)
+		return nil, fmt.Errorf("failed to create cleanup job: %w", err)
 	}
 
 	g.db.Exec("DELETE FROM dns_l7_certificates WHERE machine_id = $1", machineID)
 
 	log.Printf("Created passthrough cleanup job for machine %s", machineID)
-	return nil
+	return job, nil
 }
 
 // ApplyToAllPoolMembers applies config to all members of a pool (direct + group members)

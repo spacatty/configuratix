@@ -4,6 +4,7 @@
 package updater
 
 import (
+	"os/exec"
 	"syscall"
 )
 
@@ -12,3 +13,7 @@ func execSyscall(argv0 string, argv []string, envv []string) error {
 	return syscall.Exec(argv0, argv, envv)
 }
 
+// detach starts cmd in its own session so it outlives the agent process.
+func detach(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+}
