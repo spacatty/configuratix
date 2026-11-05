@@ -3,69 +3,63 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/format";
-import type { Machine } from "@/lib/api";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { cpuPct, diskPct, memPct, toneBg, toneText, usageTone } from "./utils";
+import { toneBg, toneText, usageTone } from "./utils";
 
-/** Tiny inline usage bar for dense table cells: label · bar · % */
-export function MiniMeter({
-  label,
-  value,
-  detail,
-  className,
-}: {
-  label: string;
-  value: number | null;
-  detail?: React.ReactNode;
-  className?: string;
-}) {
-  const tone = usageTone(value);
-  const body = (
-    <div className={cn("flex items-center gap-1.5", className)}>
-      <span className="w-7 shrink-0 text-[10.5px] text-subtle-foreground">{label}</span>
-      <div className="relative h-1 w-12 overflow-hidden rounded-full bg-white/[0.07]">
-        {value != null && (
-          <div
-            className={cn("absolute inset-y-0 left-0 rounded-full transition-[width] duration-500", toneBg[tone])}
-            style={{ width: `${Math.max(2, value)}%` }}
-          />
-        )}
-      </div>
-      <span className={cn("font-data w-8 text-right text-[11px]", toneText[tone])}>
-        {value == null ? "—" : `${Math.round(value)}%`}
-      </span>
-    </div>
-  );
-  if (!detail) return body;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{body}</TooltipTrigger>
-      <TooltipContent side="top" className="font-data text-[11px]">
-        {detail}
-      </TooltipContent>
-    </Tooltip>
-  );
+/** Compact "used/total" for table cells, e.g. 3.3/7.8 GB. */
+function usedOfTotal(used: number | null | undefined, total: number | null | undefined): string | null {
+  if (!total || used == null) return null;
+  const full = formatBytes(total); // e.g. "7.8 GB"
+  const unit = full.split(" ")[1] ?? "";
+  const div = { KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3, TB: 1024 ** 4 }[unit] ?? 1;
+  const u = used / div;
+  // "3.2/7.8G": the unit initial keeps the column narrow.
+  return `${u >= 100 ? Math.round(u) : u.toFixed(1)}/${full.replace(/\s*([KMGT])B$/, "$1")}`;
 }
 
-/** Stack of CPU / RAM / Disk mini meters for a machine row. */
-export function MachineMeters({ machine, className }: { machine: Machine; className?: string }) {
-  const cpu = cpuPct(machine);
-  const mem = memPct(machine);
-  const disk = diskPct(machine);
+/**
+ * One table cell per resource: value · slim bar · used/total.
+ * `stale` (machine not reporting) greys everything out: last known values, not live load.
+ */
+export function UsageCell({
+  value,
+  used,
+  total,
+  label,
+  stale,
+  lastSeen,
+}: {
+  value: number | null;
+  used?: number | null;
+  total?: number | null;
+  label: string;
+  stale?: boolean;
+  lastSeen?: string | null;
+}) {
+  if (value == null) return <span className="text-xs text-subtle-foreground">—</span>;
+  const tone = stale ? "muted" : usageTone(value);
+  const amount = usedOfTotal(used, total);
   return (
-    <div className={cn("flex flex-col gap-[3px] py-0.5", className)}>
-      <MiniMeter label="CPU" value={cpu} detail={cpu != null ? `CPU ${cpu.toFixed(1)}%` : undefined} />
-      <MiniMeter
-        label="RAM"
-        value={mem}
-        detail={mem != null ? `RAM ${formatBytes(machine.memory_used)} / ${formatBytes(machine.memory_total)}` : undefined}
-      />
-      <MiniMeter
-        label="Disk"
-        value={disk}
-        detail={disk != null ? `Disk ${formatBytes(machine.disk_used)} / ${formatBytes(machine.disk_total)}` : undefined}
-      />
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className={cn("flex items-center gap-1.5 whitespace-nowrap", stale && "opacity-55")}>
+          <span className={cn("font-data w-9 shrink-0 text-right text-[12.5px] tabular-nums", stale ? "text-muted-foreground" : toneText[tone])}>
+            {Math.round(value)}%
+          </span>
+          <div className="relative h-1 w-10 shrink-0 overflow-hidden rounded-full bg-white/[0.07]">
+            <div
+              className={cn("absolute inset-y-0 left-0 rounded-full transition-[width] duration-500", stale ? "bg-muted-foreground/50" : toneBg[tone])}
+              style={{ width: `${Math.max(2, Math.min(100, value))}%` }}
+            />
+          </div>
+          {amount && <span className="font-data hidden text-[11px] text-subtle-foreground 2xl:inline">{amount}</span>}
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="font-data text-[11px]">
+        {label} {value.toFixed(1)}%{amount ? ` · ${amount}` : ""}
+        {stale && <div className="font-sans text-muted-foreground">Last reported {lastSeen ? new Date(lastSeen).toLocaleString() : "unknown"} · machine not reporting</div>}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

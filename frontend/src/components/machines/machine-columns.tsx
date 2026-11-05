@@ -21,7 +21,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { RelativeTime, StatusDot, getStatusMeta, machineDisplayName, machineIp } from "@/components/app";
 import { GroupChips } from "./group-chips";
-import { MachineMeters } from "./resource-meter";
+import { UsageCell } from "./resource-meter";
 import { cpuPct, diskPct, groupRefs, isAgentOutdated, isAgentUpdating, liveness, memPct, LIVENESS_LABEL, type FleetMachine } from "./utils";
 
 export interface MachineColumnHandlers {
@@ -49,7 +49,7 @@ function DomainsCell({ m }: { m: FleetMachine }) {
   const healthy = m.healthy_domains_count ?? 0;
   const unhealthy = m.unhealthy_domains_count ?? 0;
   const unknown = Math.max(0, total - healthy - unhealthy);
-  if (!total) return <span className="font-data text-xs text-subtle-foreground">0</span>;
+  if (!total) return <span className="text-xs text-subtle-foreground">—</span>;
   const summary = m.assigned_domains_summary ?? [];
   const body = (
     <div className="flex items-center justify-end gap-2">
@@ -131,7 +131,7 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
         const name = machineDisplayName(m);
         const ip = machineIp(m);
         return (
-          <div className="flex min-w-[200px] items-center gap-2.5">
+          <div className="flex min-w-[170px] items-center gap-2.5">
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="flex size-4 items-center justify-center">
@@ -144,10 +144,21 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
               <Link href={`/machines/${m.id}`} className="block truncate text-[13px] font-semibold hover:underline underline-offset-4">
                 {name}
               </Link>
-              <div className="flex min-w-0 items-center gap-2 text-[11.5px] text-muted-foreground">
-                {m.hostname && m.hostname !== name && <span className="font-data truncate">{m.hostname}</span>}
-                {ip && <span className="font-data shrink-0 text-subtle-foreground">{ip}</span>}
-                {!ip && !m.hostname && <span className="text-subtle-foreground">awaiting first heartbeat</span>}
+              <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-subtle-foreground">
+                {ip && <span className="font-data shrink-0">{ip}</span>}
+                {m.hostname && m.hostname !== name && (
+                  <>
+                    {ip && <span aria-hidden>·</span>}
+                    <span className="font-data truncate">{m.hostname}</span>
+                  </>
+                )}
+                {m.ubuntu_version && m.ubuntu_version !== "Unknown" && (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span className="truncate">{m.ubuntu_version.replace(/\s*LTS$/, "")}</span>
+                  </>
+                )}
+                {!ip && !m.hostname && <span>awaiting first heartbeat</span>}
               </div>
             </div>
           </div>
@@ -189,12 +200,48 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       cell: ({ row }) => <GroupChips groups={machineGroups(row.original, h.groupsByMachine)} />,
     },
     {
-      id: "resources",
-      accessorFn: (m) => Math.max(cpuPct(m) ?? -1, memPct(m) ?? -1, diskPct(m) ?? -1),
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Resources" />,
-      meta: { label: "Resources" },
+      id: "cpu",
+      accessorFn: (m) => cpuPct(m) ?? -1,
+      header: ({ column }) => <DataTableColumnHeader column={column} title="CPU" />,
+      meta: { label: "CPU" },
       sortDescFirst: true,
-      cell: ({ row }) => <MachineMeters machine={row.original} />,
+      cell: ({ row }) => (
+        <UsageCell label="CPU" value={cpuPct(row.original)} stale={liveness(row.original) !== "online"} lastSeen={row.original.last_seen} />
+      ),
+    },
+    {
+      id: "memory",
+      accessorFn: (m) => memPct(m) ?? -1,
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Memory" />,
+      meta: { label: "Memory" },
+      sortDescFirst: true,
+      cell: ({ row }) => (
+        <UsageCell
+          label="Memory"
+          value={memPct(row.original)}
+          used={row.original.memory_used}
+          total={row.original.memory_total}
+          stale={liveness(row.original) !== "online"}
+          lastSeen={row.original.last_seen}
+        />
+      ),
+    },
+    {
+      id: "disk",
+      accessorFn: (m) => diskPct(m) ?? -1,
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Disk" />,
+      meta: { label: "Disk" },
+      sortDescFirst: true,
+      cell: ({ row }) => (
+        <UsageCell
+          label="Disk"
+          value={diskPct(row.original)}
+          used={row.original.disk_used}
+          total={row.original.disk_total}
+          stale={liveness(row.original) !== "online"}
+          lastSeen={row.original.last_seen}
+        />
+      ),
     },
     {
       id: "domains",
@@ -217,19 +264,39 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       header: ({ column }) => <DataTableColumnHeader column={column} title="Last seen" align="right" />,
       meta: { label: "Last seen", align: "right" },
       sortDescFirst: true,
-      cell: ({ row }) => (
-        <span className={cn("text-xs", liveness(row.original) === "online" ? "text-muted-foreground" : "text-foreground")}>
-          <RelativeTime date={row.original.last_seen} fallback="never" />
-        </span>
-      ),
+      cell: ({ row }) =>
+        liveness(row.original) === "online" ? (
+          <span className="inline-flex items-center gap-1.5 text-xs text-success">
+            <StatusDot status="online" size="xs" />
+            live
+          </span>
+        ) : (
+          <span className={cn("text-xs", liveness(row.original) === "offline" ? "text-warning" : "text-muted-foreground")}>
+            <RelativeTime date={row.original.last_seen} fallback="never" />
+          </span>
+        ),
     },
     {
       id: "actions",
       header: "",
       enableHiding: false,
       enableSorting: false,
-      meta: { align: "right", className: "w-10" },
-      cell: ({ row }) => <RowActions m={row.original} h={h} />,
+      meta: { align: "right", className: "w-[72px]" },
+      cell: ({ row }) => (
+        <div className="flex items-center justify-end gap-0.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button asChild variant="ghost" size="icon-sm" aria-label={`Terminal on ${machineDisplayName(row.original)}`}>
+                <Link href={`/machines/${row.original.id}?tab=terminal`}>
+                  <TerminalSquare />
+                </Link>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Open terminal</TooltipContent>
+          </Tooltip>
+          <RowActions m={row.original} h={h} />
+        </div>
+      ),
     },
   ];
 }
