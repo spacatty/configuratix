@@ -5,8 +5,6 @@ import Link from "next/link";
 import {
   Activity,
   ArrowUpCircle,
-  CheckCircle2,
-  Circle,
   FileCode,
   Globe,
   LayoutDashboard,
@@ -84,10 +82,6 @@ export default function DashboardPage() {
       </div>
     );
   }
-
-  const setupIncomplete =
-    !!machines.data && !!domains.data && !!configs.data &&
-    (machines.data.length === 0 || domains.data.length === 0 || configs.data.length === 0 || !domains.data.some((x) => x.assigned_machine_id));
 
   return (
     <div className="space-y-6">
@@ -209,7 +203,6 @@ export default function DashboardPage() {
         />
       </StatStrip>
 
-      {setupIncomplete && <GettingStarted machines={machines.data!.length} domains={domains.data!.length} configs={configs.data!.length} assigned={domains.data!.some((x) => x.assigned_machine_id)} />}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <SectionCard
@@ -318,45 +311,5 @@ function MiniStat({
     </Link>
   ) : (
     <div className="bg-card px-3 py-2">{body}</div>
-  );
-}
-
-function GettingStarted({ machines, domains, configs, assigned }: { machines: number; domains: number; configs: number; assigned: boolean }) {
-  const steps = [
-    { done: machines > 0, title: "Enroll a machine", text: "Install the agent on a server.", href: "/machines" },
-    { done: configs > 0, title: "Create an nginx config", text: "Reverse proxy, static site or L4 passthrough.", href: "/configs/nginx/new" },
-    { done: domains > 0, title: "Add a domain", text: "Register the hostname you want to serve.", href: "/domains" },
-    { done: assigned, title: "Assign the domain", text: "Pick a machine and config — Configuratix applies it.", href: "/domains" },
-  ];
-  const done = steps.filter((s) => s.done).length;
-  return (
-    <SectionCard
-      title="Getting started"
-      description={`${done} of ${steps.length} steps complete`}
-      actions={<span className="font-data text-xs text-muted-foreground">{Math.round((done / steps.length) * 100)}%</span>}
-    >
-      <ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        {steps.map((st, i) => (
-          <li key={st.title}>
-            <Link
-              href={st.href}
-              className={cn(
-                "flex h-full items-start gap-2.5 rounded-md border border-border px-3 py-2.5 transition-colors hover:border-border-strong hover:bg-surface-2/50",
-                st.done && "opacity-60"
-              )}
-            >
-              {st.done ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" /> : <Circle className="mt-0.5 size-4 shrink-0 text-subtle-foreground" />}
-              <div className="min-w-0">
-                <div className="text-[13px] font-medium">
-                  <span className="font-data mr-1.5 text-subtle-foreground">{i + 1}</span>
-                  {st.title}
-                </div>
-                <div className="text-xs text-muted-foreground">{st.text}</div>
-              </div>
-            </Link>
-          </li>
-        ))}
-      </ol>
-    </SectionCard>
   );
 }
