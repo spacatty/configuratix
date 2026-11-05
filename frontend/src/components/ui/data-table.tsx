@@ -620,7 +620,15 @@ export function DataTable<TData, TValue>({
                           meta?.className
                         )}
                       >
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        {meta?.width === "fill" ? (
+                          // Keeps cell content from inflating the column's minimum width, so
+                          // "fill" columns really split the free space evenly (content truncates).
+                          <div className="w-0 min-w-full overflow-hidden">
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </div>
+                        ) : (
+                          flexRender(cell.column.columnDef.cell, cell.getContext())
+                        )}
                       </TableCell>
                     );
                   })}

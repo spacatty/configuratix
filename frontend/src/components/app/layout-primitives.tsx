@@ -312,6 +312,104 @@ export function StatCard({
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* MetricBar                                                                  */
+/* -------------------------------------------------------------------------- */
+
+export interface MetricProps extends Omit<React.ComponentProps<"div">, "title"> {
+  label: React.ReactNode;
+  value: React.ReactNode;
+  /** Unit or "/ total" shown smaller after the value. */
+  suffix?: React.ReactNode;
+  /** Quiet note after the label: "latest 0.6.0", "3 stale". */
+  hint?: React.ReactNode;
+  /** Colours the value. Use only when the number needs attention. */
+  tone?: StatTone;
+  /** Tiny inline visual after the label (`<MetricMeter>` / `<MetricSegments>`). */
+  children?: React.ReactNode;
+  href?: string;
+  loading?: boolean;
+}
+
+/** One inline item of a `MetricBar`: `2 Machines ▬▬`. No box — just type. */
+export function Metric({ label, value, suffix, hint, tone = "default", children, href, loading, className, ...props }: MetricProps) {
+  const body = (
+    <>
+      {loading ? (
+        <Skeleton className="h-4 w-6 self-center" />
+      ) : (
+        <span className="flex items-baseline gap-0.5">
+          <span className={cn("font-data text-[15px] font-medium tracking-[-0.02em]", toneValue[tone])}>{value}</span>
+          {suffix && <span className="font-data text-[11px] text-muted-foreground">{suffix}</span>}
+        </span>
+      )}
+      <span className="text-xs text-muted-foreground transition-colors group-hover/metric:text-foreground">{label}</span>
+      {hint && !loading && <span className="text-[11px] text-subtle-foreground">· {hint}</span>}
+      {children && !loading && <span className="self-center">{children}</span>}
+    </>
+  );
+  const cls = cn("group/metric flex items-baseline gap-1.5 whitespace-nowrap outline-none", className);
+  if (href) {
+    return (
+      <Link href={href} className={cls}>
+        {body}
+      </Link>
+    );
+  }
+  return (
+    <div data-slot="metric" className={cls} {...props}>
+      {body}
+    </div>
+  );
+}
+
+/** Thin bottom meter for a `Metric` (0..100). `tone="auto"` → green / amber ≥75 / red ≥90. */
+export function MetricMeter({ value, tone = "auto" }: { value: number; tone?: StatTone | "auto" }) {
+  const v = Math.max(0, Math.min(100, value));
+  const t: StatTone = tone === "auto" ? (v >= 90 ? "destructive" : v >= 75 ? "warning" : "success") : tone;
+  return (
+    <span className="block h-1 w-10 overflow-hidden rounded-full bg-border">
+      <span className={cn("block h-full rounded-full transition-[width] duration-500", toneBar[t])} style={{ width: `${v}%` }} />
+    </span>
+  );
+}
+
+/** Proportional hairline split for a `Metric` (e.g. online / stale / offline). Zero segments are skipped. */
+export function MetricSegments({ segments }: { segments: { value: number; tone: StatTone; label?: string }[] }) {
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  return (
+    <span className="flex h-1 w-10 gap-px overflow-hidden rounded-full bg-border">
+      {total > 0 &&
+        segments
+          .filter((s) => s.value > 0)
+          .map((s, i) => (
+            <span
+              key={i}
+              title={s.label ? `${s.value} ${s.label}` : undefined}
+              className={cn("h-full transition-[flex-grow] duration-500", toneBar[s.tone])}
+              style={{ flexGrow: s.value }}
+            />
+          ))}
+    </span>
+  );
+}
+
+/** Borderless one-line metrics row, items split by hairline dividers. Wraps on narrow screens. */
+export function MetricBar({ className, children, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="metric-bar"
+      className={cn(
+        "flex flex-wrap items-center gap-y-2 [&>*]:border-l [&>*]:border-border [&>*]:px-4 [&>*:first-child]:border-l-0 [&>*:first-child]:pl-0",
+        className
+      )}
+      {...props}
+    >
+      {children}
+    </div>
+  );
+}
+
 /** Horizontal strip of stats inside one card (divided). Preferred for 3–6 peer metrics. */
 export function StatStrip({ className, children, ...props }: React.ComponentProps<"div">) {
   return (

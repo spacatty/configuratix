@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { ColumnFiltersState } from "@tanstack/react-table";
-import { Activity, Cpu, FolderTree, KeyRound, Plus, RefreshCw, Server, Tags, Trash2, WifiOff } from "lucide-react";
+import { FolderTree, KeyRound, Plus, RefreshCw, Server, Tags, Trash2 } from "lucide-react";
 
 import { api, type Machine, type MachineGroupMember, type MachineGroupWithCount } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -13,10 +13,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   EmptyState,
   ErrorState,
+  Metric,
+  MetricBar,
+  MetricMeter,
+  MetricSegments,
   PageHeader,
   Spinner,
-  StatCard,
-  StatStrip,
   usePolling,
 } from "@/components/app";
 import { AddMachineDialog } from "@/components/machines/add-machine-dialog";
@@ -199,45 +201,49 @@ function MachinesView() {
         }
       />
 
-      <StatStrip>
-        <StatCard label="Machines" value={kpi.total} icon={Server} loading={loading} href={pathname} />
-        <StatCard
+      <MetricBar>
+        <Metric label="Machines" value={kpi.total} loading={loading} href={pathname}>
+          <MetricSegments
+            segments={[
+              { value: kpi.online, tone: "success", label: "online" },
+              { value: kpi.stale, tone: "warning", label: "stale" },
+              { value: kpi.offline, tone: "destructive", label: "offline" },
+            ]}
+          />
+        </Metric>
+        <Metric
           label="Online"
           value={kpi.online}
           suffix={kpi.total ? `/ ${kpi.total}` : undefined}
-          icon={Activity}
+          hint={kpi.stale ? `${kpi.stale} stale` : undefined}
           loading={loading}
           tone={kpi.total && kpi.online === kpi.total ? "success" : "default"}
-          sub={kpi.stale ? `${kpi.stale} stale` : undefined}
           href={`${pathname}?status=online`}
         />
-        <StatCard
+        <Metric
           label="Offline"
           value={kpi.offline}
-          icon={WifiOff}
           loading={loading}
           tone={kpi.offline > 0 ? "destructive" : "default"}
           href={`${pathname}?status=offline`}
         />
-        <StatCard
+        <Metric
           label="Outdated agents"
           value={kpi.outdated}
-          icon={RefreshCw}
+          hint={kpi.updating ? `${kpi.updating} updating` : latestAgent ? `latest ${latestAgent}` : undefined}
           loading={loading}
           tone={kpi.outdated > 0 ? "warning" : "default"}
-          sub={kpi.updating ? `${kpi.updating} updating now` : latestAgent ? `latest ${latestAgent}` : undefined}
           href={`${pathname}?agent=Outdated`}
         />
-        <StatCard
+        <Metric
           label="Avg CPU"
           value={kpi.avgCpu == null ? "—" : Math.round(kpi.avgCpu)}
           suffix={kpi.avgCpu == null ? undefined : "%"}
-          icon={Cpu}
           loading={loading}
-          progress={kpi.avgCpu ?? undefined}
-          progressTone="auto"
-        />
-      </StatStrip>
+        >
+          {kpi.avgCpu != null && <MetricMeter value={kpi.avgCpu} />}
+        </Metric>
+      </MetricBar>
 
       {machinesQ.error && !machinesQ.data ? (
         <ErrorState error={machinesQ.error} onRetry={machinesQ.refresh} title="Couldn't load machines" />

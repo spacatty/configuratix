@@ -133,7 +133,7 @@ function resourceColumns(): ColumnDef<FleetMachine>[] {
       id: "load",
       accessorFn: (m) => Math.max(cpuPct(m) ?? -1, memPct(m) ?? -1, diskPct(m) ?? -1),
       header: ({ column }) => <DataTableColumnHeader column={column} title="Load" />,
-      meta: { label: "Load (CPU / Mem / Disk)", width: "fill" },
+      meta: { label: "Load (CPU / Mem / Disk)", width: "fit" },
       sortDescFirst: true,
       cell: ({ row }) => {
         const items = [...resourceProps(row.original)];
@@ -149,7 +149,7 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       id: "name",
       accessorFn: (m) => machineDisplayName(m),
       header: ({ column }) => <DataTableColumnHeader column={column} title="Machine" />,
-      meta: { label: "Machine", width: "fit" },
+      meta: { label: "Machine", width: "fill" },
       enableHiding: false,
       cell: ({ row }) => {
         const m = row.original;
