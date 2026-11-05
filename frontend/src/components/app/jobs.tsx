@@ -2,30 +2,37 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Activity, ArrowUpRight, ListChecks, Server } from "lucide-react";
+import { Activity, ArrowUpRight, ListChecks } from "lucide-react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
-import { api, type Job } from "@/lib/api";
-import { formatDateTime, formatDuration } from "@/lib/format";
-import { isJobActive, jobDurationMs, jobMachineLabel, jobTitle } from "@/lib/jobs";
+import { api, type Job, type JobCreated, type JobListItem } from "@/lib/api";
+import { formatDuration } from "@/lib/format";
+import { JOBS_CHANGED_EVENT, isJobActive, jobDurationMs, jobMachineLabel, jobTitle } from "@/lib/jobs";
 import { usePolling } from "@/hooks/use-polling";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { StatusBadge, StatusDot } from "@/components/app/status";
-import { CopyButton, KeyValueList, Mono, RelativeTime } from "@/components/app/data-display";
-import { LogViewer } from "@/components/app/log-viewer";
+import { CopyButton, RelativeTime } from "@/components/app/data-display";
 import { EmptyState, ErrorState, Spinner } from "@/components/app/states";
+import {
+  JobActionButtons,
+  JobDetailBody,
+  JobHeaderMeta,
+  JobPageLink,
+  toJobView,
+  useJobDetail,
+  useNow,
+} from "@/components/jobs/job-detail";
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                      */
 /* -------------------------------------------------------------------------- */
 
 /** Anything an API might hand back for a created job. */
-export type JobRef = Job | { id: string } | { job_id: string } | string;
+export type JobRef = Job | JobListItem | JobCreated | { id: string } | { job_id: string } | string;
 
 export interface TrackJobOptions {
   /** Toast title. Defaults to job.title ?? humanizeJobType(job.type). */
@@ -254,143 +261,56 @@ export function openJobLogs(job: JobRef) {
 
 export interface JobLogsSheetProps {
   jobId: string;
-  initialJob?: Job | null;
+  initialJob?: Job | JobListItem | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-/** Right-side sheet: job title, status, timings, logs (live while running) and payload. */
+/**
+ * Right-side sheet: title, status, timings, apply outcome (applied / rolled back),
+ * structured step results, live logs, redacted payload, cancel / retry.
+ */
 export function JobLogsSheet({ jobId, initialJob, open, onOpenChange }: JobLogsSheetProps) {
-  const [job, setJob] = React.useState<Job | null>(initialJob ?? null);
-  const active = !job || isJobActive(job);
-  const { data, error, loading, refresh } = usePolling(() => api.getJob(jobId), active ? 1500 : 0, {
-    enabled: open,
-    deps: [jobId],
-  });
+  const tracker = React.useContext(JobTrackerContext);
+  const { job, error, loading, refresh } = useJobDetail(jobId, toJobView(initialJob), open);
 
-  React.useEffect(() => {
-    setJob(initialJob ?? null);
-  }, [jobId, initialJob]);
-  React.useEffect(() => {
-    if (data) setJob(data);
-  }, [data]);
-
-  const payload = React.useMemo(() => {
-    if (!job?.payload_json) return "";
-    try {
-      const v = typeof job.payload_json === "string" ? JSON.parse(job.payload_json) : job.payload_json;
-      return JSON.stringify(v, null, 2);
-    } catch {
-      return String(job.payload_json);
-    }
-  }, [job?.payload_json]);
-
-  const duration = job ? jobDurationMs(job) : null;
-  const machine = job ? jobMachineLabel(job) : null;
+  const onRetried = React.useCallback(
+    (created: JobCreated) => {
+      if (!tracker) return;
+      void tracker.trackJob(created, { title: created.title ?? undefined });
+      tracker.openJobLogs(created.id);
+    },
+    [tracker]
+  );
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full gap-0 sm:max-w-2xl">
-        <SheetHeader>
+        <SheetHeader className="pr-12">
           <div className="flex items-center gap-2">
             {job ? <StatusBadge status={job.status} /> : <Spinner className="size-3.5 text-muted-foreground" />}
             <span className="font-data text-[11px] text-subtle-foreground">{jobId.slice(0, 8)}</span>
             <CopyButton value={jobId} label="Copy job ID" />
+            <div className="ml-auto flex items-center gap-1.5">
+              <JobActionButtons job={job} onRetried={onRetried} onChanged={() => void refresh()} size="xs" />
+              <JobPageLink id={jobId} onNavigate={() => onOpenChange(false)} />
+            </div>
           </div>
-          <SheetTitle className="pt-1">{job ? jobTitle(job) : "Loading job…"}</SheetTitle>
+          <SheetTitle className="pt-1 leading-snug">{job ? jobTitle(job) : "Loading job…"}</SheetTitle>
           <SheetDescription className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-            {machine && (
-              <span className="inline-flex items-center gap-1.5">
-                <Server className="size-3" />
-                {job?.machine_id ? (
-                  <Link href={`/machines/${job.machine_id}`} className="hover:text-foreground">
-                    {machine}
-                  </Link>
-                ) : (
-                  machine
-                )}
-              </span>
-            )}
-            {job && (
-              <span>
-                <Mono muted>{job.type}</Mono>
-              </span>
-            )}
-            {job?.triggered_by && <span>by {job.triggered_by}</span>}
+            <JobHeaderMeta job={job} />
           </SheetDescription>
         </SheetHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-          {error && !job ? (
-            <ErrorState error={error} onRetry={refresh} title="Could not load job" />
-          ) : (
-            <>
-              <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-4">
-                {[
-                  ["Created", job?.created_at],
-                  ["Started", job?.started_at],
-                  ["Finished", job?.finished_at],
-                ].map(([label, v]) => (
-                  <div key={label as string} className="bg-card px-3 py-2">
-                    <div className="text-[11px] text-muted-foreground">{label}</div>
-                    <div className="mt-0.5 text-[12.5px]">
-                      {v ? <RelativeTime date={v as string} /> : <span className="text-muted-foreground">—</span>}
-                    </div>
-                  </div>
-                ))}
-                <div className="bg-card px-3 py-2">
-                  <div className="text-[11px] text-muted-foreground">Duration</div>
-                  <div className={cn("font-data mt-0.5 text-[12.5px]", job?.status === "running" && "text-info")}>
-                    {formatDuration(duration)}
-                  </div>
-                </div>
-              </div>
-
-              {job?.error_message && (
-                <div className="rounded-lg border border-destructive/30 bg-destructive/[0.07] px-3 py-2.5 text-[13px]">
-                  <div className="text-xs font-medium text-destructive">Error</div>
-                  <div className="font-data mt-1 text-xs break-words whitespace-pre-wrap">{job.error_message}</div>
-                </div>
-              )}
-
-              <Tabs defaultValue="logs" className="min-h-0 flex-1 gap-3">
-                <TabsList>
-                  <TabsTrigger value="logs">Logs</TabsTrigger>
-                  <TabsTrigger value="payload">Payload</TabsTrigger>
-                  <TabsTrigger value="details">Details</TabsTrigger>
-                </TabsList>
-                <TabsContent value="logs" className="min-h-0">
-                  <LogViewer
-                    logs={job?.logs}
-                    live={!!job && isJobActive(job)}
-                    maxHeight="calc(100vh - 360px)"
-                    emptyText={loading ? "Loading…" : job && isJobActive(job) ? "Waiting for output…" : "This job produced no output."}
-                  />
-                </TabsContent>
-                <TabsContent value="payload">
-                  <LogViewer logs={payload} title="payload.json" maxHeight="calc(100vh - 360px)" emptyText="No payload." />
-                </TabsContent>
-                <TabsContent value="details">
-                  <div className="rounded-lg border border-border bg-card p-4">
-                    <KeyValueList
-                      items={[
-                        { label: "Job ID", value: job?.id, mono: true, copy: job?.id },
-                        { label: "Type", value: job?.type, mono: true },
-                        { label: "Agent ID", value: job?.agent_id, mono: true, copy: job?.agent_id },
-                        { label: "Machine", value: machine, hidden: !machine },
-                        { label: "Target", value: job?.target, mono: true, hidden: !job?.target },
-                        { label: "Triggered by", value: job?.triggered_by, hidden: !job?.triggered_by },
-                        { label: "Rollback", value: job?.rollback_status ? <StatusBadge status={job.rollback_status} /> : null, hidden: !job?.rollback_status },
-                        { label: "Created", value: formatDateTime(job?.created_at), mono: true },
-                        { label: "Started", value: formatDateTime(job?.started_at), mono: true },
-                        { label: "Finished", value: formatDateTime(job?.finished_at), mono: true },
-                      ]}
-                    />
-                  </div>
-                </TabsContent>
-              </Tabs>
-            </>
-          )}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
+          <JobDetailBody
+            job={job}
+            loading={loading}
+            error={error}
+            onRetry={refresh}
+            paneHeight="calc(100vh - 400px)"
+            onOpenJob={(id) => tracker?.openJobLogs(id)}
+          />
         </div>
       </SheetContent>
     </Sheet>
@@ -405,25 +325,26 @@ export function JobLogsSheet({ jobId, initialJob, open, onOpenChange }: JobLogsS
 export function JobsIndicator({ className }: { className?: string }) {
   const [open, setOpen] = React.useState(false);
   const tracker = React.useContext(JobTrackerContext);
-  const { data, loading, error, refresh } = usePolling(() => api.listJobs(), open ? 4000 : 10_000);
+  const { data, loading, error, refresh } = usePolling(() => api.listJobsPage({ limit: 8 }), open ? 4000 : 10_000);
 
   React.useEffect(() => {
     if (open) void refresh();
   }, [open, refresh]);
 
-  // refresh soon after something new is tracked
+  // refresh soon after something new is tracked / cancelled / retried
   const trackedKey = tracker?.trackedIds.join(",") ?? "";
   React.useEffect(() => {
     if (trackedKey) void refresh();
   }, [trackedKey, refresh]);
+  React.useEffect(() => {
+    const h = () => void refresh();
+    window.addEventListener(JOBS_CHANGED_EVENT, h);
+    return () => window.removeEventListener(JOBS_CHANGED_EVENT, h);
+  }, [refresh]);
 
-  const jobs = React.useMemo(
-    () => [...(data ?? [])].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
-    [data]
-  );
-  const active = jobs.filter(isJobActive);
-  const recent = jobs.slice(0, 8);
-  const running = active.length;
+  const recent = data?.jobs ?? [];
+  const running = data?.counts ? (data.counts.running ?? 0) + (data.counts.pending ?? 0) : recent.filter(isJobActive).length;
+  const now = useNow(open && recent.some((j) => j.status === "running"));
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -444,7 +365,7 @@ export function JobsIndicator({ className }: { className?: string }) {
         </TooltipTrigger>
         <TooltipContent>Agent jobs</TooltipContent>
       </Tooltip>
-      <PopoverContent align="end" className="w-[380px] p-0">
+      <PopoverContent align="end" className="w-[400px] p-0">
         <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
           <div className="flex items-center gap-2 text-[13px] font-medium">
             Jobs
@@ -456,7 +377,7 @@ export function JobsIndicator({ className }: { className?: string }) {
             </Link>
           </Button>
         </div>
-        <div className="max-h-[360px] overflow-y-auto p-1">
+        <div className="max-h-[380px] overflow-y-auto p-1">
           {loading && !data ? (
             <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
               <Spinner className="size-3.5" /> Loading jobs…
@@ -466,33 +387,39 @@ export function JobsIndicator({ className }: { className?: string }) {
           ) : recent.length === 0 ? (
             <EmptyState size="compact" icon={ListChecks} title="No jobs yet" description="Actions on machines create jobs that appear here." />
           ) : (
-            recent.map((j) => (
-              <button
-                key={j.id}
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  tracker?.openJobLogs(j);
-                }}
-                className="flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left hover:bg-accent focus-visible:bg-accent outline-none"
-              >
-                <StatusDot status={j.status} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px]">{jobTitle(j)}</div>
-                  <div className="truncate text-[11px] text-muted-foreground">
-                    {jobMachineLabel(j) ?? <span className="font-data">{j.agent_id?.slice(0, 8)}</span>}
+            recent.map((j) => {
+              const machine = j.machine_title || j.machine_hostname;
+              const d =
+                j.status === "running" && j.started_at
+                  ? Math.max(0, now - new Date(j.started_at).getTime())
+                  : jobDurationMs(j as unknown as Job);
+              return (
+                <button
+                  key={j.id}
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    tracker?.openJobLogs(j);
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left outline-none hover:bg-accent focus-visible:bg-accent"
+                >
+                  <StatusDot status={j.status} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px]">{jobTitle(j)}</div>
+                    <div className="truncate text-[11px] text-muted-foreground">
+                      {machine ?? <span className="font-data">{j.agent_id?.slice(0, 8) ?? "—"}</span>}
+                      {j.status === "failed" && j.error_message && <span className="text-destructive/90"> · {j.error_message}</span>}
+                    </div>
                   </div>
-                </div>
-                <div className="flex shrink-0 flex-col items-end gap-0.5">
-                  <RelativeTime date={j.created_at} noTooltip className="text-[11px] text-muted-foreground" />
-                  {isJobActive(j) ? (
-                    <span className="font-data text-[11px] text-info">{formatDuration(jobDurationMs(j))}</span>
-                  ) : (
-                    <span className="font-data text-[11px] text-subtle-foreground">{formatDuration(jobDurationMs(j))}</span>
-                  )}
-                </div>
-              </button>
-            ))
+                  <div className="flex shrink-0 flex-col items-end gap-0.5">
+                    <RelativeTime date={j.created_at} noTooltip className="text-[11px] text-muted-foreground" />
+                    <span className={cn("font-data text-[11px]", isJobActive(j) ? "text-info" : "text-subtle-foreground")}>
+                      {j.status === "pending" ? "queued" : formatDuration(d)}
+                    </span>
+                  </div>
+                </button>
+              );
+            })
           )}
         </div>
       </PopoverContent>

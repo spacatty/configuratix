@@ -1,1165 +1,269 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { ColumnDef } from "@tanstack/react-table";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { DataTable } from "@/components/ui/data-table";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { api, NginxConfig, NginxConfigStructured, LocationConfig, Landing, SecurityConfigSettings, SecurityEndpointRule } from "@/lib/api";
-import { copyToClipboard } from "@/lib/clipboard";
-import { MoreHorizontal, Pencil, Trash, Copy, FileCode, Cog, Lock, LockOpen, Shield, ShieldOff, GripVertical, ChevronUp, ChevronDown, Globe } from "lucide-react";
+import * as React from "react";
+import { Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { FileCode, Plus, RefreshCw, Trash2, TriangleAlert, Upload } from "lucide-react";
 import { toast } from "sonner";
-import dynamic from "next/dynamic";
 
-const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+import { api, type NginxConfig } from "@/lib/api";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { DataTable } from "@/components/ui/data-table";
+import {
+  EmptyState,
+  ErrorState,
+  PageHeader,
+  Spinner,
+  errorMessage,
+  invalidatePickerCache,
+  useConfirm,
+  usePolling,
+} from "@/components/app";
+import { buildConfigColumns } from "@/components/nginx/configs-table";
+import { handleApplyResult } from "@/components/nginx/config-domains";
 
 export default function NginxConfigsPage() {
-  const [configs, setConfigs] = useState<NginxConfig[]>([]);
-  const [landings, setLandings] = useState<Landing[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [showEditDialog, setShowEditDialog] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [selectedConfig, setSelectedConfig] = useState<NginxConfig | null>(null);
-  
-  const [formName, setFormName] = useState("");
-  const [formMode, setFormMode] = useState("auto");
-  const [formIsPassthrough, setFormIsPassthrough] = useState(false);
-  const [formPassthroughTarget, setFormPassthroughTarget] = useState("");
-  const [formPassthroughHttpEnabled, setFormPassthroughHttpEnabled] = useState(true);
-  const [formPassthroughHttpPort, setFormPassthroughHttpPort] = useState(80);
-  const [formPassthroughProxyProtocol, setFormPassthroughProxyProtocol] = useState(false);
-  const [formPassthroughHttpBodySize, setFormPassthroughHttpBodySize] = useState("");
-  const [formPassthroughHttpExtra, setFormPassthroughHttpExtra] = useState("");
-  const [formSslMode, setFormSslMode] = useState("allow_http");
-  const [formSslEmail, setFormSslEmail] = useState("");
-  const [formCorsEnabled, setFormCorsEnabled] = useState(true);
-  const [formCorsAllowAll, setFormCorsAllowAll] = useState(true);
-  const [formEnablePHP, setFormEnablePHP] = useState(false);
-  const [formAutoindexOff, setFormAutoindexOff] = useState(true);
-  const [formDenyAllCatchall, setFormDenyAllCatchall] = useState(true);
-  const [formLocations, setFormLocations] = useState<LocationConfig[]>([{ path: "/", match_type: "prefix", type: "proxy", proxy_url: "" }]);
-  const [formRawText, setFormRawText] = useState("");
-  
-  // Security settings
-  const [formUABlocking, setFormUABlocking] = useState(false);
-  const [formEndpointBlocking, setFormEndpointBlocking] = useState(false);
-  const [formEndpointRules, setFormEndpointRules] = useState<SecurityEndpointRule[]>([]);
-  const [newEndpointPattern, setNewEndpointPattern] = useState("");
-  const [newEndpointDescription, setNewEndpointDescription] = useState("");
-  
-  // Proxy/Real IP settings
-  const [formProxyEnabled, setFormProxyEnabled] = useState(false);
-  const [formProxyType, setFormProxyType] = useState<'cloudflare' | 'proxy_protocol' | 'custom'>('cloudflare');
-  const [formUseProxyProtocol, setFormUseProxyProtocol] = useState(false);
-  const [formProxyProtocolPort, setFormProxyProtocolPort] = useState(8443);
-  const [formCustomTrustedIPs, setFormCustomTrustedIPs] = useState("");
-  
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  return (
+    <Suspense>
+      <NginxConfigsInner />
+    </Suspense>
+  );
+}
 
-  const loadData = async () => {
+function NginxConfigsInner() {
+  const router = useRouter();
+  const sp = useSearchParams();
+  const confirm = useConfirm();
+
+  // Legacy deep link: /configs/nginx?edit=<id> → /configs/nginx/<id>
+  const editId = sp.get("edit");
+  React.useEffect(() => {
+    if (editId) router.replace(`/configs/nginx/${encodeURIComponent(editId)}`);
+  }, [editId, router]);
+
+  const { data, loading, error, refresh, refreshing } = usePolling(() => api.listNginxConfigs(), 30_000);
+  const [busyId, setBusyId] = React.useState<string | null>(null);
+  const [applyingAll, setApplyingAll] = React.useState(false);
+
+  const configs = React.useMemo(() => data ?? [], [data]);
+  const outOfSync = configs.filter((c) => (c.out_of_sync_count ?? 0) > 0);
+  const oosDomains = outOfSync.reduce((a, c) => a + (c.out_of_sync_count ?? 0), 0);
+
+  const apply = React.useCallback(
+    async (c: NginxConfig, onlyOutOfSync: boolean) => {
+      const n = onlyOutOfSync ? (c.out_of_sync_count ?? 0) : (c.domains_count ?? 0);
+      if (!onlyOutOfSync) {
+        const ok = await confirm({
+          title: `Re-apply “${c.name}” to ${n} domain${n === 1 ? "" : "s"}?`,
+          description: "Each domain gets an apply job. Failed applies roll back automatically and nginx keeps running.",
+          confirmText: `Apply to ${n}`,
+          icon: Upload,
+        });
+        if (!ok) return;
+      }
+      setBusyId(c.id);
+      try {
+        const res = await api.applyNginxConfig(c.id, onlyOutOfSync ? { only_out_of_sync: true } : {});
+        handleApplyResult(res, () => void refresh());
+        void refresh();
+      } catch (e) {
+        toast.error("Couldn't apply config", { description: errorMessage(e) });
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [confirm, refresh]
+  );
+
+  const applyAllOutOfSync = async () => {
+    setApplyingAll(true);
     try {
-      const [configsData, landingsData] = await Promise.all([
-        api.listNginxConfigs(),
-        api.listLandings(),
-      ]);
-      setConfigs(configsData);
-      setLandings(landingsData);
-    } catch (err) {
-      console.error("Failed to load data:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { loadData(); }, []);
-
-  const resetForm = () => {
-    setFormName("");
-    setFormMode("auto");
-    setFormIsPassthrough(false);
-    setFormPassthroughTarget("");
-    setFormPassthroughHttpEnabled(true);
-    setFormPassthroughHttpPort(80);
-    setFormPassthroughProxyProtocol(false);
-    setFormPassthroughHttpBodySize("");
-    setFormPassthroughHttpExtra("");
-    setFormSslMode("allow_http");
-    setFormSslEmail("");
-    setFormCorsEnabled(true);
-    setFormCorsAllowAll(true);
-    setFormEnablePHP(false);
-    setFormAutoindexOff(true);
-    setFormDenyAllCatchall(true);
-    setFormLocations([{ path: "/", type: "proxy", proxy_url: "" }]);
-    setFormRawText("");
-    // Security
-    setFormUABlocking(false);
-    setFormEndpointBlocking(false);
-    setFormEndpointRules([]);
-    setNewEndpointPattern("");
-    setNewEndpointDescription("");
-    // Proxy settings
-    setFormProxyEnabled(false);
-    setFormProxyType('cloudflare');
-    setFormUseProxyProtocol(false);
-    setFormProxyProtocolPort(8443);
-    setFormCustomTrustedIPs("");
-  };
-
-  const handleCreateConfig = async () => {
-    if (!formName.trim()) return;
-    try {
-      // Apply PHP setting to all static locations
-      const locationsWithPHP = formLocations.map(loc => ({
-        ...loc,
-        use_php: loc.type === "static" ? formEnablePHP : false,
-      }));
-      const structured: NginxConfigStructured = {
-        is_passthrough: formIsPassthrough,
-        passthrough_target: formIsPassthrough ? formPassthroughTarget : undefined,
-        passthrough_http_enabled: formIsPassthrough ? formPassthroughHttpEnabled : undefined,
-        passthrough_http_port: formIsPassthrough ? formPassthroughHttpPort : undefined,
-        passthrough_proxy_protocol: formIsPassthrough ? formPassthroughProxyProtocol : undefined,
-        passthrough_http_client_max_body_size: formIsPassthrough ? formPassthroughHttpBodySize.trim() || undefined : undefined,
-        passthrough_http_extra_directives: formIsPassthrough ? formPassthroughHttpExtra.trim() || undefined : undefined,
-        ssl_mode: formSslMode,
-        ssl_email: formSslEmail || undefined,
-        locations: formIsPassthrough ? [] : locationsWithPHP,
-        cors: formIsPassthrough ? null : { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
-        autoindex_off: formIsPassthrough ? undefined : formAutoindexOff,
-        deny_all_catchall: formIsPassthrough ? undefined : formDenyAllCatchall,
-        // Proxy settings
-        proxy_settings: formProxyEnabled ? {
-          enabled: formProxyEnabled,
-          proxy_type: formProxyType,
-          use_proxy_protocol: formUseProxyProtocol,
-          proxy_protocol_port: formProxyProtocolPort,
-          custom_trusted_ips: formCustomTrustedIPs,
-        } : undefined,
-        // Include security settings
-        ua_blocking_enabled: formUABlocking,
-        endpoint_blocking_enabled: formEndpointBlocking,
-      };
-      await api.createNginxConfig({
-        name: formName,
-        mode: formMode,
-        structured_json: formMode === "auto" ? structured : undefined,
-        raw_text: formMode === "manual" ? formRawText : undefined,
-      });
-      setShowCreateDialog(false);
-      resetForm();
-      loadData();
-      toast.success("Configuration created");
-    } catch (err) {
-      console.error("Failed to create config:", err);
-      toast.error("Failed to create config");
-    }
-  };
-
-  const handleUpdateConfig = async () => {
-    if (!selectedConfig || !formName.trim()) return;
-    try {
-      // Apply PHP setting to all static locations
-      const locationsWithPHP = formLocations.map(loc => ({
-        ...loc,
-        use_php: loc.type === "static" ? formEnablePHP : false,
-      }));
-      const structured: NginxConfigStructured = {
-        is_passthrough: formIsPassthrough,
-        passthrough_target: formIsPassthrough ? formPassthroughTarget : undefined,
-        passthrough_http_enabled: formIsPassthrough ? formPassthroughHttpEnabled : undefined,
-        passthrough_http_port: formIsPassthrough ? formPassthroughHttpPort : undefined,
-        passthrough_proxy_protocol: formIsPassthrough ? formPassthroughProxyProtocol : undefined,
-        passthrough_http_client_max_body_size: formIsPassthrough ? formPassthroughHttpBodySize.trim() || undefined : undefined,
-        passthrough_http_extra_directives: formIsPassthrough ? formPassthroughHttpExtra.trim() || undefined : undefined,
-        ssl_mode: formSslMode,
-        ssl_email: formSslEmail || undefined,
-        locations: formIsPassthrough ? [] : locationsWithPHP,
-        cors: formIsPassthrough ? null : { enabled: formCorsEnabled, allow_all: formCorsAllowAll },
-        autoindex_off: formIsPassthrough ? undefined : formAutoindexOff,
-        deny_all_catchall: formIsPassthrough ? undefined : formDenyAllCatchall,
-        // Proxy settings
-        proxy_settings: formProxyEnabled ? {
-          enabled: formProxyEnabled,
-          proxy_type: formProxyType,
-          use_proxy_protocol: formUseProxyProtocol,
-          proxy_protocol_port: formProxyProtocolPort,
-          custom_trusted_ips: formCustomTrustedIPs,
-        } : undefined,
-        // Include security settings in structured_json
-        ua_blocking_enabled: formUABlocking,
-        endpoint_blocking_enabled: formEndpointBlocking,
-      };
-      await api.updateNginxConfig(selectedConfig.id, {
-        name: formName,
-        mode: formMode,
-        structured_json: formMode === "auto" ? structured : undefined,
-        raw_text: formMode === "manual" ? formRawText : undefined,
-      });
-      // Also save security settings separately
-      await handleSaveSecuritySettings();
-      setShowEditDialog(false);
-      setSelectedConfig(null);
-      resetForm();
-      loadData();
-      toast.success("Configuration updated");
-    } catch (err) {
-      console.error("Failed to update config:", err);
-      toast.error("Failed to update config");
-    }
-  };
-
-  const handleDeleteConfig = async () => {
-    if (!selectedConfig) return;
-    try {
-      await api.deleteNginxConfig(selectedConfig.id);
-      setShowDeleteDialog(false);
-      setSelectedConfig(null);
-      loadData();
-      toast.success("Configuration deleted");
-    } catch (err) {
-      console.error("Failed to delete config:", err);
-      toast.error("Failed to delete config");
-    }
-  };
-
-  const openEditDialog = async (config: NginxConfig) => {
-    setSelectedConfig(config);
-    setFormName(config.name);
-    setFormMode(config.mode);
-    setFormRawText(config.raw_text || "");
-    setFormPassthroughHttpEnabled(true);
-    setFormPassthroughHttpPort(80);
-    setFormPassthroughProxyProtocol(false);
-    setFormPassthroughHttpBodySize("");
-    setFormPassthroughHttpExtra("");
-    if (config.structured_json) {
-      const structured = config.structured_json as NginxConfigStructured;
-      // Passthrough settings
-      setFormIsPassthrough(structured.is_passthrough ?? false);
-      setFormPassthroughTarget(structured.passthrough_target || "");
-      setFormPassthroughHttpEnabled(structured.passthrough_http_enabled ?? true);
-      setFormPassthroughHttpPort(structured.passthrough_http_port ?? 80);
-      setFormPassthroughProxyProtocol(structured.passthrough_proxy_protocol ?? false);
-      setFormPassthroughHttpBodySize(structured.passthrough_http_client_max_body_size || "");
-      setFormPassthroughHttpExtra(structured.passthrough_http_extra_directives || "");
-      // Standard settings
-      setFormSslMode(structured.ssl_mode || "allow_http");
-      setFormSslEmail(structured.ssl_email || "");
-      setFormCorsEnabled(structured.cors?.enabled ?? true);
-      setFormCorsAllowAll(structured.cors?.allow_all ?? true);
-      setFormAutoindexOff(structured.autoindex_off ?? true);
-      setFormDenyAllCatchall(structured.deny_all_catchall ?? true);
-      setFormLocations(structured.locations || [{ path: "/", type: "proxy", proxy_url: "" }]);
-      // Check if any static location has PHP enabled
-      setFormEnablePHP(structured.locations?.some(loc => loc.use_php) ?? false);
-      // Proxy settings
-      setFormProxyEnabled(structured.proxy_settings?.enabled ?? false);
-      setFormProxyType(structured.proxy_settings?.proxy_type || 'cloudflare');
-      setFormUseProxyProtocol(structured.proxy_settings?.use_proxy_protocol ?? false);
-      setFormProxyProtocolPort(structured.proxy_settings?.proxy_protocol_port || 8443);
-      setFormCustomTrustedIPs(structured.proxy_settings?.custom_trusted_ips || "");
-    }
-    // Load security settings - first try from structured_json, then from separate API
-    const structured = config.structured_json as NginxConfigStructured;
-    if (structured?.ua_blocking_enabled !== undefined || structured?.endpoint_blocking_enabled !== undefined) {
-      // Load from structured_json
-      setFormUABlocking(structured.ua_blocking_enabled ?? false);
-      setFormEndpointBlocking(structured.endpoint_blocking_enabled ?? false);
-    }
-    // Always try to load rules from API
-    try {
-      const rules = await api.listSecurityEndpointRules(config.id);
-      setFormEndpointRules(rules);
-      // If structured_json doesn't have security settings, try API
-      if (structured?.ua_blocking_enabled === undefined && structured?.endpoint_blocking_enabled === undefined) {
+      for (const c of outOfSync) {
         try {
-          const secSettings = await api.getSecuritySettings(config.id);
-          setFormUABlocking(secSettings.ua_blocking_enabled);
-          setFormEndpointBlocking(secSettings.endpoint_blocking_enabled);
-        } catch {
-          setFormUABlocking(false);
-          setFormEndpointBlocking(false);
+          const res = await api.applyNginxConfig(c.id, { only_out_of_sync: true });
+          handleApplyResult(res, () => void refresh());
+        } catch (e) {
+          toast.error(`Couldn't apply ${c.name}`, { description: errorMessage(e) });
         }
       }
-    } catch {
-      // Rules may not exist yet
-      setFormEndpointRules([]);
-    }
-    setShowEditDialog(true);
-  };
-
-  const openDeleteDialog = (config: NginxConfig) => {
-    setSelectedConfig(config);
-    setShowDeleteDialog(true);
-  };
-
-  const handleAddEndpointRule = async () => {
-    if (!selectedConfig || !newEndpointPattern.trim()) return;
-    try {
-      const rule = await api.createSecurityEndpointRule(selectedConfig.id, {
-        pattern: newEndpointPattern.trim(),
-        description: newEndpointDescription.trim(),
-      });
-      setFormEndpointRules([...formEndpointRules, rule]);
-      setNewEndpointPattern("");
-      setNewEndpointDescription("");
-      toast.success("Endpoint rule added");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to add rule");
+      void refresh();
+    } finally {
+      setApplyingAll(false);
     }
   };
 
-  const handleDeleteEndpointRule = async (ruleId: string) => {
-    if (!selectedConfig) return;
-    try {
-      await api.deleteSecurityEndpointRule(selectedConfig.id, ruleId);
-      setFormEndpointRules(formEndpointRules.filter(r => r.id !== ruleId));
-      toast.success("Rule deleted");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete rule");
-    }
-  };
-
-  const handleSaveSecuritySettings = async () => {
-    if (!selectedConfig) return;
-    try {
-      await api.updateSecuritySettings(selectedConfig.id, {
-        ua_blocking_enabled: formUABlocking,
-        endpoint_blocking_enabled: formEndpointBlocking,
-      });
-    } catch (err) {
-      console.error("Failed to save security settings:", err);
-    }
-  };
-
-  const addLocation = useCallback(() => {
-    const scrollTop = scrollContainerRef.current?.scrollTop || 0;
-    setFormLocations(prev => [...prev, { path: "/api", type: "proxy", proxy_url: "" }]);
-    requestAnimationFrame(() => {
-      if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = scrollTop;
-    });
-  }, []);
-
-  const removeLocation = useCallback((index: number) => {
-    const scrollTop = scrollContainerRef.current?.scrollTop || 0;
-    setFormLocations(prev => prev.filter((_, i) => i !== index));
-    requestAnimationFrame(() => {
-      if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = scrollTop;
-    });
-  }, []);
-
-  const updateLocation = useCallback((index: number, updates: Partial<LocationConfig>) => {
-    setFormLocations(prev => prev.map((loc, i) => i === index ? { ...loc, ...updates } : loc));
-  }, []);
-
-  const moveLocationUp = useCallback((index: number) => {
-    if (index === 0) return;
-    setFormLocations(prev => {
-      const newLocs = [...prev];
-      [newLocs[index - 1], newLocs[index]] = [newLocs[index], newLocs[index - 1]];
-      return newLocs;
-    });
-  }, []);
-
-  const moveLocationDown = useCallback((index: number) => {
-    setFormLocations(prev => {
-      if (index === prev.length - 1) return prev;
-      const newLocs = [...prev];
-      [newLocs[index], newLocs[index + 1]] = [newLocs[index + 1], newLocs[index]];
-      return newLocs;
-    });
-  }, []);
-
-  const columns: ColumnDef<NginxConfig>[] = [
-    {
-      accessorKey: "name",
-      header: "Name",
-      cell: ({ row }) => {
-        const config = row.original;
-        return (
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-green-500/20 to-green-500/5 flex items-center justify-center">
-              <FileCode className="h-5 w-5 text-green-500" />
-            </div>
-            <div>
-              <div className="font-medium">{config.name}</div>
-              <div className="text-xs text-muted-foreground">
-                {(config.structured_json as NginxConfigStructured | null)?.locations?.length || 0} location(s)
-              </div>
-            </div>
-          </div>
-        );
-      },
-    },
-    {
-      accessorKey: "mode",
-      header: "Mode",
-      cell: ({ row }) => (
-        <Badge className={row.original.mode === "manual" 
-          ? "bg-orange-500/20 text-orange-400 border-orange-500/30 text-xs"
-          : "bg-blue-500/20 text-blue-400 border-blue-500/30 text-xs"
-        }>
-          <Cog className="h-3 w-3 mr-1" />
-          {row.original.mode === "manual" ? "Manual" : "Auto"}
-        </Badge>
-      ),
-    },
-    {
-      accessorKey: "type",
-      header: "Type",
-      cell: ({ row }) => {
-        const structured = row.original.structured_json as NginxConfigStructured | null;
-        if (structured?.is_passthrough) {
-          return (
-            <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30 text-xs">
-              Passthrough
-            </Badge>
-          );
+  const duplicate = React.useCallback(
+    async (c: NginxConfig) => {
+      setBusyId(c.id);
+      try {
+        const names = new Set(configs.map((x) => x.name));
+        let name = `${c.name} (copy)`;
+        for (let i = 2; names.has(name); i++) name = `${c.name} (copy ${i})`;
+        const created = await api.createNginxConfig({
+          name,
+          mode: c.mode,
+          structured_json: c.mode === "manual" ? undefined : (c.structured_json ?? undefined),
+          raw_text: c.mode === "manual" ? (c.raw_text ?? "") : undefined,
+        });
+        try {
+          const rules = await api.listSecurityEndpointRules(c.id);
+          for (const r of rules) await api.createSecurityEndpointRule(created.id, { pattern: r.pattern, description: r.description });
+          const st = c.structured_json;
+          if (st?.ua_blocking_enabled || st?.endpoint_blocking_enabled)
+            await api.updateSecuritySettings(created.id, {
+              ua_blocking_enabled: !!st.ua_blocking_enabled,
+              endpoint_blocking_enabled: !!st.endpoint_blocking_enabled,
+            });
+        } catch {
+          toast.warning("Copied without endpoint rules");
         }
-        return (
-          <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30 text-xs">
-            HTTP
-          </Badge>
-        );
-      },
+        invalidatePickerCache("nginx-configs");
+        toast.success(`Created “${name}”`, { action: { label: "Edit", onClick: () => router.push(`/configs/nginx/${created.id}`) } });
+        void refresh();
+      } catch (e) {
+        toast.error("Couldn't duplicate config", { description: errorMessage(e) });
+      } finally {
+        setBusyId(null);
+      }
     },
-    {
-      accessorKey: "ssl",
-      header: "SSL",
-      cell: ({ row }) => {
-        const structured = row.original.structured_json as NginxConfigStructured | null;
-        if (!structured) return <span className="text-muted-foreground">—</span>;
-        
-        // Passthrough configs don't terminate SSL
-        if (structured.is_passthrough) {
-          return (
-            <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30 text-xs">
-              Backend
-            </Badge>
-          );
-        }
-        
-        const sslMode = structured.ssl_mode;
-        if (sslMode === "disabled") {
-          return (
-            <Badge className="bg-zinc-500/20 text-zinc-400 border-zinc-500/30 text-xs">
-              <LockOpen className="h-3 w-3 mr-1" />
-              Disabled
-            </Badge>
-          );
-        }
-        return (
-          <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
-            <Lock className="h-3 w-3 mr-1" />
-            {sslMode === "https_only" ? "HTTPS only" : sslMode === "redirect_https" ? "Force HTTPS" : "Allow HTTP"}
-          </Badge>
-        );
-      },
-    },
-    {
-      accessorKey: "cors",
-      header: "CORS",
-      cell: ({ row }) => {
-        const structured = row.original.structured_json as NginxConfigStructured | null;
-        return structured?.cors?.enabled ? (
-          <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
-            <Shield className="h-3 w-3 mr-1" />
-            {structured.cors.allow_all ? "Allow All" : "Custom"}
-          </Badge>
-        ) : (
-          <Badge className="bg-zinc-500/20 text-zinc-400 border-zinc-500/30 text-xs">
-            <ShieldOff className="h-3 w-3 mr-1" />
-            Disabled
-          </Badge>
-        );
-      },
-    },
-    {
-      accessorKey: "php",
-      header: "PHP",
-      cell: ({ row }) => {
-        const structured = row.original.structured_json as NginxConfigStructured | null;
-        const hasPHP = structured?.locations?.some(loc => loc.use_php);
-        return hasPHP ? (
-          <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30 text-xs">
-            Enabled
-          </Badge>
-        ) : (
-          <Badge className="bg-zinc-500/20 text-zinc-400 border-zinc-500/30 text-xs">
-            —
-          </Badge>
-        );
-      },
-    },
-    {
-      id: "actions",
-      cell: ({ row }) => {
-        const config = row.original;
-        return (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="h-8 w-8 p-0">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => openEditDialog(config)}>
-                <Pencil className="h-4 w-4 mr-2" />Edit
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={async () => { await copyToClipboard(config.id); }}>
-                <Copy className="h-4 w-4 mr-2" />Copy ID
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => openDeleteDialog(config)} className="text-destructive focus:text-destructive">
-                <Trash className="h-4 w-4 mr-2" />Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        );
-      },
-    },
-  ];
-
-  const renderLocationFields = (loc: LocationConfig, index: number, keyPrefix: string) => (
-    <Card key={`${keyPrefix}-${index}`} className="border-border/50 bg-card/30">
-      <CardContent className="p-4 space-y-4">
-        {/* Header row with order controls */}
-        <div className="flex items-center gap-2">
-          <div className="flex flex-col gap-0.5">
-            <Button 
-              type="button" 
-              variant="ghost" 
-              size="icon" 
-              className="h-5 w-5" 
-              onClick={() => moveLocationUp(index)}
-              disabled={index === 0}
-            >
-              <ChevronUp className="h-3 w-3" />
-            </Button>
-            <Button 
-              type="button" 
-              variant="ghost" 
-              size="icon" 
-              className="h-5 w-5" 
-              onClick={() => moveLocationDown(index)}
-              disabled={index === formLocations.length - 1}
-            >
-              <ChevronDown className="h-3 w-3" />
-            </Button>
-          </div>
-          <GripVertical className="h-4 w-4 text-muted-foreground" />
-          <Badge variant="outline" className="font-mono text-xs">#{index + 1}</Badge>
-          <div className="flex-1" />
-          {formLocations.length > 1 && (
-            <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => removeLocation(index)}>
-              <Trash className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
-
-        {/* Location path config */}
-        <div className="grid grid-cols-[100px_1fr_120px] gap-2">
-          <Select value={loc.match_type || "prefix"} onValueChange={(value) => updateLocation(index, { match_type: value })}>
-            <SelectTrigger className="h-9">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="prefix">Prefix</SelectItem>
-              <SelectItem value="exact">Exact =</SelectItem>
-              <SelectItem value="regex">Regex ~</SelectItem>
-            </SelectContent>
-          </Select>
-          <Input placeholder="/" value={loc.path} onChange={(e) => updateLocation(index, { path: e.target.value })} className="h-9 font-mono" />
-          <Select value={loc.type} onValueChange={(value) => updateLocation(index, { type: value })}>
-            <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="proxy">Proxy</SelectItem>
-              <SelectItem value="static">Static</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Type-specific config */}
-        {loc.type === "proxy" ? (
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">Proxy URL</Label>
-            <Input placeholder="http://localhost:3000" value={loc.proxy_url || ""} onChange={(e) => updateLocation(index, { proxy_url: e.target.value })} className="h-9 font-mono" />
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Source</Label>
-                <Select value={loc.static_type || "local"} onValueChange={(value) => updateLocation(index, { static_type: value })}>
-                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="local">Local Path</SelectItem>
-                    <SelectItem value="landing">Static Content</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              {loc.static_type === "landing" && (
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">Content</Label>
-                  <Select value={loc.landing_id || "none"} onValueChange={(value) => updateLocation(index, { landing_id: value === "none" ? "" : value })}>
-                    <SelectTrigger className="h-9"><SelectValue placeholder="Select..." /></SelectTrigger>
-                    <SelectContent>
-                      {landings.length === 0 ? (
-                        <SelectItem value="none" disabled>No content available</SelectItem>
-                      ) : landings.map((l) => (
-                        <SelectItem key={l.id} value={l.id}>{l.name} ({l.type.toUpperCase()})</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Root Path</Label>
-              <Input placeholder="/var/www/html" value={loc.root || ""} onChange={(e) => updateLocation(index, { root: e.target.value })} className="h-9 font-mono" />
-            </div>
-            {loc.static_type !== "landing" && (
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Index Files</Label>
-                <Input placeholder="index.html index.htm" value={loc.index || ""} onChange={(e) => updateLocation(index, { index: e.target.value })} className="h-9 font-mono" />
-              </div>
-            )}
-            {loc.static_type === "landing" && (
-              <div className="flex items-center justify-between p-2 rounded-md bg-muted/50">
-                <div>
-                  <Label className="text-sm">Replace on Deploy</Label>
-                  <p className="text-xs text-muted-foreground">Overwrite files when redeploying</p>
-                </div>
-                <Switch 
-                  checked={loc.replace_landing_content ?? true} 
-                  onCheckedChange={(checked) => updateLocation(index, { replace_landing_content: checked })} 
-                />
-              </div>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+    [configs, refresh, router]
   );
 
-  const renderFormContent = () => (
-    <div ref={scrollContainerRef} className="space-y-5 max-h-[70vh] overflow-y-auto pr-3 -mr-2">
-      {/* Basic Settings - Horizontal Row */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="col-span-2 space-y-1.5">
-          <Label className="text-sm font-medium">Configuration Name</Label>
-          <Input placeholder="my-domain-config" value={formName} onChange={(e) => setFormName(e.target.value)} className="h-10" />
-        </div>
-        <div className="space-y-1.5">
-          <Label className="text-sm font-medium">Mode</Label>
-          <Select value={formMode} onValueChange={setFormMode}>
-            <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="auto">UI Builder</SelectItem>
-              <SelectItem value="manual">Manual Config</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-      
-      {formMode === "auto" ? (
-        <>
-          {/* Layer 4 Passthrough Mode Toggle */}
-          <Card className={`border-2 transition-colors ${formIsPassthrough ? "border-amber-500/50 bg-amber-500/5" : "border-border/50 bg-card/30"}`}>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label className="text-sm font-medium">Layer 4 Passthrough (Advanced)</Label>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Forward raw TCP/TLS traffic to backend without SSL termination.
-                    Leave this disabled to use Layer 7 reverse proxy with proxy-managed certificates.
-                  </p>
-                </div>
-                <Switch checked={formIsPassthrough} onCheckedChange={setFormIsPassthrough} />
-              </div>
-              
-              {formIsPassthrough && (
-                <div className="mt-4 pt-4 border-t border-border/50 space-y-4">
-                  <div className="space-y-2">
-                    <Label className="text-sm">Backend Target</Label>
-                    <Input 
-                      placeholder="192.168.1.10:443 or backend.example.com:443" 
-                      value={formPassthroughTarget} 
-                      onChange={(e) => setFormPassthroughTarget(e.target.value)} 
-                      className="h-9 font-mono"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      The server that handles SSL and serves the content. Format: host:port
-                    </p>
-                  </div>
-
-                  <div className="flex items-start justify-between rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5">
-                    <div className="pr-3">
-                      <Label className="text-sm">Enable HTTP routing on port 80</Label>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Routes plain HTTP by Host header to the backend HTTP port. Port 443 passthrough stays enabled.
-                      </p>
-                    </div>
-                    <Switch
-                      checked={formPassthroughHttpEnabled}
-                      onCheckedChange={setFormPassthroughHttpEnabled}
-                    />
-                  </div>
-
-                  {formPassthroughHttpEnabled && (
-                    <div className="space-y-2">
-                      <Label className="text-sm">Backend HTTP Port</Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={65535}
-                        value={formPassthroughHttpPort}
-                        onChange={(e) => setFormPassthroughHttpPort(Number(e.target.value) || 80)}
-                        className="h-9 font-mono"
-                      />
-                    </div>
-                  )}
-
-                  {formPassthroughHttpEnabled && (
-                    <div className="space-y-3 rounded-lg border border-border/60 bg-muted/30 px-3 py-3">
-                      <div className="p-2.5 rounded-md bg-sky-500/10 border border-sky-500/20 text-xs text-muted-foreground space-y-1">
-                        <p className="font-medium text-sky-400">Port 80 is a real nginx HTTP proxy</p>
-                        <p>
-                          When the domain is proxied through Cloudflare (or any CDN) to this proxy over HTTP
-                          (for example with &quot;Allow direct HTTP requests&quot; on the backend), all requests hit this port 80 block.
-                          Its limits (body size, timeouts) apply before the request reaches the backend, so errors like
-                          413 Request Entity Too Large come from this proxy, not from the backend.
-                          Port 443 passthrough is raw TCP and is not affected.
-                        </p>
-                        <p>Changes apply when the domain is (re)assigned to the proxy.</p>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label className="text-sm">Max request body size (port 80)</Label>
-                        <Input
-                          placeholder="100M"
-                          value={formPassthroughHttpBodySize}
-                          onChange={(e) => setFormPassthroughHttpBodySize(e.target.value)}
-                          className="h-9 font-mono"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          nginx <code className="bg-black/30 px-1 rounded">client_max_body_size</code>. Empty uses 100M, 0 disables the limit. Format: number with optional k/m/g suffix.
-                        </p>
-                        {formPassthroughHttpBodySize.trim() !== "" && !/^\d+[kKmMgG]?$/.test(formPassthroughHttpBodySize.trim()) && (
-                          <p className="text-xs text-destructive">Invalid size, 100M will be used.</p>
-                        )}
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label className="text-sm">Extra port 80 directives (optional)</Label>
-                        <Textarea
-                          placeholder={"proxy_buffering off;\nproxy_request_buffering off;"}
-                          value={formPassthroughHttpExtra}
-                          onChange={(e) => setFormPassthroughHttpExtra(e.target.value)}
-                          className="min-h-[90px] font-mono text-xs"
-                          spellCheck={false}
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Raw nginx directives inserted inside <code className="bg-black/30 px-1 rounded">location /</code> of the port 80 server block.
-                          Invalid directives make <code className="bg-black/30 px-1 rounded">nginx -t</code> fail; the apply job then stops and the previous proxy config is restored.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex items-start justify-between rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5">
-                    <div className="pr-3">
-                      <Label className="text-sm">Send PROXY protocol to HTTPS backends on this proxy</Label>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Nginx stream uses one shared port 443 listener, so all HTTPS backends on the same proxy must use the same setting.
-                      </p>
-                    </div>
-                    <Switch
-                      checked={formPassthroughProxyProtocol}
-                      onCheckedChange={setFormPassthroughProxyProtocol}
-                    />
-                  </div>
-                  
-                  <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm space-y-3">
-                    <p className="font-medium text-amber-400">⚠️ Layer 4 backend setup required</p>
-                    
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">
-                        <strong>Step 1:</strong> Create simple HTTP config to test & get certificate:
-                      </p>
-                      <pre className="text-xs bg-black/30 p-2 rounded overflow-x-auto font-mono text-green-300/80">{`server {
-    listen 80;
-    server_name domain.com;
-    
-    location / {
-        default_type text/plain;
-        return 200 "OK";
-    }
-}`}</pre>
-                    </div>
-                    
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">
-                        Then run: <code className="bg-black/30 px-1 rounded">certbot --nginx -d domain.com</code>
-                      </p>
-                    </div>
-                    
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">
-                        <strong>Optional:</strong> If enabled above, update the backend to accept PROXY Protocol for HTTPS:
-                      </p>
-                      <pre className="text-xs bg-black/30 p-2 rounded overflow-x-auto font-mono text-amber-300/80">{`server {
-    listen 80;
-    listen 443 ssl proxy_protocol;
-    server_name domain.com;
-    
-    # Real IP from PROXY Protocol
-    set_real_ip_from 0.0.0.0/0;
-    real_ip_header proxy_protocol;
-    
-    ssl_certificate /etc/letsencrypt/live/domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/domain.com/privkey.pem;
-    
-    location / {
-        # Your app config
-    }
-}`}</pre>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Only show standard config if NOT passthrough */}
-          {!formIsPassthrough && (
-            <>
-              {/* Core Settings Row - SSL, CORS, Quick Toggles */}
-              <div className="grid grid-cols-4 gap-3">
-                {/* SSL */}
-                <div className="p-3 rounded-lg border border-border/50 bg-card/50 space-y-2">
-                  <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">SSL Mode</Label>
-                  <Select value={formSslMode} onValueChange={setFormSslMode}>
-                    <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="disabled">Disabled</SelectItem>
-                      <SelectItem value="allow_http">Allow HTTP</SelectItem>
-                      <SelectItem value="redirect_https">Force HTTPS (redirect 80→443)</SelectItem>
-                      <SelectItem value="https_only">HTTPS only (443, no port 80)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {formSslMode === "https_only" && (
-                    <p className="text-xs text-muted-foreground">Serves on 443 only; no port 80 listener (hardens SSL issuance).</p>
-                  )}
-                  {formSslMode !== "disabled" && (
-                    <Input type="email" placeholder="admin@example.com" value={formSslEmail} onChange={(e) => setFormSslEmail(e.target.value)} className="h-8 text-sm" />
-                  )}
-                </div>
-
-                {/* CORS */}
-                <div className="p-3 rounded-lg border border-border/50 bg-card/50 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">CORS</Label>
-                    <Switch checked={formCorsEnabled} onCheckedChange={setFormCorsEnabled} />
-                  </div>
-                  {formCorsEnabled && (
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="text-xs text-muted-foreground">Allow All</span>
-                      <Switch checked={formCorsAllowAll} onCheckedChange={setFormCorsAllowAll} />
-                    </div>
-                  )}
-                </div>
-
-                {/* PHP Toggle */}
-                <div className="p-3 rounded-lg border border-border/50 bg-card/50 flex flex-col justify-between">
-                  <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">PHP</Label>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="text-sm">Enable</span>
-                    <Switch checked={formEnablePHP} onCheckedChange={setFormEnablePHP} />
-                  </div>
-                </div>
-
-                {/* Security Quick Toggles */}
-                <div className="p-3 rounded-lg border border-border/50 bg-card/50 space-y-2">
-                  <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Quick Options</Label>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs">No Dir Listing</span>
-                    <Switch checked={formAutoindexOff} onCheckedChange={setFormAutoindexOff} />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs">Deny Catch-all</span>
-                    <Switch checked={formDenyAllCatchall} onCheckedChange={setFormDenyAllCatchall} />
-                  </div>
-                </div>
-              </div>
-
-              {/* Proxy & Security Row - Side by Side */}
-              <div className="grid grid-cols-2 gap-4">
-                {/* Proxy / Real IP Settings */}
-                <Card className="border-blue-500/30 bg-blue-500/5">
-                  <CardHeader className="py-2.5 px-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Globe className="h-4 w-4 text-blue-500" />
-                        <CardTitle className="text-sm font-medium">Proxy / Real IP</CardTitle>
-                      </div>
-                      <Switch checked={formProxyEnabled} onCheckedChange={setFormProxyEnabled} />
-                    </div>
-                  </CardHeader>
-                  {formProxyEnabled && (
-                    <CardContent className="space-y-3 px-4 pb-4 pt-0">
-                      <div className="space-y-2">
-                        <Label className="text-xs">Proxy Type</Label>
-                        <Select value={formProxyType} onValueChange={(v) => setFormProxyType(v as typeof formProxyType)}>
-                          <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="cloudflare">Cloudflare</SelectItem>
-                            <SelectItem value="proxy_protocol">PROXY Protocol</SelectItem>
-                            <SelectItem value="custom">Custom</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      {formProxyType === 'custom' && (
-                        <div className="space-y-1.5">
-                          <Label className="text-xs">Trusted IP Ranges</Label>
-                          <Input placeholder="10.0.0.0/8, 192.168.0.0/16" value={formCustomTrustedIPs} onChange={(e) => setFormCustomTrustedIPs(e.target.value)} className="h-8 text-sm" />
-                        </div>
-                      )}
-
-                      {formProxyType === 'proxy_protocol' && (
-                        <div className="p-2.5 rounded border border-amber-500/30 bg-amber-500/10 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-xs">Use proxy_protocol listen</Label>
-                            <Switch checked={formUseProxyProtocol} onCheckedChange={setFormUseProxyProtocol} />
-                          </div>
-                          {formUseProxyProtocol && (
-                            <div className="flex items-center gap-2">
-                              <Label className="text-xs">Port:</Label>
-                              <Input type="number" value={formProxyProtocolPort} onChange={(e) => setFormProxyProtocolPort(parseInt(e.target.value) || 8443)} className="h-7 w-20 text-sm" />
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </CardContent>
-                  )}
-                </Card>
-
-
-                {/* Security Section - Right Column */}
-                <Card className="border-destructive/30 bg-destructive/5">
-                  <CardHeader className="py-2.5 px-4">
-                    <div className="flex items-center gap-2">
-                      <Shield className="h-4 w-4 text-destructive" />
-                      <CardTitle className="text-sm font-medium">Security</CardTitle>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-3 px-4 pb-4 pt-0">
-                    {/* UA Blocking Toggle */}
-                    <div className="flex items-center justify-between p-2.5 rounded border border-border/50 bg-background/50">
-                      <div>
-                        <Label className="text-sm">User-Agent Blocking</Label>
-                        <p className="text-xs text-muted-foreground">Block bots/scrapers</p>
-                      </div>
-                      <Switch 
-                        checked={formUABlocking} 
-                        onCheckedChange={(checked) => {
-                          setFormUABlocking(checked);
-                          if (selectedConfig) handleSaveSecuritySettings();
-                        }} 
-                      />
-                    </div>
-
-                    {/* Endpoint Blocking Toggle */}
-                    <div className="flex items-center justify-between p-2.5 rounded border border-border/50 bg-background/50">
-                      <div>
-                        <Label className="text-sm">Endpoint Allowlist</Label>
-                        <p className="text-xs text-muted-foreground">Ban IPs on invalid paths</p>
-                      </div>
-                      <Switch 
-                        checked={formEndpointBlocking} 
-                        onCheckedChange={(checked) => {
-                          setFormEndpointBlocking(checked);
-                          if (selectedConfig) handleSaveSecuritySettings();
-                        }} 
-                      />
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Endpoint Rules (full width when blocking enabled) */}
-              {formEndpointBlocking && (
-                <Card className="border-border/50">
-                  <CardHeader className="py-2.5 px-4">
-                    <CardTitle className="text-sm font-medium">Allowed Path Patterns</CardTitle>
-                    <CardDescription className="text-xs">Requests not matching will trigger IP ban</CardDescription>
-                  </CardHeader>
-                  <CardContent className="px-4 pb-4 pt-0 space-y-3">
-                    {selectedConfig ? (
-                      <>
-                        {/* Existing rules */}
-                        <div className="flex flex-wrap gap-2">
-                          {formEndpointRules.map((rule) => (
-                            <div key={rule.id} className="flex items-center gap-1.5 px-2 py-1 rounded border bg-muted/50 group">
-                              <code className="text-xs font-mono">{rule.pattern}</code>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleDeleteEndpointRule(rule.id)}
-                                className="text-destructive hover:text-destructive h-4 w-4 p-0 opacity-50 group-hover:opacity-100"
-                              >
-                                <Trash className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          ))}
-                          {formEndpointRules.length === 0 && (
-                            <span className="text-xs text-muted-foreground">No rules - all paths blocked</span>
-                          )}
-                        </div>
-
-                        {/* Add new rule */}
-                        <div className="flex gap-2">
-                          <Input
-                            placeholder="^/api/.*"
-                            value={newEndpointPattern}
-                            onChange={(e) => setNewEndpointPattern(e.target.value)}
-                            className="font-mono text-xs h-8 flex-1"
-                          />
-                          <Input
-                            placeholder="Description"
-                            value={newEndpointDescription}
-                            onChange={(e) => setNewEndpointDescription(e.target.value)}
-                            className="text-xs h-8 w-32"
-                          />
-                          <Button variant="outline" size="sm" onClick={handleAddEndpointRule} disabled={!newEndpointPattern.trim()} className="h-8">
-                            Add
-                          </Button>
-                        </div>
-                      </>
-                    ) : (
-                      <p className="text-xs text-muted-foreground py-2">
-                        Save the configuration first, then edit it to add allowed path patterns.
-                      </p>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Locations Section */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-base font-medium">Locations</Label>
-                    <p className="text-xs text-muted-foreground">Order matters in Nginx - first match wins. Use arrows to reorder.</p>
-                  </div>
-                  <Button type="button" variant="outline" size="sm" onClick={addLocation}>+ Add Location</Button>
-                </div>
-                <div className="space-y-3">
-                  {formLocations.map((loc, index) => renderLocationFields(loc, index, "loc"))}
-                </div>
-              </div>
-            </>
-          )}
-        </>
-      ) : (
-        <div className="space-y-2">
-          <Label>Raw Nginx Configuration</Label>
-          <div className="border rounded-md overflow-hidden">
-            <MonacoEditor
-              height="350px"
-              language="nginx"
-              theme="vs-dark"
-              value={formRawText}
-              onChange={(value) => setFormRawText(value || "")}
-              options={{ minimap: { enabled: false }, fontSize: 13, lineNumbers: "on", scrollBeyondLastLine: false, wordWrap: "on", padding: { top: 8 } }}
-            />
-          </div>
-        </div>
-      )}
-    </div>
+  const remove = React.useCallback(
+    async (c: NginxConfig) => {
+      const domains = c.domains ?? [];
+      const ok = await confirm({
+        title: `Delete “${c.name}”?`,
+        description:
+          domains.length > 0
+            ? `${domains.length} domain${domains.length === 1 ? " uses" : "s use"} this config. They lose their config link; files already on machines stay until the domain is re-applied or removed.`
+            : "No domains use this config. This can't be undone.",
+        details:
+          domains.length > 0 ? (
+            <ul className="font-data max-h-40 space-y-0.5 overflow-y-auto rounded-md border border-border bg-muted/40 px-2.5 py-2 text-xs">
+              {domains.map((d) => (
+                <li key={d.id} className="flex justify-between gap-3">
+                  <span className="truncate">{d.fqdn}</span>
+                  <span className="shrink-0 text-muted-foreground">{d.machine_title ?? "unassigned"}</span>
+                </li>
+              ))}
+            </ul>
+          ) : undefined,
+        destructive: true,
+        icon: Trash2,
+        confirmText: "Delete config",
+        typeToConfirm: domains.length > 0 ? c.name : undefined,
+        onConfirm: () => api.deleteNginxConfig(c.id),
+      });
+      if (ok) {
+        toast.success("Configuration deleted");
+        invalidatePickerCache("nginx-configs");
+        void refresh();
+      }
+    },
+    [confirm, refresh]
   );
 
-  if (loading) {
-    return <div className="flex items-center justify-center h-64"><div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
-  }
+  const columns = React.useMemo(
+    () =>
+      buildConfigColumns({
+        onEdit: (c) => router.push(`/configs/nginx/${c.id}`),
+        onDuplicate: (c) => void duplicate(c),
+        onApply: (c, only) => void apply(c, only),
+        onDelete: (c) => void remove(c),
+        busyId,
+      }),
+    [router, duplicate, apply, remove, busyId]
+  );
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Nginx Configurations</h1>
-          <p className="text-muted-foreground mt-1">Create and manage nginx configuration templates.</p>
-        </div>
-        <Button onClick={() => { resetForm(); setShowCreateDialog(true); }}>+ Create Config</Button>
-      </div>
+      <PageHeader
+        icon={FileCode}
+        title="Nginx configs"
+        description="Reusable server-block templates. Assign one to a domain and Configuratix renders and applies it transactionally on the machine."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => void refresh()} disabled={refreshing}>
+              {refreshing ? <Spinner /> : <RefreshCw />}
+              Refresh
+            </Button>
+            <Button onClick={() => router.push("/configs/nginx/new")}>
+              <Plus />
+              New config
+            </Button>
+          </>
+        }
+      />
 
-      <Card className="border-border/50 bg-card/50">
-        <CardHeader>
-          <CardTitle className="text-lg">Your Configurations</CardTitle>
-          <CardDescription>Nginx config templates that can be assigned to domains.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <DataTable columns={columns} data={configs} searchKey="name" searchPlaceholder="Search configurations..." />
-        </CardContent>
-      </Card>
+      {outOfSync.length > 0 && (
+        <Alert variant="warning">
+          <TriangleAlert />
+          <AlertTitle>
+            {oosDomains} domain{oosDomains === 1 ? "" : "s"} across {outOfSync.length} config{outOfSync.length === 1 ? "" : "s"} run an older version
+          </AlertTitle>
+          <AlertDescription>
+            <p>Saving a config doesn&apos;t push it. Apply to roll the changes out; failed applies roll back automatically.</p>
+          </AlertDescription>
+          <AlertAction>
+            <Button size="sm" onClick={() => void applyAllOutOfSync()} disabled={applyingAll}>
+              {applyingAll ? <Spinner /> : <Upload />}
+              Apply all out-of-sync
+            </Button>
+          </AlertAction>
+        </Alert>
+      )}
 
-      {/* Create Dialog */}
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="max-w-[90vw] sm:max-w-6xl max-h-[90vh]">
-          <DialogHeader>
-            <DialogTitle>Create Nginx Configuration</DialogTitle>
-            <DialogDescription>Configure nginx settings for your domains.</DialogDescription>
-          </DialogHeader>
-          {renderFormContent()}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
-            <Button onClick={handleCreateConfig}>Create</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Edit Dialog */}
-      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="max-w-[90vw] sm:max-w-6xl max-h-[90vh]">
-          <DialogHeader>
-            <DialogTitle>Edit Nginx Configuration</DialogTitle>
-            <DialogDescription>Update nginx settings.</DialogDescription>
-          </DialogHeader>
-          {renderFormContent()}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowEditDialog(false)}>Cancel</Button>
-            <Button onClick={handleUpdateConfig}>Save Changes</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirmation */}
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Configuration</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete <strong>{selectedConfig?.name}</strong>? This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteConfig} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {error && !data ? (
+        <ErrorState error={error} onRetry={refresh} title="Couldn't load nginx configs" />
+      ) : (
+        <DataTable
+          columns={columns}
+          data={configs}
+          loading={loading}
+          getRowId={(c) => c.id}
+          searchKeys={["name", (c) => (c.domains ?? []).map((d) => d.fqdn).join(" ")]}
+          searchPlaceholder="Search configs or domains…"
+          facets={[
+            {
+              columnId: "kind",
+              title: "Type",
+              options: [
+                { label: "L7 structured", value: "l7" },
+                { label: "L4 passthrough", value: "l4" },
+                { label: "Raw", value: "raw" },
+              ],
+            },
+            {
+              columnId: "ssl",
+              title: "SSL",
+              options: [
+                { label: "Disabled", value: "disabled" },
+                { label: "Allow HTTP", value: "allow_http" },
+                { label: "Force HTTPS", value: "redirect_https" },
+                { label: "HTTPS only", value: "https_only" },
+                { label: "Backend (L4)", value: "backend" },
+              ],
+            },
+          ]}
+          initialState={{ sorting: [{ id: "updated", desc: true }] }}
+          onRowClick={(c) => router.push(`/configs/nginx/${c.id}`)}
+          emptyState={
+            <EmptyState
+              icon={FileCode}
+              title="No nginx configs yet"
+              description="Create a reverse proxy, static site or L4 passthrough template to assign to domains."
+              action={
+                <Button onClick={() => router.push("/configs/nginx/new")}>
+                  <Plus />
+                  New config
+                </Button>
+              }
+            />
+          }
+        />
+      )}
     </div>
   );
 }
