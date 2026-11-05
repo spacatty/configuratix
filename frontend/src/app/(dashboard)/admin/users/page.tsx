@@ -15,7 +15,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { EmptyState, ErrorState, PageHeader, RelativeTime, StatCard, StatStrip, StatusText, useConfirm, usePolling } from "@/components/app";
+import { EmptyState, ErrorState, FillPage, PageHeader, RelativeTime, StatCard, StatStrip, StatusText, useConfirm, usePolling } from "@/components/app";
 import { CreateUserDialog, SetPasswordDialog } from "@/components/admin/user-dialogs";
 import { USER_ROLES, UserRoleBadge } from "@/components/admin/user-role-badge";
 import { InitialsAvatar } from "@/components/profile/form-field";
@@ -235,18 +235,39 @@ export default function AdminUsersPage() {
   );
 
   return (
-    <div className="space-y-6">
+    <FillPage>
       <PageHeader
-        icon={Users}
         title="Users"
-        description="Accounts, workspace roles and two-factor coverage."
+        stats={
+          !(error && !data) && (
+            <StatStrip>
+              <StatCard label="Users" value={stats.total} loading={loading} />
+              <StatCard label="Admins" value={stats.admins} loading={loading} />
+              <StatCard
+                label="2FA coverage"
+                value={stats.total ? Math.round((stats.withTotp / stats.total) * 100) : 0}
+                suffix="%"
+                sub={`${stats.withTotp} of ${stats.total}`}
+                progress={stats.total ? (stats.withTotp / stats.total) * 100 : 0}
+                progressTone="success"
+                loading={loading}
+              />
+              <StatCard
+                label="Admins without 2FA"
+                value={stats.adminsWithoutTotp}
+                tone={stats.adminsWithoutTotp > 0 ? "warning" : "default"}
+                loading={loading}
+              />
+            </StatStrip>
+          )
+        }
         actions={
           <>
-            <Button variant="ghost" size="icon" onClick={refresh} disabled={refreshing} aria-label="Refresh">
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" onClick={refresh} disabled={refreshing} aria-label="Refresh">
               <RefreshCw className={refreshing ? "animate-spin" : undefined} />
             </Button>
             {isSuper && (
-              <Button onClick={() => setCreateOpen(true)}>
+              <Button size="sm" onClick={() => setCreateOpen(true)}>
                 <Plus />
                 Add user
               </Button>
@@ -258,50 +279,28 @@ export default function AdminUsersPage() {
       {error && !data ? (
         <ErrorState title="Couldn't load users" error={error} onRetry={refresh} />
       ) : (
-        <>
-          <StatStrip>
-            <StatCard label="Users" value={stats.total} loading={loading} />
-            <StatCard label="Admins" value={stats.admins} sub="Admins and super admins" loading={loading} />
-            <StatCard
-              label="2FA coverage"
-              value={stats.total ? Math.round((stats.withTotp / stats.total) * 100) : 0}
-              suffix="%"
-              sub={`${stats.withTotp} of ${stats.total} accounts`}
-              progress={stats.total ? (stats.withTotp / stats.total) * 100 : 0}
-              progressTone="success"
-              loading={loading}
-            />
-            <StatCard
-              label="Admins without 2FA"
-              value={stats.adminsWithoutTotp}
-              tone={stats.adminsWithoutTotp > 0 ? "warning" : "default"}
-              sub={stats.adminsWithoutTotp > 0 ? "Privileged accounts at risk" : "All privileged accounts protected"}
-              loading={loading}
-            />
-          </StatStrip>
-
-          <DataTable
-            columns={columns}
-            data={rows}
-            loading={loading}
-            getRowId={(u) => u.id}
-            searchKeys={["name", "email"]}
-            searchPlaceholder="Search name or email…"
-            facets={[
-              { columnId: "role", title: "Role", options: USER_ROLES.map((r) => ({ label: r.label, value: r.value, icon: r.icon })) },
-              {
-                columnId: "twofa",
-                title: "2FA",
-                options: [
-                  { label: "Enabled", value: "enabled" },
-                  { label: "Off", value: "disabled" },
-                ],
-              },
-            ]}
-            initialState={{ sorting: [{ id: "created_at", desc: true }] }}
-            emptyState={<EmptyState icon={Users} title="No users" description="Accounts appear here once people register or you add them." />}
-          />
-        </>
+        <DataTable
+          fill
+          columns={columns}
+          data={rows}
+          loading={loading}
+          getRowId={(u) => u.id}
+          searchKeys={["name", "email"]}
+          searchPlaceholder="Search name or email…"
+          facets={[
+            { columnId: "role", title: "Role", options: USER_ROLES.map((r) => ({ label: r.label, value: r.value, icon: r.icon })) },
+            {
+              columnId: "twofa",
+              title: "2FA",
+              options: [
+                { label: "Enabled", value: "enabled" },
+                { label: "Off", value: "disabled" },
+              ],
+            },
+          ]}
+          initialState={{ sorting: [{ id: "created_at", desc: true }] }}
+          emptyState={<EmptyState icon={Users} title="No users" description="Accounts appear here once people register or you add them." />}
+        />
       )}
 
       <CreateUserDialog
@@ -324,6 +323,6 @@ export default function AdminUsersPage() {
           refresh();
         }}
       />
-    </div>
+    </FillPage>
   );
 }

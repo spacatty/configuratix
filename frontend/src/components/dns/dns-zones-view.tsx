@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
-import { ExternalLink, Globe, MoreHorizontal, Network, Plus, RefreshCw, Settings2, ShieldCheck, Trash2 } from "lucide-react";
+import { ExternalLink, Globe, MoreHorizontal, Plus, RefreshCw, Settings2, ShieldCheck, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { api, type DNSAccount, type DNSManagedDomain } from "@/lib/api";
@@ -22,6 +22,7 @@ import {
   CopyButton,
   EmptyState,
   ErrorState,
+  FillPage,
   PageHeader,
   RelativeTime,
   Spinner,
@@ -212,30 +213,33 @@ export function DNSZonesView() {
 
   if (zonesQ.error && !zonesQ.data) {
     return (
-      <div className="space-y-6">
-        <PageHeader icon={Network} title="DNS" back={{ href: "/domains", label: "Domains" }} />
-        <ErrorState error={zonesQ.error} onRetry={zonesQ.refresh} />
-      </div>
+      <ErrorState error={zonesQ.error} onRetry={zonesQ.refresh} />
     );
   }
 
   return (
-    <div className="space-y-6">
+    <FillPage className="md:h-auto xl:h-[calc(100svh-6rem)]">
       <PageHeader
-        icon={Network}
         title="DNS"
-        description="Zones, provider accounts, nameserver health and proxy routing."
-        back={{ href: "/domains", label: "Domains" }}
+        stats={
+          <StatStrip>
+            <StatCard label="Zones" value={zones.length} loading={zonesQ.loading} />
+            <StatCard label="Nameservers OK" value={stats.ok} loading={zonesQ.loading} />
+            <StatCard label="NS issues" value={stats.bad} loading={zonesQ.loading} tone={stats.bad ? "warning" : "default"} />
+            <StatCard label="Proxied" value={stats.proxied} loading={zonesQ.loading} />
+            <StatCard label="Providers" value={accounts.length} loading={accountsQ.loading} />
+          </StatStrip>
+        }
         actions={
           <>
-            <Button variant="ghost" size="icon" aria-label="Refresh" onClick={() => { void zonesQ.refresh(); void accountsQ.refresh(); }}>
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" aria-label="Refresh" onClick={() => { void zonesQ.refresh(); void accountsQ.refresh(); }}>
               {zonesQ.refreshing ? <Spinner /> : <RefreshCw />}
             </Button>
-            <Button variant="outline" onClick={() => setAccountDialog({ open: true, account: null })}>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => setAccountDialog({ open: true, account: null })}>
               <Plus />
               Connect provider
             </Button>
-            <Button onClick={() => setAddOpen(true)}>
+            <Button size="sm" onClick={() => setAddOpen(true)}>
               <Plus />
               Add zone
             </Button>
@@ -243,17 +247,10 @@ export function DNSZonesView() {
         }
       />
 
-      <StatStrip>
-        <StatCard label="Zones" value={zones.length} loading={zonesQ.loading} />
-        <StatCard label="Nameservers OK" value={stats.ok} loading={zonesQ.loading} />
-        <StatCard label="NS issues" value={stats.bad} loading={zonesQ.loading} tone={stats.bad ? "warning" : "default"} />
-        <StatCard label="Proxied zones" value={stats.proxied} loading={zonesQ.loading} />
-        <StatCard label="Provider accounts" value={accounts.length} loading={accountsQ.loading} />
-      </StatStrip>
-
-      <div className="grid gap-4 xl:grid-cols-3">
-        <div className="xl:col-span-2">
+      <div className="grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-3">
+        <div className="flex flex-col xl:col-span-2 xl:min-h-0">
           <DataTable
+            fill
             columns={columns}
             data={zones}
             loading={zonesQ.loading}
@@ -292,7 +289,7 @@ export function DNSZonesView() {
             }
           />
         </div>
-        <div>
+        <div className="xl:min-h-0 xl:overflow-y-auto">
           <DNSAccountsCard
             accounts={accounts}
             zoneCounts={zoneCounts}
@@ -322,6 +319,6 @@ export function DNSZonesView() {
         onOpenChange={(o) => setAccountDialog((s) => ({ ...s, open: o }))}
         onSaved={() => void accountsQ.refresh()}
       />
-    </div>
+    </FillPage>
   );
 }

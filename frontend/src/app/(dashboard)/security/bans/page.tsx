@@ -24,7 +24,10 @@ import {
   CopyableMono,
   EmptyState,
   ErrorState,
+  FillPage,
   KeyValueList,
+  Metric,
+  MetricBar,
   Mono,
   PageHeader,
   RelativeTime,
@@ -39,6 +42,9 @@ import { AddBanDialog, ExportBansDialog, ImportBansDialog } from "@/components/s
 
 const PAGE_LIMIT = 2000;
 const NEVER_MS = 10 * 365 * 24 * 3600 * 1000;
+/** Quiet segmented-control item, matching the card toolbar. */
+const QUIET_SEGMENT =
+  "h-6 rounded-[5px] px-2 text-xs font-normal text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground data-[state=on]:shadow-none";
 
 function banStatus(b: SecurityIPBan): "active" | "expired" | "inactive" {
   if (!b.is_active) return b.unbanned_at ? "inactive" : "expired";
@@ -272,26 +278,30 @@ function BansPageInner() {
   );
 
   return (
-    <div className="space-y-6">
+    <FillPage>
       <PageHeader
-        icon={Ban}
         title="IP bans"
-        description="Addresses blocked at the firewall on every agent with nftables enabled."
-        badge={data ? <Badge variant="muted" className="font-data">{formatNumber(data.total)}</Badge> : undefined}
+        stats={
+          data && (
+            <MetricBar>
+              <Metric label={activeOnly ? "Active bans" : "Bans"} value={formatNumber(data.total)} />
+            </MetricBar>
+          )
+        }
         actions={
           <>
-            <Button variant="outline" size="icon" onClick={() => refresh()} disabled={refreshing} aria-label="Refresh">
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" onClick={() => refresh()} disabled={refreshing} aria-label="Refresh">
               {refreshing ? <Spinner /> : <RefreshCw />}
             </Button>
-            <Button variant="outline" onClick={() => setExportOpen(true)}>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => setExportOpen(true)}>
               <Download />
               Export
             </Button>
-            <Button variant="outline" onClick={() => setImportOpen(true)}>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => setImportOpen(true)}>
               <Upload />
               Import
             </Button>
-            <Button onClick={() => setAddOpen(true)}>
+            <Button size="sm" onClick={() => setAddOpen(true)}>
               <Plus />
               Ban IP
             </Button>
@@ -314,6 +324,7 @@ function BansPageInner() {
         <ErrorState error={error} onRetry={refresh} />
       ) : (
         <DataTable
+          fill
           columns={columns}
           data={bans}
           loading={loading}
@@ -331,13 +342,17 @@ function BansPageInner() {
             <>
               <ToggleGroup
                 type="single"
-                variant="outline"
                 size="sm"
                 value={activeOnly ? "active" : "all"}
                 onValueChange={(v) => v && setActiveOnly(v === "active")}
+                className="h-7 border-0 bg-white/[0.03] p-0.5"
               >
-                <ToggleGroupItem value="active">Active</ToggleGroupItem>
-                <ToggleGroupItem value="all">All</ToggleGroupItem>
+                <ToggleGroupItem value="active" className={QUIET_SEGMENT}>
+                  Active
+                </ToggleGroupItem>
+                <ToggleGroupItem value="all" className={QUIET_SEGMENT}>
+                  All
+                </ToggleGroupItem>
               </ToggleGroup>
               {reason && (
                 <Badge variant="outline" className="h-7 gap-1.5 px-2 text-xs">
@@ -358,7 +373,13 @@ function BansPageInner() {
             </>
           }
           toolbarActions={
-            <Button variant="destructive" size="sm" onClick={unbanAll} disabled={!data?.total}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs font-normal text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={unbanAll}
+              disabled={!data?.total}
+            >
               <Trash2 />
               Unban all
             </Button>
@@ -436,7 +457,7 @@ function BansPageInner() {
       <AddBanDialog open={addOpen} onOpenChange={setAddOpen} onCreated={refresh} />
       <ImportBansDialog open={importOpen} onOpenChange={setImportOpen} onImported={refresh} />
       <ExportBansDialog open={exportOpen} onOpenChange={setExportOpen} activeOnly={activeOnly} />
-    </div>
+    </FillPage>
   );
 }
 

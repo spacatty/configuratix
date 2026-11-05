@@ -181,19 +181,19 @@ export function MachineHero({
       }
       actions={
         <>
-          <Button variant="outline" onClick={onOpenTerminal} disabled={live === "offline"}>
+          <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={onOpenTerminal} disabled={live === "offline"}>
             <TerminalSquare />
             Terminal
           </Button>
           {(outdated || agentUpdating) && (
-            <Button onClick={onUpdateAgent} disabled={agentUpdating || !machine.agent_id || live === "offline"}>
+            <Button size="sm" onClick={onUpdateAgent} disabled={agentUpdating || !machine.agent_id || live === "offline"}>
               {agentUpdating ? <Spinner /> : <RefreshCw />}
               {agentUpdating ? "Updating agent…" : `Update agent${latestAgent ? ` → ${latestAgent}` : ""}`}
             </Button>
           )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon" aria-label="More actions">
+              <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" aria-label="More actions">
                 <MoreHorizontal />
               </Button>
             </DropdownMenuTrigger>

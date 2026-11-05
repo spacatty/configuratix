@@ -21,6 +21,9 @@ import {
   CopyableMono,
   EmptyState,
   ErrorState,
+  FillPage,
+  Metric,
+  MetricBar,
   PageHeader,
   RelativeTime,
   Spinner,
@@ -136,14 +139,18 @@ export default function WhitelistPage() {
   );
 
   return (
-    <div className="space-y-6">
+    <FillPage>
       <PageHeader
-        icon={ShieldCheck}
         title="Whitelist"
-        description="Addresses that are never banned, on any machine."
-        badge={data ? <Badge variant="muted" className="font-data">{formatNumber(entries.length)}</Badge> : undefined}
+        stats={
+          data && (
+            <MetricBar>
+              <Metric label="Entries" value={formatNumber(entries.length)} />
+            </MetricBar>
+          )
+        }
         actions={
-          <Button onClick={() => setAddOpen(true)}>
+          <Button size="sm" onClick={() => setAddOpen(true)}>
             <Plus />
             Add entry
           </Button>
@@ -165,6 +172,7 @@ export default function WhitelistPage() {
         <ErrorState error={error} onRetry={refresh} />
       ) : (
         <DataTable
+          fill
           columns={columns}
           data={entries}
           loading={loading}
@@ -198,7 +206,7 @@ export default function WhitelistPage() {
       )}
 
       <AddWhitelistDialog open={addOpen} onOpenChange={setAddOpen} onAdded={refresh} existing={entries} />
-    </div>
+    </FillPage>
   );
 }
 

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, CalendarClock, CalendarRange, FolderPlus, Plus, TrendingUp, Wallet } from "lucide-react";
+import { FolderPlus, Plus } from "lucide-react";
 import {
   api,
   type TrackerCategoryWithCount,
@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { ErrorState, PageHeader, StatCard, StatStrip, errorMessage, useConfirm, usePolling } from "@/components/app";
+import { ErrorState, FillPage, PageHeader, StatCard, StatStrip, errorMessage, useConfirm, usePolling } from "@/components/app";
 import { formatDate } from "@/lib/format";
 import { ItemsTable } from "@/components/tracker/items-table";
 import { ItemFormSheet, type ItemPayload } from "@/components/tracker/item-form-sheet";
@@ -25,6 +25,10 @@ import { InboxPopover } from "@/components/tracker/inbox-popover";
 import { daysUntil, formatCurrency, notifyDaysFor, playNotificationSound, showDesktopNotification } from "@/components/tracker/utils";
 
 type Tab = "items" | "resources" | "categories";
+
+/** Quiet segmented-control item, matching the card toolbar. */
+const QUIET_SEGMENT =
+  "h-6 rounded-[5px] px-2 text-xs font-normal text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground data-[state=on]:shadow-none";
 
 async function loadTracker() {
   const [summary, categories, items, notifications, resources] = await Promise.all([
@@ -253,11 +257,37 @@ export default function TrackerPage() {
   const closestDays = closest ? daysUntil(closest.expiry_at) : null;
 
   return (
-    <div className="space-y-6">
+    <FillPage>
       <PageHeader
-        icon={CalendarClock}
         title="Tracker"
-        description="Renewals, spend and reminders for servers, domains and subscriptions."
+        stats={
+          !(error && !data) && (
+            <StatStrip>
+              <StatCard label="Monthly" loading={loading} value={formatCurrency(summary?.monthly_recurring_expense ?? 0)} />
+              <StatCard label="Total spent" loading={loading} value={formatCurrency(summary?.total_spent ?? 0)} />
+              <StatCard
+                label="Due soon"
+                loading={loading}
+                value={summary?.due_soon_count ?? 0}
+                tone={(summary?.due_soon_count ?? 0) > 0 ? "warning" : "default"}
+                sub={
+                  closest ? (
+                    <button type="button" className="truncate hover:text-foreground" onClick={() => setDetailId(closest.id)}>
+                      next {closest.name}
+                      {closestDays != null && <span className="font-data"> · {closestDays <= 0 ? "today" : `${closestDays}d`}</span>}
+                    </button>
+                  ) : undefined
+                }
+              />
+              <StatCard
+                label="Overdue"
+                loading={loading}
+                value={summary?.overdue_count ?? 0}
+                tone={(summary?.overdue_count ?? 0) > 0 ? "destructive" : "default"}
+              />
+            </StatStrip>
+          )
+        }
         actions={
           <>
             <InboxPopover
@@ -269,7 +299,7 @@ export default function TrackerPage() {
                 setDetailId(id);
               }}
             />
-            <Button onClick={openCreate}>
+            <Button size="sm" onClick={openCreate}>
               <Plus />
               New item
             </Button>
@@ -281,37 +311,7 @@ export default function TrackerPage() {
         <ErrorState error={error} onRetry={refresh} />
       ) : (
         <>
-          <StatStrip>
-            <StatCard label="Monthly recurring" icon={TrendingUp} loading={loading} value={formatCurrency(summary?.monthly_recurring_expense ?? 0)} sub="Normalised to one month" />
-            <StatCard label="Total spent" icon={Wallet} loading={loading} value={formatCurrency(summary?.total_spent ?? 0)} sub="All recorded payments" />
-            <StatCard
-              label="Due soon"
-              icon={CalendarRange}
-              loading={loading}
-              value={summary?.due_soon_count ?? 0}
-              tone={(summary?.due_soon_count ?? 0) > 0 ? "warning" : "default"}
-              sub={
-                closest ? (
-                  <button type="button" className="truncate hover:text-foreground" onClick={() => setDetailId(closest.id)}>
-                    Next: {closest.name}
-                    {closestDays != null && <span className="font-data"> · {closestDays <= 0 ? "today" : `${closestDays}d`}</span>}
-                  </button>
-                ) : (
-                  "Nothing due"
-                )
-              }
-            />
-            <StatCard
-              label="Overdue"
-              icon={AlertTriangle}
-              loading={loading}
-              value={summary?.overdue_count ?? 0}
-              tone={(summary?.overdue_count ?? 0) > 0 ? "destructive" : "default"}
-              sub="Past expiry, not renewed"
-            />
-          </StatStrip>
-
-          <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="space-y-4">
+          <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="flex flex-col gap-4 md:min-h-0 md:flex-1">
             <TabsList>
               <TabsTrigger value="items">
                 Items <span className="font-data text-[11px] text-subtle-foreground">{items.length}</span>
@@ -324,33 +324,34 @@ export default function TrackerPage() {
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="items" className="space-y-3">
+            <TabsContent value="items" className="flex flex-col gap-3 md:min-h-0 md:flex-1">
               {categories.length > 0 && (
                 <ToggleGroup
                   type="single"
-                  variant="outline"
+                  size="sm"
                   value={categoryFilter}
                   onValueChange={(v) => v && setCategoryFilter(v)}
-                  className="flex-wrap"
+                  className="h-auto min-h-7 flex-wrap border-0 bg-white/[0.03] p-0.5"
                 >
-                  <ToggleGroupItem value="all">
+                  <ToggleGroupItem value="all" className={QUIET_SEGMENT}>
                     All <span className="font-data text-[11px] text-subtle-foreground">{items.length}</span>
                   </ToggleGroupItem>
                   {categories.map((c) => (
-                    <ToggleGroupItem key={c.id} value={c.id}>
+                    <ToggleGroupItem key={c.id} value={c.id} className={QUIET_SEGMENT}>
                       <span>{c.icon}</span>
                       {c.name}
                       <span className="font-data text-[11px] text-subtle-foreground">{c.item_count}</span>
                     </ToggleGroupItem>
                   ))}
                   {uncategorized > 0 && (
-                    <ToggleGroupItem value="none">
+                    <ToggleGroupItem value="none" className={QUIET_SEGMENT}>
                       Uncategorized <span className="font-data text-[11px] text-subtle-foreground">{uncategorized}</span>
                     </ToggleGroupItem>
                   )}
                 </ToggleGroup>
               )}
               <ItemsTable
+                fill
                 items={visibleItems}
                 categories={categories}
                 loading={loading}
@@ -366,8 +367,9 @@ export default function TrackerPage() {
               />
             </TabsContent>
 
-            <TabsContent value="resources">
+            <TabsContent value="resources" className="flex flex-col md:min-h-0 md:flex-1">
               <ResourcesTable
+                fill
                 resources={resources}
                 items={items}
                 loading={loading}
@@ -378,9 +380,14 @@ export default function TrackerPage() {
               />
             </TabsContent>
 
-            <TabsContent value="categories" className="space-y-3">
+            <TabsContent value="categories" className="space-y-3 md:min-h-0 md:flex-1 md:overflow-y-auto">
               <div className="flex justify-end">
-                <Button size="sm" variant="outline" onClick={() => setCatDialog({ open: true, category: null })}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
+                  onClick={() => setCatDialog({ open: true, category: null })}
+                >
                   <FolderPlus />
                   New category
                 </Button>
@@ -457,6 +464,6 @@ export default function TrackerPage() {
         onOpenChange={(o) => setCatDialog((s) => ({ ...s, open: o }))}
         onSave={saveCategory}
       />
-    </div>
+    </FillPage>
   );
 }

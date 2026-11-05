@@ -35,6 +35,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   ChevronsUpDown,
+  ChevronDown,
   CirclePlus,
   GripVertical,
   RotateCcw,
@@ -81,6 +82,10 @@ declare module "@tanstack/react-table" {
      * the remaining width evenly. Columns without it size automatically.
      */
     width?: "fit" | "fill";
+    /** Floor for a "fill" column's share (px), so its content never gets clipped. */
+    minWidth?: number;
+    /** Percent of the free width for this "fill" column; fill columns without it split the rest evenly. */
+    share?: number;
   }
 }
 
@@ -92,6 +97,8 @@ export interface DataTableFacetOption {
   label: string;
   value: string;
   icon?: React.ComponentType<{ className?: string }>;
+  /** Count shown next to the option; overrides the count derived from loaded rows. */
+  count?: number;
 }
 
 export interface DataTableFacet {
@@ -100,6 +107,10 @@ export interface DataTableFacet {
   title: string;
   /** Options; when omitted they're derived from the column's unique values. */
   options?: DataTableFacetOption[];
+  /** Pick at most one option (choosing another replaces it). */
+  single?: boolean;
+  /** Filtered by the caller (e.g. server-side): no client filtering, counts only from `option.count`. */
+  manual?: boolean;
 }
 
 export type SearchKey<TData> = keyof TData | ((row: TData) => string | number | null | undefined | Array<string | null | undefined>);
@@ -182,10 +193,17 @@ export interface DataTableProps<TData, TValue> {
   bulkActions?: (selected: TData[], clear: () => void) => React.ReactNode;
 
   /* ---- layout ---- */
+  /**
+   * "card": toolbar, table and pagination share one surface (borderless search, quiet
+   * filter/view controls, slim footer). "default": separate toolbar, card and pager.
+   */
+  variant?: "default" | "card";
   /** Sticky header; container scrolls vertically within maxHeight. Default true. */
   stickyHeader?: boolean;
   /** Max height of the scroll area (CSS). Default "max(320px, calc(100svh - 15rem))". "none" to disable. */
   maxHeight?: string;
+  /** md+: stretch to the parent's remaining height (flex column, e.g. `<FillPage>`) and scroll inside. */
+  fill?: boolean;
   className?: string;
   /** Wrap in bordered card surface (default true). */
   bordered?: boolean;
@@ -246,6 +264,8 @@ function columnKey<TData, TValue>(c: ColumnDef<TData, TValue>): string | undefin
   const anyC = c as { id?: string; accessorKey?: string };
   return anyC.id ?? anyC.accessorKey;
 }
+
+const passFilter: FilterFn<unknown> = () => true;
 
 const facetFilter: FilterFn<unknown> = (row, columnId, value: string[]) => {
   if (!value || value.length === 0) return true;
@@ -318,8 +338,10 @@ export function DataTable<TData, TValue>({
   bulkActions,
   stickyHeader = true,
   maxHeight = "max(320px, calc(100svh - 15rem))",
+  fill = false,
   className,
   bordered = true,
+  variant = "card",
 }: DataTableProps<TData, TValue>) {
   const pathname = usePathname() ?? "";
   const storageKey = React.useMemo(() => {
@@ -381,11 +403,12 @@ export function DataTable<TData, TValue>({
 
   // Columns: attach facet filterFn + optional auto selection column
   const finalColumns = React.useMemo(() => {
-    const facetIds = new Set((facets ?? []).map((f) => f.columnId));
+    const facetById = new Map((facets ?? []).map((f) => [f.columnId, f]));
     let cols = columns.map((c) => {
       const key = columnKey(c);
-      if (key && facetIds.has(key) && !(c as { filterFn?: unknown }).filterFn) {
-        return { ...c, filterFn: facetFilter as FilterFn<TData> };
+      const facet = key ? facetById.get(key) : undefined;
+      if (facet && !(c as { filterFn?: unknown }).filterFn) {
+        return { ...c, filterFn: (facet.manual ? passFilter : facetFilter) as FilterFn<TData> };
       }
       return c;
     }) as ColumnDef<TData, TValue>[];
@@ -486,7 +509,10 @@ export function DataTable<TData, TValue>({
   const filteredTotal = table.getFilteredRowModel().rows.length;
   const isFiltered = !!globalFilter || columnFilters.length > 0;
   const visibleColCount = table.getVisibleLeafColumns().length;
-  const fillCount = table.getVisibleLeafColumns().filter((c) => c.columnDef.meta?.width === "fill").length;
+  const fillCols = table.getVisibleLeafColumns().filter((c) => c.columnDef.meta?.width === "fill");
+  const fixedShare = fillCols.reduce((sum, c) => sum + (c.columnDef.meta?.share ?? 0), 0);
+  const evenCount = fillCols.filter((c) => !c.columnDef.meta?.share).length;
+  const evenShare = evenCount ? `${(Math.max(0, 100 - fixedShare) / evenCount).toFixed(2)}%` : undefined;
 
   const selectedRows = React.useMemo(() => {
     if (!selectedCount) return [] as TData[];
@@ -503,36 +529,68 @@ export function DataTable<TData, TValue>({
 
   const rowPad = density === "compact" ? "h-8 py-1" : "h-10 py-2";
   const hasToolbar = !hideSearch || facets?.length || toolbar || toolbarActions || showColumnToggle;
+  const card = variant === "card";
 
   return (
-    <div className={cn("w-full space-y-3", className)} data-slot="data-table">
+    <div
+      className={cn(
+        "w-full",
+        card
+          ? cn(
+              "flex flex-col overflow-hidden",
+              // Inside another card (bordered={false}) the table keeps its inner lines but no frame of its own.
+              bordered && "rounded-lg border border-border bg-card shadow-[inset_0_1px_0_0_oklch(1_0_0/3%)]"
+            )
+          : fill
+            ? "flex flex-col gap-3"
+            : "space-y-3",
+        fill && "md:min-h-0 md:flex-1",
+        className
+      )}
+      data-slot="data-table"
+      data-variant={variant}
+    >
       {hasToolbar && (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className={cn("flex flex-wrap items-center", card ? "gap-1 border-b border-border px-2 py-1.5" : "gap-2")}>
           {!hideSearch &&
             (searchKey ? (
               <SearchInput
+                bare={card}
                 placeholder={searchPlaceholder}
                 value={(table.getColumn(searchKey)?.getFilterValue() as string) ?? ""}
                 onChange={(v) => table.getColumn(searchKey)?.setFilterValue(v)}
               />
             ) : (
-              <SearchInput placeholder={searchPlaceholder} value={globalFilter ?? ""} onChange={setGlobalFilter} />
+              <SearchInput bare={card} placeholder={searchPlaceholder} value={globalFilter ?? ""} onChange={setGlobalFilter} />
             ))}
+          {card && !!facets?.length && <span aria-hidden className="mx-1 h-4 w-px bg-border" />}
           {facets?.map((f) => {
             const col = table.getColumn(f.columnId);
             if (!col) return null;
-            return <DataTableFacetedFilter key={f.columnId} column={col} title={f.title} options={f.options} />;
+            return (
+              <DataTableFacetedFilter
+                key={f.columnId}
+                column={col}
+                title={f.title}
+                options={f.options}
+                single={f.single}
+                manual={f.manual}
+                bare={card}
+              />
+            );
           })}
           {isFiltered && (
-            <Button variant="ghost" size="sm" onClick={resetFilters} className="text-muted-foreground">
+            <Button variant="ghost" size="sm" onClick={resetFilters} className={cn("text-muted-foreground", card && "h-7 px-2 text-xs")}>
               Reset
               <X />
             </Button>
           )}
           {toolbar}
-          <div className="ml-auto flex items-center gap-2">
+          <div className={cn("ml-auto flex items-center", card ? "gap-0.5" : "gap-2")}>
             {toolbarActions}
-            {showColumnToggle && <DataTableViewOptions table={table} defaultVisibility={initialStateProp?.columnVisibility} />}
+            {showColumnToggle && (
+              <DataTableViewOptions table={table} defaultVisibility={initialStateProp?.columnVisibility} bare={card} />
+            )}
           </div>
         </div>
       )}
@@ -540,16 +598,20 @@ export function DataTable<TData, TValue>({
       <div
         className={cn(
           "relative overflow-hidden",
-          bordered && "rounded-lg border border-border bg-card shadow-[inset_0_1px_0_0_oklch(1_0_0/3%)]"
+          fill && "md:flex md:min-h-0 md:flex-1 md:flex-col",
+          !card && bordered && "rounded-lg border border-border bg-card shadow-[inset_0_1px_0_0_oklch(1_0_0/3%)]"
         )}
       >
-        <Table containerStyle={stickyHeader && maxHeight !== "none" ? { maxHeight } : undefined}>
+        <Table
+          containerClassName={fill ? "md:min-h-0 md:flex-1 md:max-h-none!" : undefined}
+          containerStyle={stickyHeader && maxHeight !== "none" ? { maxHeight } : undefined}
+        >
           <TableHeader sticky={stickyHeader}>
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id} className="hover:bg-transparent">
                 {headerGroup.headers.map((header) => {
                   const meta = header.column.columnDef.meta;
-                  const fillShare = fillCount ? `${(100 / fillCount).toFixed(2)}%` : undefined;
+                  const fillShare = meta?.share ? `${meta.share}%` : evenShare;
                   const def = header.column.columnDef.header;
                   const plainSortable = header.column.getCanSort() && typeof def === "string";
                   return (
@@ -560,7 +622,7 @@ export function DataTable<TData, TValue>({
                         header.column.id === "select"
                           ? { width: 36 }
                           : meta?.width === "fill"
-                            ? { width: fillShare }
+                            ? { width: fillShare, minWidth: meta.minWidth }
                             : undefined
                       }
                       className={cn(
@@ -639,7 +701,7 @@ export function DataTable<TData, TValue>({
                         {meta?.width === "fill" ? (
                           // Keeps cell content from inflating the column's minimum width, so
                           // "fill" columns really split the free space evenly (content truncates).
-                          <div className="w-0 min-w-full overflow-hidden">
+                          <div className={cn("w-0 min-w-full overflow-hidden", meta?.align === "center" && "flex justify-center")}>
                             {flexRender(cell.column.columnDef.cell, cell.getContext())}
                           </div>
                         ) : (
@@ -676,6 +738,7 @@ export function DataTable<TData, TValue>({
       {showPagination && (data.length > 0 || !loading) && (
         <DataTablePagination
           table={table}
+          bare={card}
           pageSizeOptions={pageSizeOptions}
           selectedCount={enableRowSelection ? selectedCount : undefined}
           filteredTotal={filteredTotal}
@@ -707,11 +770,14 @@ function SearchInput({
   onChange,
   placeholder,
   delay = 200,
+  bare,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
   delay?: number;
+  /** Borderless, for the "card" table toolbar. */
+  bare?: boolean;
 }) {
   const [draft, setDraft] = React.useState(value);
   const sent = React.useRef(value);
@@ -744,13 +810,16 @@ function SearchInput({
   };
 
   return (
-    <div className="relative w-full sm:w-64">
+    <div className={cn("relative w-full", bare ? "sm:w-60" : "sm:w-64")}>
       <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
       <Input
         placeholder={placeholder}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        className="h-8 pr-7 pl-8"
+        className={cn(
+          "h-8 pr-7 pl-8",
+          bare && "h-7 border-transparent bg-transparent text-[13px] shadow-none hover:bg-white/[0.03] focus-visible:border-border focus-visible:bg-background/40"
+        )}
         onKeyDown={(e) => {
           if (e.key === "Escape" && draft) {
             e.stopPropagation();
@@ -777,10 +846,17 @@ export function DataTableFacetedFilter<TData, TValue>({
   column,
   title,
   options,
+  single,
+  manual,
+  bare,
 }: {
   column: Column<TData, TValue>;
   title: string;
   options?: DataTableFacetOption[];
+  single?: boolean;
+  manual?: boolean;
+  /** Quiet ghost trigger with a chevron (for the "card" table toolbar). */
+  bare?: boolean;
 }) {
   const facets = column.getFacetedUniqueValues();
   const selected = new Set((column.getFilterValue() as string[] | undefined) ?? []);
@@ -804,10 +880,29 @@ export function DataTableFacetedFilter<TData, TValue>({
   };
 
   const set = (next: Set<string>) => column.setFilterValue(next.size ? [...next] : undefined);
+  const [open, setOpen] = React.useState(false);
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
+        {bare ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              "h-7 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground",
+              selected.size > 0 && "bg-primary/10 text-foreground hover:bg-primary/15"
+            )}
+          >
+            {title}
+            {selected.size > 0 && (
+              <span className="font-data rounded-[4px] bg-primary/20 px-1 text-[10.5px] leading-4 text-foreground">
+                {selected.size === 1 ? opts.find((o) => selected.has(o.value))?.label ?? 1 : selected.size}
+              </span>
+            )}
+            <ChevronDown className="size-3 opacity-60" />
+          </Button>
+        ) : (
         <Button
           variant="outline"
           size="sm"
@@ -832,6 +927,7 @@ export function DataTableFacetedFilter<TData, TValue>({
             </>
           )}
         </Button>
+        )}
       </PopoverTrigger>
       <PopoverContent className="w-[220px] p-0" align="start">
         <Command>
@@ -848,6 +944,11 @@ export function DataTableFacetedFilter<TData, TValue>({
                     value={o.value}
                     keywords={[o.label]}
                     onSelect={() => {
+                      if (single) {
+                        set(new Set(isSel ? [] : [o.value]));
+                        setOpen(false);
+                        return;
+                      }
                       const next = new Set(selected);
                       if (isSel) next.delete(o.value);
                       else next.add(o.value);
@@ -856,7 +957,8 @@ export function DataTableFacetedFilter<TData, TValue>({
                   >
                     <span
                       className={cn(
-                        "flex size-4 items-center justify-center rounded-[4px] border border-border-strong",
+                        "flex size-4 items-center justify-center border border-border-strong",
+                        single ? "rounded-full" : "rounded-[4px]",
                         isSel && "border-primary bg-primary text-primary-foreground"
                       )}
                     >
@@ -868,7 +970,9 @@ export function DataTableFacetedFilter<TData, TValue>({
                     </span>
                     {Icon && <Icon className="size-3.5 text-muted-foreground" />}
                     <span className="flex-1 truncate">{o.label}</span>
-                    <span className="font-data ml-auto text-[11px] text-muted-foreground">{countFor(o.value)}</span>
+                    {(o.count !== undefined || !manual) && (
+                      <span className="font-data ml-auto text-[11px] text-muted-foreground">{o.count ?? countFor(o.value)}</span>
+                    )}
                   </CommandItem>
                 );
               })}
@@ -893,8 +997,11 @@ export function DataTableFacetedFilter<TData, TValue>({
 export function DataTableViewOptions<TData>({
   table,
   defaultVisibility = {},
+  bare,
 }: {
   table: TanstackTable<TData>;
+  /** Quiet icon trigger (for the "card" table toolbar). */
+  bare?: boolean;
   /** The page's own default visibility (what "Reset" restores). */
   defaultVisibility?: VisibilityState;
 }) {
@@ -930,10 +1037,21 @@ export function DataTableViewOptions<TData>({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8">
-          <Settings2 />
-          <span className="hidden sm:inline">View</span>
-        </Button>
+        {bare ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-xs font-normal text-muted-foreground hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
+          >
+            <Settings2 className="size-3.5" />
+            <span className="hidden sm:inline">View</span>
+          </Button>
+        ) : (
+          <Button variant="outline" size="sm" className="h-8">
+            <Settings2 />
+            <span className="hidden sm:inline">View</span>
+          </Button>
+        )}
       </PopoverTrigger>
       <PopoverContent align="end" className="w-60 p-1">
         <div className="flex items-center justify-between px-2 pt-1 pb-1.5">
@@ -1024,8 +1142,11 @@ export function DataTablePagination<TData>({
   selectedCount,
   filteredTotal,
   total,
+  bare,
 }: {
   table: TanstackTable<TData>;
+  /** Slim footer bar inside the table card. */
+  bare?: boolean;
   pageSizeOptions?: number[];
   selectedCount?: number;
   filteredTotal: number;
@@ -1035,6 +1156,47 @@ export function DataTablePagination<TData>({
   const from = filteredTotal === 0 ? 0 : pageIndex * pageSize + 1;
   const to = Math.min(filteredTotal, (pageIndex + 1) * pageSize);
   const pages = Math.max(1, table.getPageCount());
+  if (bare) {
+    return (
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
+        <div className="font-data tabular-nums">
+          {selectedCount !== undefined && selectedCount > 0 ? <span className="text-foreground">{selectedCount} selected · </span> : null}
+          {filteredTotal === 0 ? "0" : `${from}–${to}`} <span className="text-subtle-foreground">of</span> {filteredTotal}
+          {filteredTotal !== total && <span className="text-subtle-foreground"> · filtered from {total}</span>}
+        </div>
+        <div className="flex items-center gap-1">
+          <Select value={String(pageSize)} onValueChange={(v) => table.setPagination({ pageIndex: 0, pageSize: Number(v) })}>
+            <SelectTrigger
+              size="sm"
+              aria-label="Rows per page"
+              className="h-6 gap-1 border-transparent bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:bg-accent hover:text-foreground"
+            >
+              <SelectValue />
+              <span className="text-subtle-foreground">/ page</span>
+            </SelectTrigger>
+            <SelectContent side="top" align="end">
+              {pageSizeOptions.map((n) => (
+                <SelectItem key={n} value={String(n)}>
+                  {n}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span aria-hidden className="mx-1 h-3.5 w-px bg-border" />
+          <Button variant="ghost" size="icon-xs" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()} aria-label="Previous page">
+            <ChevronLeft />
+          </Button>
+          <span className="font-data min-w-10 text-center tabular-nums">
+            {pageIndex + 1}
+            <span className="text-subtle-foreground"> / {pages}</span>
+          </span>
+          <Button variant="ghost" size="icon-xs" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()} aria-label="Next page">
+            <ChevronRight />
+          </Button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-xs text-muted-foreground">
       <div className="font-data tabular-nums">

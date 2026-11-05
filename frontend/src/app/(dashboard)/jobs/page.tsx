@@ -3,21 +3,22 @@
 import * as React from "react";
 import { Suspense } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { CalendarDays, ListChecks, RefreshCw, Search, X } from "lucide-react";
+import type { ColumnFiltersState } from "@tanstack/react-table";
+import { ListChecks, RefreshCw, Search } from "lucide-react";
 
 import { api, type JobCounts, type JobListItem, type JobListParams, type Machine } from "@/lib/api";
-import { JOB_ACTION_OPTIONS, JOB_ENTITY_OPTIONS, JOBS_CHANGED_EVENT, isJobActive } from "@/lib/jobs";
 import { cn } from "@/lib/utils";
+import { JOB_ACTION_OPTIONS, JOB_ENTITY_OPTIONS, JOBS_CHANGED_EVENT, isJobActive } from "@/lib/jobs";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Combobox } from "@/components/ui/combobox";
-import { Toggle } from "@/components/ui/toggle";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { DataTable, type DataTableFacet } from "@/components/ui/data-table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   EmptyState,
   ErrorState,
-  MachinePicker,
+  FillPage,
+  Metric,
+  MetricBar,
+  MetricSegments,
   PageHeader,
   Spinner,
   StatusDot,
@@ -25,25 +26,31 @@ import {
   trackJob,
   usePolling,
 } from "@/components/app";
-import { JobsTable } from "@/components/jobs/jobs-table";
+import { JOB_HIDDEN_COLUMNS, buildJobColumns } from "@/components/jobs/job-columns";
 import { useJobActions } from "@/components/jobs/use-job-actions";
 import { useNow } from "@/components/jobs/job-detail";
 
 const PAGE_SIZE = 50;
-const STATUS_TABS: { value: string; label: string; key?: keyof JobCounts }[] = [
-  { value: "all", label: "All" },
-  { value: "running", label: "Running", key: "running" },
-  { value: "pending", label: "Pending", key: "pending" },
-  { value: "failed", label: "Failed", key: "failed" },
-  { value: "completed", label: "Completed", key: "completed" },
-  { value: "cancelled", label: "Cancelled", key: "cancelled" },
+const STATUSES: { value: keyof JobCounts; label: string }[] = [
+  { value: "running", label: "Running" },
+  { value: "pending", label: "Pending" },
+  { value: "failed", label: "Failed" },
+  { value: "completed", label: "Completed" },
+  { value: "cancelled", label: "Cancelled" },
 ];
 const RANGES = [
-  { value: "1h", label: "1h" },
-  { value: "24h", label: "24h" },
-  { value: "168h", label: "7d" },
-  { value: "all", label: "All" },
+  { value: "1h", label: "Last hour" },
+  { value: "24h", label: "Last 24 hours" },
+  { value: "168h", label: "Last 7 days" },
 ];
+/** URL param ↔ facet column. */
+const FILTER_PARAMS: Record<string, string> = { status: "status", machine: "machine", action: "action", target: "entity", created_at: "range" };
+
+function sinceMidnight(): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
 
 export default function JobsPage() {
   return (
@@ -53,31 +60,24 @@ export default function JobsPage() {
   );
 }
 
-function readGroupPref(): boolean {
-  try {
-    return localStorage.getItem("jobs:groupByDay") !== "0";
-  } catch {
-    return true;
-  }
-}
-
 function JobsPageInner() {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
 
-  const status = sp.get("status") ?? "all";
+  const statusParam = sp.get("status") ?? "";
+  const statuses = React.useMemo(() => statusParam.split(",").filter(Boolean), [statusParam]);
   const machineId = sp.get("machine") ?? null;
   const action = sp.get("action") ?? null;
   const entity = sp.get("entity") ?? null;
-  const range = sp.get("range") ?? "all";
+  const range = sp.get("range") ?? null;
   const urlQ = sp.get("q") ?? "";
 
   const setParams = React.useCallback(
     (patch: Record<string, string | null>) => {
       const next = new URLSearchParams(sp.toString());
       for (const [k, v] of Object.entries(patch)) {
-        if (v === null || v === "" || (k === "status" && v === "all") || (k === "range" && v === "all")) next.delete(k);
+        if (v === null || v === "") next.delete(k);
         else next.set(k, v);
       }
       const qs = next.toString();
@@ -106,27 +106,16 @@ function JobsPageInner() {
     return () => clearTimeout(t);
   }, [jobParam]);
 
-  const [groupByDay, setGroupByDay] = React.useState(true);
-  React.useEffect(() => setGroupByDay(readGroupPref()), []);
-  const toggleGroup = (v: boolean) => {
-    setGroupByDay(v);
-    try {
-      localStorage.setItem("jobs:groupByDay", v ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
-  };
-
   const baseParams = React.useMemo<JobListParams>(
     () => ({
       q: urlQ || undefined,
       machine_id: machineId ?? undefined,
       type: action ?? undefined,
       entity_type: entity ?? undefined,
-      since: range !== "all" ? range : undefined,
-      status: status !== "all" ? status : undefined,
+      since: range ?? undefined,
+      status: statuses.length ? statuses : undefined,
     }),
-    [urlQ, machineId, action, entity, range, status]
+    [urlQ, machineId, action, entity, range, statuses]
   );
   const paramsKey = JSON.stringify(baseParams);
 
@@ -232,188 +221,174 @@ function JobsPageInner() {
     },
   });
 
-  const totalAll = counts ? Object.values(counts).reduce((a, b) => a + (b ?? 0), 0) : null;
-  const filtersActive = !!(urlQ || machineId || action || entity || range !== "all");
+  // Today's numbers come from their own query so they don't depend on how many rows are loaded.
+  const today = usePolling(() => api.listJobsPage({ since: sinceMidnight(), limit: 1 }), anyActive ? 4000 : 15_000);
+  const todayCounts = today.data?.counts;
+  const sum = (c?: JobCounts | null) => (c ? Object.values(c).reduce((a, b) => a + (b ?? 0), 0) : null);
+  const totalAll = sum(counts);
+  const todayTotal = sum(todayCounts);
+  const todayActive = (todayCounts?.running ?? 0) + (todayCounts?.pending ?? 0);
+  const filtersActive = !!(urlQ || machineId || action || entity || range || statuses.length);
   const loading = first.loading && rows.size === 0;
+  const clearFilters = () => {
+    setQ("");
+    setParams({ q: null, status: null, machine: null, action: null, entity: null, range: null });
+  };
+
+  const columns = React.useMemo(
+    () =>
+      buildJobColumns({
+        machines: machineMap,
+        now,
+        onOpen: (j) => openJobLogs(j),
+        onRetry: (j) => void retry(j),
+        onCancel: (j) => void cancel(j),
+        onFilterMachine: (id) => setParams({ machine: id }),
+        retrying,
+      }),
+    [machineMap, now, retry, cancel, setParams, retrying]
+  );
+
+  const facets = React.useMemo<DataTableFacet[]>(
+    () => [
+      {
+        columnId: "status",
+        title: "Status",
+        manual: true,
+        options: STATUSES.map((s) => ({ value: s.value, label: s.label, count: counts?.[s.value] ?? undefined })),
+      },
+      {
+        columnId: "machine",
+        title: "Machine",
+        manual: true,
+        single: true,
+        options: (machines ?? [])
+          .map((m) => ({ value: m.id, label: m.title || m.hostname || m.id.slice(0, 8) }))
+          .sort((a, b) => a.label.localeCompare(b.label)),
+      },
+      { columnId: "action", title: "Action", manual: true, single: true, options: JOB_ACTION_OPTIONS },
+      { columnId: "target", title: "Target", manual: true, single: true, options: JOB_ENTITY_OPTIONS },
+      { columnId: "created_at", title: "Created", manual: true, single: true, options: RANGES },
+    ],
+    [counts, machines]
+  );
+
+  const columnFilters = React.useMemo<ColumnFiltersState>(() => {
+    const out: ColumnFiltersState = [];
+    if (statuses.length) out.push({ id: "status", value: statuses });
+    if (machineId) out.push({ id: "machine", value: [machineId] });
+    if (action) out.push({ id: "action", value: [action] });
+    if (entity) out.push({ id: "target", value: [entity] });
+    if (range) out.push({ id: "created_at", value: [range] });
+    return out;
+  }, [statuses, machineId, action, entity, range]);
+
+  const onColumnFiltersChange = (next: ColumnFiltersState) => {
+    const patch: Record<string, string | null> = {};
+    for (const [col, param] of Object.entries(FILTER_PARAMS)) {
+      const v = next.find((f) => f.id === col)?.value as string[] | undefined;
+      patch[param] = v?.length ? v.join(",") : null;
+    }
+    setParams(patch);
+  };
 
   return (
-    <div className="space-y-6">
+    <FillPage>
       <PageHeader
-        icon={ListChecks}
         title="Jobs"
-        description="Everything agents ran for you: config applies, commands, updates. Click a row for logs, step results and the rollback outcome."
-        meta={
-          <>
-            <span className="inline-flex items-center gap-1.5">
-              <StatusDot status={anyActive ? "running" : "completed"} pulse={anyActive} />
-              {anyActive ? "Live · refreshing every 4s" : "Refreshing every 15s"}
-            </span>
-            {totalAll !== null && (
-              <span>
-                <span className="font-data text-foreground">{totalAll}</span> jobs match
-              </span>
-            )}
-          </>
+        stats={
+          <MetricBar>
+            <Metric label="Jobs" value={totalAll ?? 0} loading={totalAll === null} href={pathname}>
+              <MetricSegments
+                segments={[
+                  { value: (counts?.running ?? 0) + (counts?.pending ?? 0), tone: "info", label: "active" },
+                  { value: counts?.completed ?? 0, tone: "success", label: "completed" },
+                  { value: counts?.failed ?? 0, tone: "destructive", label: "failed" },
+                ]}
+              />
+            </Metric>
+            <Metric
+              label="Today"
+              value={todayTotal ?? 0}
+              hint={todayTotal ? `${todayActive} active · ${todayCounts?.failed ?? 0} failed` : undefined}
+              loading={todayTotal === null}
+              href={`${pathname}?range=24h`}
+            />
+            <Metric
+              label="Running"
+              value={counts?.running ?? 0}
+              hint={counts?.pending ? `${counts.pending} queued` : undefined}
+              loading={totalAll === null}
+              tone={(counts?.running ?? 0) > 0 ? "info" : "default"}
+              href={`${pathname}?status=running,pending`}
+            />
+            <Metric
+              label="Failed"
+              value={counts?.failed ?? 0}
+              loading={totalAll === null}
+              tone={(counts?.failed ?? 0) > 0 ? "destructive" : "default"}
+              href={`${pathname}?status=failed`}
+            />
+          </MetricBar>
         }
-        actions={
-          <Button variant="outline" onClick={() => void refresh()} disabled={first.refreshing}>
-            {first.refreshing ? <Spinner /> : <RefreshCw />}
-            Refresh
-          </Button>
+        meta={
+          <span className="inline-flex items-center gap-1.5">
+            <StatusDot status={anyActive ? "running" : "completed"} pulse={anyActive} />
+            {anyActive ? "Live · 4s" : "Refreshing every 15s"}
+          </span>
         }
       />
-
-      <div className="space-y-3">
-        {/* Status tabs */}
-        <div role="tablist" aria-label="Status" className="flex flex-wrap items-center gap-1 border-b border-border">
-          {STATUS_TABS.map((t) => {
-            const n = t.key ? counts?.[t.key] : totalAll;
-            const activeTab = status === t.value;
-            return (
-              <button
-                key={t.value}
-                role="tab"
-                aria-selected={activeTab}
-                onClick={() => setParams({ status: t.value })}
-                className={cn(
-                  "relative -mb-px inline-flex h-9 items-center gap-2 border-b-2 px-3 text-[13px] transition-colors outline-none focus-visible:text-foreground",
-                  activeTab ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {t.value === "running" && (counts?.running ?? 0) > 0 && <StatusDot status="running" size="xs" />}
-                {t.label}
-                <span
-                  className={cn(
-                    "font-data rounded px-1.5 py-px text-[11px]",
-                    t.value === "failed" && (n ?? 0) > 0 ? "bg-destructive/12 text-destructive" : "bg-muted text-muted-foreground",
-                    t.value === "running" && (n ?? 0) > 0 && "bg-info/12 text-info"
-                  )}
-                >
-                  {n ?? "–"}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Toolbar */}
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative w-full sm:w-72">
-            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search titles… (e.g. shop.example.com)"
-              className="h-8 pl-8"
-              aria-label="Search jobs"
-            />
-            {q && (
-              <button
-                type="button"
-                onClick={() => setQ("")}
-                className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label="Clear search"
-              >
-                <X className="size-3.5" />
-              </button>
-            )}
-          </div>
-          <MachinePicker
-            value={machineId}
-            onValueChange={(id) => setParams({ machine: id })}
-            clearable
-            placeholder="All machines"
-            size="sm"
-            className="w-52"
-            modal={false}
-            groupBy="status"
-          />
-          <Combobox
-            items={JOB_ACTION_OPTIONS}
-            getValue={(o) => o.value}
-            getLabel={(o) => o.label}
-            getKeywords={(o) => [o.value]}
-            getGroup={(o) => o.group}
-            renderItem={(o) => (
-              <div className="flex w-full items-center justify-between gap-2">
-                <span>{o.label}</span>
-                <span className="font-data text-[11px] text-subtle-foreground">{o.value}</span>
-              </div>
-            )}
-            value={action}
-            onValueChange={(v) => setParams({ action: v })}
-            clearable
-            placeholder="All actions"
-            searchPlaceholder="Search actions…"
-            size="sm"
-            className="w-44"
-            contentClassName="w-72"
-            modal={false}
-          />
-          <Combobox
-            items={JOB_ENTITY_OPTIONS}
-            getValue={(o) => o.value}
-            getLabel={(o) => o.label}
-            value={entity}
-            onValueChange={(v) => setParams({ entity: v })}
-            clearable
-            placeholder="Any target"
-            size="sm"
-            className="w-36"
-            modal={false}
-          />
-          <ToggleGroup type="single" size="sm" value={range} onValueChange={(v) => v && setParams({ range: v })} aria-label="Time range">
-            {RANGES.map((r) => (
-              <ToggleGroupItem key={r.value} value={r.value} className="font-data px-2.5 text-xs">
-                {r.label}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          {filtersActive && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setQ("");
-                setParams({ q: null, machine: null, action: null, entity: null, range: null });
-              }}
-            >
-              <X />
-              Reset
-            </Button>
-          )}
-          <div className="ml-auto">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Toggle size="sm" pressed={groupByDay} onPressedChange={toggleGroup} aria-label="Group by day" variant="outline">
-                  <CalendarDays />
-                  <span className="hidden text-xs md:inline">Group by day</span>
-                </Toggle>
-              </TooltipTrigger>
-              <TooltipContent>Group rows by day with sticky headers</TooltipContent>
-            </Tooltip>
-          </div>
-        </div>
-      </div>
 
       {first.error && rows.size === 0 ? (
         <ErrorState error={first.error} onRetry={refresh} title="Couldn't load jobs" />
       ) : (
-        <div className="space-y-3">
-          <JobsTable
-            jobs={list}
+        // DataTable inside our own card so the cursor footer ("Load more") shares the surface.
+        <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-card shadow-[inset_0_1px_0_0_oklch(1_0_0/3%)] md:min-h-0 md:flex-1">
+          <DataTable
+            fill
+            variant="card"
+            bordered={false}
+            persistKey="jobs"
+            columns={columns}
+            data={list}
             loading={loading}
-            machines={machineMap}
-            groupByDay={groupByDay}
-            freshIds={fresh}
-            now={now}
-            onOpen={(j) => openJobLogs(j)}
-            onRetry={(j) => void retry(j)}
-            onCancel={(j) => void cancel(j)}
-            onFilterMachine={(id) => setParams({ machine: id })}
-            retrying={retrying}
+            getRowId={(j) => j.id}
+            searchKeys={["title", "action", "type", "entity_id", "machine_title", "machine_hostname", "created_by_email"]}
+            searchPlaceholder="Search titles… (e.g. shop.example.com)"
+            search={q}
+            onSearchChange={setQ}
+            facets={facets}
+            columnFilters={columnFilters}
+            onColumnFiltersChange={onColumnFiltersChange}
+            initialState={{ columnVisibility: JOB_HIDDEN_COLUMNS }}
+            showPagination={false}
+            getRowClassName={(j) => cn(j.status === "failed" && "bg-destructive/[0.025]", fresh.has(j.id) && "animate-fade-in-up")}
+            onRowClick={(j, e) => {
+              if (e.metaKey || e.ctrlKey) window.open(`/jobs/${j.id}`, "_blank");
+              else openJobLogs(j);
+            }}
+            toolbarActions={
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      void refresh();
+                      void today.refresh();
+                    }}
+                    disabled={first.refreshing}
+                    aria-label="Refresh"
+                  >
+                    {first.refreshing ? <Spinner /> : <RefreshCw />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{anyActive ? "Live, refreshing every 4s" : "Refreshing every 15s"}</TooltipContent>
+              </Tooltip>
+            }
             emptyState={
-              filtersActive || status !== "all" ? (
+              filtersActive ? (
                 <EmptyState
                   size="compact"
                   bordered={false}
@@ -421,14 +396,7 @@ function JobsPageInner() {
                   title="No jobs match these filters"
                   description="Try a wider time range or clear the filters."
                   action={
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setQ("");
-                        setParams({ q: null, machine: null, action: null, entity: null, range: null, status: null });
-                      }}
-                    >
+                    <Button variant="outline" size="sm" onClick={clearFilters}>
                       Clear filters
                     </Button>
                   }
@@ -444,18 +412,18 @@ function JobsPageInner() {
             }
           />
           {list.length > 0 && (
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>
-                Showing <span className="font-data text-foreground">{list.length}</span>
-                {status === "all" && totalAll !== null ? (
-                  <>
-                    {" "}
-                    of <span className="font-data text-foreground">{totalAll}</span>
-                  </>
-                ) : null}
+            <div className="flex shrink-0 items-center justify-between border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
+              <span className="font-data tabular-nums">
+                {list.length} <span className="text-subtle-foreground">of</span> {totalAll ?? list.length}
               </span>
               {cursor ? (
-                <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
+                  onClick={() => void loadMore()}
+                  disabled={loadingMore}
+                >
                   {loadingMore && <Spinner />}
                   Load {PAGE_SIZE} more
                 </Button>
@@ -466,6 +434,6 @@ function JobsPageInner() {
           )}
         </div>
       )}
-    </div>
+    </FillPage>
   );
 }

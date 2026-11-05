@@ -40,9 +40,12 @@ export function ItemsTable({
   onCreate,
   filtered,
   onClearFilters,
+  fill,
 }: {
   /** True when an outside filter (category quick-filter) is narrowing `items`. */
   filtered?: boolean;
+  /** Stretch to the parent's height and scroll inside (see `DataTable` `fill`). */
+  fill?: boolean;
   onClearFilters?: () => void;
   items: TrackerItemWithCategory[];
   categories: TrackerCategoryWithCount[];
@@ -240,6 +243,7 @@ export function ItemsTable({
 
   return (
     <DataTable
+      fill={fill}
       columns={columns}
       data={items}
       loading={loading}

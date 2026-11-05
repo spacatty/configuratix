@@ -13,9 +13,9 @@ import { PageHeader, SectionCard, StatCard, StatusBadge, useConfirm, trackJob, u
 
 | Topic | Rule |
 | --- | --- |
-| Page root | `<div className="space-y-6">` → `<PageHeader …/>` first, then content blocks. The layout already gives `px-4 md:px-6 lg:px-8 py-6` and `max-w-[1600px]`; never add outer padding. |
+| Page root | `<div className="space-y-6">` → `<PageHeader …/>` first, then content blocks. List pages whose main table should fill the viewport: `<FillPage>` root + `<DataTable fill>` (table scrolls inside, page doesn't). The layout already gives `px-4 md:px-6 lg:px-8 py-6` and `max-w-[1600px]`; never add outer padding. |
 | Spacing | Between page blocks `space-y-6`. Inside cards `space-y-4`/`gap-4`. Stat grids `grid gap-3 sm:grid-cols-2 lg:grid-cols-4`. Two-column detail `grid gap-4 lg:grid-cols-3` (main `lg:col-span-2`). |
-| Type | Body 13px (`text-[13px]`), meta 12px (`text-xs`), labels sentence case — **no uppercase tracked labels**. Page title is PageHeader's 20px. Section titles 14px (SectionCard). |
+| Type | Body 13px (`text-[13px]`), meta 12px (`text-xs`), labels sentence case — **no uppercase tracked labels**. No in-page title (the top bar names the page). Section titles 14px (SectionCard). |
 | Data text | IPs, hostnames, IDs, versions, ports, durations, paths, counts in tables → `<Mono>` or `className="font-data"` (mono + tabular + slashed zero). Numbers right-aligned in tables: `meta: { align: "right" }`. |
 | Colour | Brand red (`primary`) = primary button, focus, active nav, selection only. Status colour comes **only** from `StatusBadge`/`StatusDot`/`Badge` tone variants. Never hardcode `green-500`/`red-500`/`blue-400`. Tokens: `success`, `warning`, `info`, `destructive`, `muted-foreground`, `subtle-foreground`, `surface-2`, `border-strong` — all work with opacity (`bg-success/12`). |
 | Danger | `destructive` (vermilion) ≠ brand red. Destructive actions: `<Button variant="destructive">` (tinted) in lists/toolbars, `variant="destructive-solid"` only as the final confirm. Always with an icon (`Trash2`, `Ban`, …). |
@@ -49,15 +49,14 @@ Pulse: `online`, `running`, `checking`. Machine liveness (`machineLiveness(m)` i
 
 ### `PageHeader`
 ```ts
-{ title: ReactNode; description?: ReactNode; icon?: LucideIcon | ReactElement; actions?: ReactNode;
-  back?: { href: string; label?: string }; breadcrumbs?: { label: ReactNode; href?: string }[];
-  badge?: ReactNode; meta?: ReactNode }
+{ actions?: ReactNode; badge?: ReactNode; stats?: ReactNode /* <MetricBar> */; meta?: ReactNode;
+  title?, description?, icon?, back?, breadcrumbs? /* accepted, not rendered */ }
 ```
+One compact line: badge · stats · meta on the left, actions on the right. No title, icon, description or back link — the top bar's breadcrumbs name the page. Renders nothing when there's nothing to show.
 ```tsx
-<PageHeader icon={Server} title="Machines" description="Agents enrolled in this workspace."
-  actions={<><Button variant="outline" onClick={refresh}><RefreshCw />Refresh</Button><Button><Plus />Enroll machine</Button></>} />
-<PageHeader back={{ href: "/machines", label: "Machines" }} title={name} badge={<StatusBadge status={live} />}
-  meta={<><Mono>{ip}</Mono><span>Agent <Mono>{m.agent_version}</Mono></span></>} actions={…} />
+<PageHeader title="Machines"
+  stats={<MetricBar><Metric label="Machines" value={n} /><Metric label="Offline" value={off} tone={off ? "destructive" : "default"} /></MetricBar>}
+  actions={<><Button variant="outline">…</Button><Button><Plus />Add machine</Button></>} />
 ```
 Primary action last (right-most). At most one `default` (red) button per header.
 
@@ -67,13 +66,12 @@ Primary action last (right-most). At most one `default` (red) button per header.
 ```
 Body has `p-4`; `flush` removes it for edge-to-edge tables/lists. Prefer this over raw `Card`.
 
-### `StatCard` / `StatStrip`
+### `MetricBar` / `Metric` (and `StatStrip` / `StatCard`)
 ```ts
-StatCard { label; value; suffix?; sub?; delta?: number | ReactNode; deltaInverse?: boolean; icon?: LucideIcon;
-  tone?: "default"|"primary"|"success"|"warning"|"destructive"|"info"; progress?: number (0–100);
-  progressTone?: "default"|"success"|"warning"|"destructive"|"info"|"muted"|"auto"; children?; href?; loading? }
+Metric { label; value; suffix?; hint?; tone?: "default"|"primary"|"success"|"warning"|"destructive"|"info";
+  children? /* <MetricMeter value={0..100}/> or <MetricSegments segments={[{value, tone}]}/> */; href?; loading? }
 ```
-`tone` colours the number + a 2px left bar — use only when the value needs attention (e.g. unhealthy > 0). `delta` number shows signed, green when good (`deltaInverse` for "lower is better"). `children` slot for a mini chart. `StatStrip` = one divided card holding several `StatCard`s.
+Borderless inline row: `2 Machines ▬ │ 0/2 Online │ 2 Offline`, hairline dividers, no boxes. Pass it to `<PageHeader stats>`. `tone` colours the number — only when it needs attention. `StatStrip`/`StatCard` are the same thing under the old names (`sub` → hint, `progress` → meter, `icon` ignored).
 
 ---
 

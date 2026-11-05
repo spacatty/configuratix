@@ -62,7 +62,7 @@ function useLoaded<T>(provided: T[] | undefined, key: string, loader: () => Prom
 
 type PassThrough = Pick<
   ComboboxBaseProps<unknown>,
-  "placeholder" | "searchPlaceholder" | "emptyText" | "disabled" | "className" | "contentClassName" | "align" | "modal" | "id" | "aria-invalid" | "footer" | "size" | "open" | "onOpenChange"
+  "placeholder" | "searchPlaceholder" | "emptyText" | "disabled" | "className" | "contentClassName" | "align" | "modal" | "id" | "aria-invalid" | "footer" | "size" | "triggerVariant" | "open" | "onOpenChange"
 >;
 
 type SingleProps<T> = {
@@ -171,6 +171,7 @@ export function MachinePicker(props: MachinePickerProps) {
     "aria-invalid": props["aria-invalid"],
     footer: props.footer,
     size: props.size,
+    triggerVariant: props.triggerVariant,
     open: props.open,
     onOpenChange: props.onOpenChange,
   };
@@ -258,6 +259,7 @@ export function DomainPicker(props: DomainPickerProps) {
     "aria-invalid": props["aria-invalid"],
     footer: props.footer,
     size: props.size,
+    triggerVariant: props.triggerVariant,
     open: props.open,
     onOpenChange: props.onOpenChange,
   };
@@ -335,6 +337,7 @@ export function NginxConfigPicker(props: NginxConfigPickerProps) {
     "aria-invalid": props["aria-invalid"],
     footer: props.footer,
     size: props.size,
+    triggerVariant: props.triggerVariant,
     open: props.open,
     onOpenChange: props.onOpenChange,
   };

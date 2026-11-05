@@ -13,6 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   EmptyState,
   ErrorState,
+  FillPage,
   Metric,
   MetricBar,
   MetricMeter,
@@ -176,24 +177,67 @@ function MachinesView() {
   const loading = machinesQ.loading && !machinesQ.data;
 
   return (
-    <div className="space-y-6">
+    <FillPage>
       <PageHeader
-        icon={Server}
         title="Machines"
-        description="Every server running the Configuratix agent — health, capacity and agent versions at a glance."
+        stats={
+          <MetricBar>
+            <Metric label="Machines" value={kpi.total} loading={loading} href={pathname}>
+              <MetricSegments
+                segments={[
+                  { value: kpi.online, tone: "success", label: "online" },
+                  { value: kpi.stale, tone: "warning", label: "stale" },
+                  { value: kpi.offline, tone: "destructive", label: "offline" },
+                ]}
+              />
+            </Metric>
+            <Metric
+              label="Online"
+              value={kpi.online}
+              suffix={kpi.total ? `/ ${kpi.total}` : undefined}
+              hint={kpi.stale ? `${kpi.stale} stale` : undefined}
+              loading={loading}
+              tone={kpi.total && kpi.online === kpi.total ? "success" : "default"}
+              href={`${pathname}?status=online`}
+            />
+            <Metric
+              label="Offline"
+              value={kpi.offline}
+              loading={loading}
+              tone={kpi.offline > 0 ? "destructive" : "default"}
+              href={`${pathname}?status=offline`}
+            />
+            <Metric
+              label="Outdated agents"
+              value={kpi.outdated}
+              hint={kpi.updating ? `${kpi.updating} updating` : latestAgent ? `latest ${latestAgent}` : undefined}
+              loading={loading}
+              tone={kpi.outdated > 0 ? "warning" : "default"}
+              href={`${pathname}?agent=Outdated`}
+            />
+            <Metric
+              label="Avg CPU"
+              value={kpi.avgCpu == null ? "—" : Math.round(kpi.avgCpu)}
+              suffix={kpi.avgCpu == null ? undefined : "%"}
+              loading={loading}
+            >
+              {kpi.avgCpu != null && <MetricMeter value={kpi.avgCpu} />}
+            </Metric>
+          </MetricBar>
+        }
         actions={
           <>
-            <Button variant="outline" asChild>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" asChild>
               <Link href="/machines/tokens">
                 <KeyRound />
                 Tokens
               </Link>
             </Button>
-            <Button variant="outline" onClick={() => setGroupsOpen(true)}>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => setGroupsOpen(true)}>
               <FolderTree />
               Groups
             </Button>
-            <Button onClick={() => setAddOpen(true)}>
+            <Button size="sm" onClick={() => setAddOpen(true)}>
               <Plus />
               Add machine
             </Button>
@@ -201,54 +245,12 @@ function MachinesView() {
         }
       />
 
-      <MetricBar>
-        <Metric label="Machines" value={kpi.total} loading={loading} href={pathname}>
-          <MetricSegments
-            segments={[
-              { value: kpi.online, tone: "success", label: "online" },
-              { value: kpi.stale, tone: "warning", label: "stale" },
-              { value: kpi.offline, tone: "destructive", label: "offline" },
-            ]}
-          />
-        </Metric>
-        <Metric
-          label="Online"
-          value={kpi.online}
-          suffix={kpi.total ? `/ ${kpi.total}` : undefined}
-          hint={kpi.stale ? `${kpi.stale} stale` : undefined}
-          loading={loading}
-          tone={kpi.total && kpi.online === kpi.total ? "success" : "default"}
-          href={`${pathname}?status=online`}
-        />
-        <Metric
-          label="Offline"
-          value={kpi.offline}
-          loading={loading}
-          tone={kpi.offline > 0 ? "destructive" : "default"}
-          href={`${pathname}?status=offline`}
-        />
-        <Metric
-          label="Outdated agents"
-          value={kpi.outdated}
-          hint={kpi.updating ? `${kpi.updating} updating` : latestAgent ? `latest ${latestAgent}` : undefined}
-          loading={loading}
-          tone={kpi.outdated > 0 ? "warning" : "default"}
-          href={`${pathname}?agent=Outdated`}
-        />
-        <Metric
-          label="Avg CPU"
-          value={kpi.avgCpu == null ? "—" : Math.round(kpi.avgCpu)}
-          suffix={kpi.avgCpu == null ? undefined : "%"}
-          loading={loading}
-        >
-          {kpi.avgCpu != null && <MetricMeter value={kpi.avgCpu} />}
-        </Metric>
-      </MetricBar>
-
       {machinesQ.error && !machinesQ.data ? (
         <ErrorState error={machinesQ.error} onRetry={machinesQ.refresh} title="Couldn't load machines" />
       ) : (
         <DataTable
+          fill
+          variant="card"
           columns={columns}
           data={machines}
           loading={loading}
@@ -280,7 +282,12 @@ function MachinesView() {
               {outdatedMachines.length > 0 && (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button variant="outline" size="sm" onClick={() => actions.updateAgents(outdatedMachines)}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs font-normal text-warning hover:bg-warning/10 hover:text-warning"
+                      onClick={() => actions.updateAgents(outdatedMachines)}
+                    >
                       <RefreshCw />
                       Update {outdatedMachines.length} outdated
                     </Button>
@@ -290,7 +297,7 @@ function MachinesView() {
               )}
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon-sm" onClick={refreshAll} aria-label="Refresh">
+                  <Button variant="ghost" size="icon-xs" className="text-muted-foreground hover:text-foreground" onClick={refreshAll} aria-label="Refresh">
                     {machinesQ.refreshing ? <Spinner /> : <RefreshCw />}
                   </Button>
                 </TooltipTrigger>
@@ -360,6 +367,6 @@ function MachinesView() {
         knownMachineIds={machines.map((m) => m.id)}
         onEnrolled={refreshAll}
       />
-    </div>
+    </FillPage>
   );
 }

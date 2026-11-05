@@ -73,9 +73,10 @@ export function FleetPanel({
         </Button>
       }
       flush
+      bodyClassName="lg:overflow-hidden"
     >
-      <div className="grid lg:grid-cols-[minmax(0,1fr)_260px]">
-        <div className="min-w-0">
+      <div className="grid lg:h-full lg:grid-cols-[minmax(0,1fr)_260px]">
+        <div className="min-w-0 lg:overflow-y-auto">
           {loading && !top ? (
             <div className="space-y-4 p-4">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -114,8 +115,8 @@ export function FleetPanel({
             </ul>
           )}
         </div>
-        <div className="border-t border-border lg:border-t-0 lg:border-l">
-          <div className="flex items-center justify-between px-4 py-2.5 text-xs">
+        <div className="flex min-h-0 flex-col border-t border-border lg:border-t-0 lg:border-l">
+          <div className="flex shrink-0 items-center justify-between px-4 py-2.5 text-xs">
             <span className="inline-flex items-center gap-1.5 text-muted-foreground">
               <PowerOff className="size-3.5" />
               Not reporting
@@ -130,8 +131,8 @@ export function FleetPanel({
           ) : offline.length === 0 ? (
             <p className="px-4 pb-4 text-xs text-muted-foreground">Every machine is sending heartbeats.</p>
           ) : (
-            <ul className="max-h-[300px] overflow-y-auto pb-2">
-              {offline.slice(0, 12).map((m) => (
+            <ul className="max-h-[300px] min-h-0 flex-1 overflow-y-auto pb-2 lg:max-h-none">
+              {offline.map((m) => (
                 <li key={m.id}>
                   <Link href={`/machines/${m.id}`} className="flex items-center gap-2.5 px-4 py-1.5 hover:bg-accent/40">
                     <StatusDot status={machineLiveness(m)} pulse={false} />
@@ -142,7 +143,6 @@ export function FleetPanel({
                   </Link>
                 </li>
               ))}
-              {offline.length > 12 && <li className="px-4 py-1.5 text-xs text-muted-foreground">+{offline.length - 12} more</li>}
             </ul>
           )}
         </div>

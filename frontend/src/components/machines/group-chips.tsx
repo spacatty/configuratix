@@ -6,26 +6,36 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { MachineGroupRef } from "./utils";
 
+/** Compact tag tinted with the group colour; emoji when set, otherwise a colour dot. */
 export function GroupChip({ group, className }: { group: MachineGroupRef; className?: string }) {
+  const color = group.color || "var(--muted-foreground)";
   return (
     <span
-      className={cn(
-        "inline-flex h-5 max-w-[140px] items-center gap-1 rounded-[4px] border border-border bg-surface-2/60 px-1.5 text-[11px] text-muted-foreground",
-        className
-      )}
+      className={cn("inline-flex h-[18px] max-w-[110px] shrink-0 items-center gap-1 rounded-[3px] px-1 text-[10.5px] leading-none text-foreground/85", className)}
+      style={{ backgroundColor: `color-mix(in oklch, ${color} 16%, transparent)` }}
+      title={group.name}
     >
-      <span
-        className="size-1.5 shrink-0 rounded-full"
-        style={{ backgroundColor: group.color || "var(--muted-foreground)" }}
-        aria-hidden
-      />
-      {group.emoji && <span className="text-[10px] leading-none">{group.emoji}</span>}
+      {group.emoji ? (
+        <span className="text-[9.5px] leading-none">{group.emoji}</span>
+      ) : (
+        <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: color }} aria-hidden />
+      )}
       <span className="truncate">{group.name}</span>
     </span>
   );
 }
 
-/** Compact chip list: first `max` chips, then a "+N" chip with a tooltip of the rest. */
+/** Table-weight group tag: colour dot + muted name, no pill. */
+function GroupTag({ group }: { group: MachineGroupRef }) {
+  return (
+    <span className="inline-flex min-w-0 max-w-[110px] shrink-0 items-center gap-1.5 text-[11.5px] text-foreground/80" title={group.name}>
+      <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: group.color || "var(--muted-foreground)" }} aria-hidden />
+      <span className="truncate">{group.name}</span>
+    </span>
+  );
+}
+
+/** Compact group list: first `max` tags, then "+N" with a tooltip of the rest. */
 export function GroupChips({
   groups,
   max = 2,
@@ -49,16 +59,14 @@ export function GroupChips({
   const shown = groups.slice(0, max);
   const rest = groups.slice(max);
   return (
-    <div className={cn("flex min-w-0 flex-wrap items-center gap-1", className)}>
+    <div className={cn("flex min-w-0 flex-wrap items-center gap-x-2.5", className)}>
       {shown.map((g) => (
-        <GroupChip key={g.id} group={g} />
+        <GroupTag key={g.id} group={g} />
       ))}
       {rest.length > 0 && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="inline-flex h-5 items-center rounded-[4px] border border-border px-1.5 text-[11px] text-muted-foreground">
-              +{rest.length}
-            </span>
+            <span className="font-data text-[11px] text-muted-foreground">+{rest.length}</span>
           </TooltipTrigger>
           <TooltipContent className="max-w-xs">{rest.map((g) => g.name).join(", ")}</TooltipContent>
         </Tooltip>
@@ -74,9 +82,9 @@ function EditableGroups({ empty, label, onEdit, children }: { empty: boolean; la
       <button
         type="button"
         onClick={onEdit}
-        className="inline-flex h-6 items-center gap-1 rounded-md border border-dashed border-border-strong px-2 text-[11.5px] text-muted-foreground transition-colors hover:border-primary/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 outline-none"
+        className="inline-flex h-[18px] items-center gap-0.5 rounded-[3px] border border-dashed border-border-strong px-1 text-[10.5px] text-muted-foreground transition-colors hover:border-primary/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 outline-none"
       >
-        <Plus className="size-3" />
+        <Plus className="size-2.5" />
         Group
       </button>
     );
@@ -86,7 +94,7 @@ function EditableGroups({ empty, label, onEdit, children }: { empty: boolean; la
       type="button"
       onClick={onEdit}
       aria-label={label}
-      className="group/groups -mx-1 inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+      className="group/groups -mx-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
     >
       {children}
       <Pencil className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/groups:opacity-100" />

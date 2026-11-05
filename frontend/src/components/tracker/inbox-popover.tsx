@@ -46,7 +46,7 @@ export function InboxPopover({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" className="relative" aria-label={`Inbox, ${unread.length} unread`}>
+        <Button variant="ghost" size="sm" className="relative text-muted-foreground hover:text-foreground" aria-label={`Inbox, ${unread.length} unread`}>
           {unread.length ? <BellRing /> : <Bell />}
           Inbox
           {unread.length > 0 && (

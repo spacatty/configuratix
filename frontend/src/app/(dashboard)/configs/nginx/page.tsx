@@ -13,6 +13,9 @@ import { DataTable } from "@/components/ui/data-table";
 import {
   EmptyState,
   ErrorState,
+  FillPage,
+  Metric,
+  MetricBar,
   PageHeader,
   Spinner,
   errorMessage,
@@ -178,18 +181,24 @@ function NginxConfigsInner() {
   );
 
   return (
-    <div className="space-y-6">
+    <FillPage>
       <PageHeader
-        icon={FileCode}
         title="Nginx configs"
-        description="Reusable server-block templates. Assign one to a domain and Configuratix renders and applies it transactionally on the machine."
+        stats={
+          data && (
+            <MetricBar>
+              <Metric label="Configs" value={configs.length} />
+              <Metric label="Out of sync" value={outOfSync.length} tone={outOfSync.length ? "warning" : "default"} hint={oosDomains ? `${oosDomains} domains` : undefined} />
+            </MetricBar>
+          )
+        }
         actions={
           <>
-            <Button variant="outline" onClick={() => void refresh()} disabled={refreshing}>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => void refresh()} disabled={refreshing}>
               {refreshing ? <Spinner /> : <RefreshCw />}
               Refresh
             </Button>
-            <Button onClick={() => router.push("/configs/nginx/new")}>
+            <Button size="sm" onClick={() => router.push("/configs/nginx/new")}>
               <Plus />
               New config
             </Button>
@@ -219,6 +228,7 @@ function NginxConfigsInner() {
         <ErrorState error={error} onRetry={refresh} title="Couldn't load nginx configs" />
       ) : (
         <DataTable
+          fill
           columns={columns}
           data={configs}
           loading={loading}
@@ -264,6 +274,6 @@ function NginxConfigsInner() {
           }
         />
       )}
-    </div>
+    </FillPage>
   );
 }

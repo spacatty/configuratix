@@ -1,0 +1,32 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["-C", "backend", "run", "./cmd/server"],
+      "port": 8081
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["-C", "frontend", "dev", "-p", "3021"],
+      "env": { "NEXT_PUBLIC_API_URL": "http://localhost:8081" },
+      "port": 3021
+    },
+    {
+      "name": "backend-alt",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["-C", "backend", "run", "./cmd/server"],
+      "env": { "BACKEND_PORT": "8191" },
+      "port": 8191
+    },
+    {
+      "name": "frontend-alt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["-C", "frontend", "dev", "-p", "3131"],
+      "env": { "NEXT_PUBLIC_API_URL": "http://localhost:8191" },
+      "port": 3131
+    }
+  ]
+}

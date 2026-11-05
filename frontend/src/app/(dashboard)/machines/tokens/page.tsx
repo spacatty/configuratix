@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { DataTable, DataTableColumnHeader } from "@/components/ui/data-table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { EmptyState, ErrorState, PageHeader, RelativeTime, Spinner, StatCard, StatStrip, StatusText, useConfirm, usePolling } from "@/components/app";
+import { EmptyState, ErrorState, FillPage, PageHeader, RelativeTime, Spinner, StatCard, StatStrip, StatusText, useConfirm, usePolling } from "@/components/app";
 import { AddMachineDialog, installCommand } from "@/components/machines/add-machine-dialog";
 
 type TokenState = "active" | "used" | "expired";
@@ -141,30 +141,29 @@ export default function EnrollmentTokensPage() {
   );
 
   return (
-    <div className="space-y-6">
+    <FillPage>
       <PageHeader
-        icon={KeyRound}
-        back={{ href: "/machines", label: "Machines" }}
         title="Enrollment tokens"
-        description="Single-use tokens that let a server's agent join this workspace. Unused tokens expire after 24 hours."
+        stats={
+          <StatStrip>
+            <StatCard label="Unused" value={counts.active} loading={tokensQ.loading} tone={counts.active > 0 ? "info" : "default"} sub="expire after 24h" />
+            <StatCard label="Used" value={counts.used} loading={tokensQ.loading} />
+            <StatCard label="Expired" value={counts.expired} loading={tokensQ.loading} sub={counts.expired ? "safe to delete" : undefined} />
+          </StatStrip>
+        }
         actions={
-          <Button onClick={() => setAddOpen(true)}>
+          <Button size="sm" onClick={() => setAddOpen(true)}>
             <Plus />
             New token
           </Button>
         }
       />
 
-      <StatStrip>
-        <StatCard label="Unused" value={counts.active} loading={tokensQ.loading} tone={counts.active > 0 ? "info" : "default"} sub="waiting for a server" />
-        <StatCard label="Used" value={counts.used} loading={tokensQ.loading} />
-        <StatCard label="Expired" value={counts.expired} loading={tokensQ.loading} sub={counts.expired ? "safe to delete" : undefined} />
-      </StatStrip>
-
       {tokensQ.error && !tokensQ.data ? (
         <ErrorState error={tokensQ.error} onRetry={tokensQ.refresh} title="Couldn't load tokens" />
       ) : (
         <DataTable
+          fill
           columns={columns}
           data={tokens}
           loading={tokensQ.loading}
@@ -186,7 +185,7 @@ export default function EnrollmentTokensPage() {
           toolbarActions={
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon-sm" onClick={() => tokensQ.refresh()} aria-label="Refresh">
+                <Button variant="ghost" size="icon-xs" className="text-muted-foreground hover:text-foreground" onClick={() => tokensQ.refresh()} aria-label="Refresh">
                   {tokensQ.refreshing ? <Spinner /> : <RefreshCw />}
                 </Button>
               </TooltipTrigger>
@@ -242,6 +241,6 @@ export default function EnrollmentTokensPage() {
         knownMachineIds={(machinesQ.data ?? []).map((m) => m.id)}
         onEnrolled={() => tokensQ.refresh()}
       />
-    </div>
+    </FillPage>
   );
 }

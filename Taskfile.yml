@@ -161,6 +161,18 @@ tasks:
       - echo "Running migrations..."
       - go run ./cmd/migrate/main.go
 
+  db:seed:
+    desc: Replace demo data (machines, domains, groups, jobs, DNS, bans) in the dev DB (task db:seed -- -keepalive)
+    dir: backend
+    cmds:
+      - go run ./cmd/seed {{.CLI_ARGS}}
+
+  db:seed:clean:
+    desc: Remove demo data created by db:seed
+    dir: backend
+    cmds:
+      - go run ./cmd/seed -clean
+
   # ============================================
   # BUILD
   # ============================================

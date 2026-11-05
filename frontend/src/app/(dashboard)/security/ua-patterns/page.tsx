@@ -24,6 +24,9 @@ import {
   CardSkeleton,
   EmptyState,
   ErrorState,
+  FillPage,
+  Metric,
+  MetricBar,
   Mono,
   PageHeader,
   Spinner,
@@ -191,28 +194,21 @@ export default function UAPatternsPage() {
   );
 
   return (
-    <div className="space-y-6">
+    <FillPage>
       <PageHeader
-        icon={Bot}
         title="User-agent patterns"
-        description="Requests matching an enabled pattern get their IP banned on the spot."
-        meta={
-          data ? (
-            <>
-              <span>
-                <span className="font-data">{formatNumber(rows.length - customCount)}</span> system
-              </span>
-              <span>
-                <span className="font-data">{formatNumber(customCount)}</span> custom
-              </span>
-              <span>
-                <span className="font-data">{enabledCount}</span>/<span className="font-data">{categories.length}</span> categories on
-              </span>
-            </>
-          ) : undefined
+        stats={
+          data && (
+            <MetricBar>
+              <Metric label="System" value={formatNumber(rows.length - customCount)} />
+              <Metric label="Custom" value={formatNumber(customCount)} />
+              <Metric label="Categories on" value={enabledCount} suffix={`/ ${categories.length}`} />
+            </MetricBar>
+          )
         }
         actions={
           <Button
+            size="sm"
             onClick={() => {
               setAddCategory(selected ?? "custom");
               setAddOpen(true);
@@ -281,6 +277,7 @@ export default function UAPatternsPage() {
           </div>
 
           <DataTable
+            fill
             columns={columns}
             data={visible}
             loading={loading}
@@ -359,7 +356,7 @@ export default function UAPatternsPage() {
         categories={categories.map((c) => c.category)}
         onAdded={refresh}
       />
-    </div>
+    </FillPage>
   );
 }
 

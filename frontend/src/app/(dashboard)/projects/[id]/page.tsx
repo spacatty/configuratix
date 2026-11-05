@@ -3,7 +3,7 @@
 import * as React from "react";
 import { use } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { FileText, FolderKanban, Link2, MoreHorizontal, Pencil, Server, Share2, Trash2, Users } from "lucide-react";
+import { FileText, Link2, MoreHorizontal, Pencil, Server, Share2, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -85,10 +85,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   if (project.loading) return <PageSkeleton />;
   if (!p) {
     return (
-      <div className="space-y-6">
-        <PageHeader back={{ href: "/projects", label: "Projects" }} title="Project" />
-        <ErrorState title="Couldn't load this project" error={project.error} onRetry={project.refresh} />
-      </div>
+      <ErrorState title="Couldn't load this project" error={project.error} onRetry={project.refresh} />
     );
   }
 
@@ -129,10 +126,27 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   return (
     <div className="space-y-6">
       <PageHeader
-        back={{ href: "/projects", label: "Projects" }}
-        icon={FolderKanban}
         title={p.name}
         badge={<ProjectRoleBadge role={myRole} />}
+        stats={
+          <StatStrip>
+            <StatCard
+              label="Online"
+              value={online}
+              suffix={`/ ${total}`}
+              progress={total ? (online / total) * 100 : undefined}
+              progressTone="success"
+            />
+            <StatCard label="Offline" value={total - online} tone={total - online > 0 ? "warning" : "default"} />
+            <StatCard label="Members" value={members.data ? approved + 1 : p.member_count + 1} loading={members.loading} />
+            <StatCard
+              label="Pending"
+              value={pending}
+              tone={pending > 0 && isOwner ? "warning" : "default"}
+              loading={members.loading}
+            />
+          </StatStrip>
+        }
         meta={
           <>
             <span>
@@ -155,18 +169,18 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           isOwner ? (
             <>
               {p.sharing_enabled && p.invite_token && (
-                <Button variant="outline" onClick={copyInvite}>
+                <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={copyInvite}>
                   <Link2 />
                   Copy invite
                 </Button>
               )}
-              <Button variant="outline" onClick={() => setShareOpen(true)}>
+              <Button size="sm" onClick={() => setShareOpen(true)}>
                 <Share2 />
                 Share
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon" aria-label="More project actions">
+                  <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" aria-label="More project actions">
                     <MoreHorizontal />
                   </Button>
                 </DropdownMenuTrigger>
@@ -186,25 +200,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           ) : null
         }
       />
-
-      <StatStrip>
-        <StatCard
-          label="Machines online"
-          value={online}
-          suffix={`/ ${total}`}
-          progress={total ? (online / total) * 100 : undefined}
-          progressTone="success"
-        />
-        <StatCard label="Offline" value={total - online} tone={total - online > 0 ? "warning" : "default"} sub={total - online > 0 ? "Not seen in the last 5 min" : "All reporting"} />
-        <StatCard label="Members" value={members.data ? approved + 1 : p.member_count + 1} sub="Including owner" loading={members.loading} />
-        <StatCard
-          label="Pending requests"
-          value={pending}
-          tone={pending > 0 && isOwner ? "warning" : "default"}
-          sub={pending > 0 && isOwner ? "Review in Members" : undefined}
-          loading={members.loading}
-        />
-      </StatStrip>
 
       <Tabs value={tab} onValueChange={setTab} className="gap-4">
         <TabsList>

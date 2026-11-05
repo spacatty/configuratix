@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo } from "react";
-import { Activity, ArrowRight, Ban, BarChart3, Bot, RefreshCw, Server, Shield, ShieldCheck, TrendingUp } from "lucide-react";
+import { Activity, ArrowRight, Ban, BarChart3, RefreshCw, Server } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -14,6 +14,7 @@ import {
   SectionCard,
   Spinner,
   StatCard,
+  StatStrip,
   usePolling,
 } from "@/components/app";
 import { formatNumber } from "@/lib/format";
@@ -37,10 +38,7 @@ export default function SecurityOverviewPage() {
   if (stats.loading) return <PageSkeleton />;
   if (stats.error && !s) {
     return (
-      <div className="space-y-6">
-        <PageHeader icon={Shield} title="Security" />
-        <ErrorState error={stats.error} onRetry={stats.refresh} />
-      </div>
+      <ErrorState error={stats.error} onRetry={stats.refresh} />
     );
   }
 
@@ -51,16 +49,33 @@ export default function SecurityOverviewPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        icon={Shield}
         title="Security"
-        description="IP banning, user-agent blocking and endpoint protection across all agents."
+        stats={
+          <StatStrip>
+            <StatCard
+              label="Active bans"
+              value={formatNumber(s?.active_bans ?? 0)}
+              suffix={`/ ${formatNumber(s?.total_bans ?? 0)}`}
+              href="/security/bans"
+            />
+            <StatCard
+              label="Bans today"
+              value={formatNumber(s?.bans_today ?? 0)}
+              tone={(s?.bans_today ?? 0) > 0 ? "warning" : "default"}
+              sub={`${formatNumber(s?.bans_this_week ?? 0)} this week`}
+              href="/security/bans"
+            />
+            <StatCard label="Whitelisted" value={formatNumber(s?.whitelist_count ?? 0)} href="/security/whitelist" />
+            <StatCard label="UA patterns" value={formatNumber(s?.ua_pattern_count ?? 0)} href="/security/ua-patterns" />
+          </StatStrip>
+        }
         actions={
           <>
-            <Button variant="outline" onClick={() => { stats.refresh(); recent.refresh(); }} disabled={stats.refreshing}>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => { stats.refresh(); recent.refresh(); }} disabled={stats.refreshing}>
               {stats.refreshing ? <Spinner /> : <RefreshCw />}
               Refresh
             </Button>
-            <Button asChild>
+            <Button size="sm" asChild>
               <Link href="/security/bans?add=1">
                 <Ban />
                 Ban IP
@@ -71,39 +86,6 @@ export default function SecurityOverviewPage() {
       />
 
       <SecurityNav />
-
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label="Active bans"
-          icon={Ban}
-          value={formatNumber(s?.active_bans ?? 0)}
-          suffix={`/ ${formatNumber(s?.total_bans ?? 0)}`}
-          sub="Active of all-time bans"
-          href="/security/bans"
-        />
-        <StatCard
-          label="Bans today"
-          icon={TrendingUp}
-          value={formatNumber(s?.bans_today ?? 0)}
-          tone={(s?.bans_today ?? 0) > 0 ? "warning" : "default"}
-          sub={<><span className="font-data">{formatNumber(s?.bans_this_week ?? 0)}</span> this week</>}
-          href="/security/bans"
-        />
-        <StatCard
-          label="Whitelisted"
-          icon={ShieldCheck}
-          value={formatNumber(s?.whitelist_count ?? 0)}
-          sub="IPs and CIDR ranges never banned"
-          href="/security/whitelist"
-        />
-        <StatCard
-          label="UA patterns"
-          icon={Bot}
-          value={formatNumber(s?.ua_pattern_count ?? 0)}
-          sub="Active blocking patterns"
-          href="/security/ua-patterns"
-        />
-      </div>
 
       <SectionCard
         title="Bans over time"

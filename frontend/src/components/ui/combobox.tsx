@@ -55,6 +55,8 @@ export interface ComboboxBaseProps<T> {
   /** Rendered at the bottom of the list (e.g. "Create new…" item). */
   footer?: React.ReactNode
   size?: "sm" | "default"
+  /** "ghost": borderless quiet trigger for table toolbars. */
+  triggerVariant?: "default" | "ghost"
   /** Called when the search text changes (e.g. to offer "Create “query”" in `footer`). */
   onSearchChange?: (search: string) => void
 }
@@ -115,6 +117,9 @@ function useGroups<T>(
     return out
   }, [items, getGroup, groupOrder])
 }
+
+const triggerGhost =
+  "border-transparent bg-transparent text-xs hover:border-transparent hover:bg-accent data-[state=open]:border-transparent data-[state=open]:bg-accent"
 
 const triggerBase =
   "group/combobox relative flex w-full min-w-0 items-center gap-2 rounded-md border border-input bg-card/60 px-2.5 text-left text-[13px] outline-none transition-[color,box-shadow,border-color] hover:border-border-strong focus-visible:border-ring/80 focus-visible:ring-[3px] focus-visible:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive data-[state=open]:border-ring/60"
@@ -258,6 +263,7 @@ export function Combobox<T>(props: ComboboxProps<T>) {
     modal = true,
     id,
     size = "default",
+    triggerVariant = "default",
   } = props
   const [open, setOpen] = useOpenState(props.open, props.onOpenChange)
   const [search, setSearch] = React.useState("")
@@ -280,7 +286,12 @@ export function Combobox<T>(props: ComboboxProps<T>) {
             role="combobox"
             aria-expanded={open}
             aria-invalid={props["aria-invalid"]}
-            className={cn(triggerBase, size === "sm" ? "h-7" : "h-8", clearable && selectedItem && "pr-12")}
+            className={cn(
+              triggerBase,
+              size === "sm" ? "h-7" : "h-8",
+              triggerVariant === "ghost" && triggerGhost,
+              clearable && selectedItem && "pr-12"
+            )}
           >
             <span className={cn("min-w-0 flex-1 truncate", !selectedItem && "text-muted-foreground")}>
               {selectedItem ? (renderValue ? renderValue(selectedItem) : getLabel(selectedItem)) : placeholder}

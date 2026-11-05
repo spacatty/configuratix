@@ -31,7 +31,10 @@ export function ResourcesTable({
   onEdit,
   onDelete,
   onCreate,
+  fill,
 }: {
+  /** Stretch to the parent's height and scroll inside (see `DataTable` `fill`). */
+  fill?: boolean;
   resources: TrackerResource[];
   items: TrackerItemWithCategory[];
   loading?: boolean;
@@ -124,6 +127,7 @@ export function ResourcesTable({
 
   return (
     <DataTable
+      fill={fill}
       columns={columns}
       data={rows}
       loading={loading}
@@ -133,7 +137,12 @@ export function ResourcesTable({
       initialState={{ sorting: [{ id: "item_count", desc: true }] }}
       onRowClick={onOpen}
       toolbarActions={
-        <Button size="sm" onClick={onCreate}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
+          onClick={onCreate}
+        >
           <Plus />
           New resource
         </Button>

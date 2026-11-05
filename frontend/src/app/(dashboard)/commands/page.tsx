@@ -2,18 +2,21 @@
 
 import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { ListChecks, Play, Search, Terminal, Variable, X } from "lucide-react";
+import { ListChecks, Play, Search, Variable, X } from "lucide-react";
 import { api, type CommandTemplate } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { CardSkeleton, EmptyState, ErrorState, PageHeader, usePolling } from "@/components/app";
+import { CardSkeleton, EmptyState, ErrorState, Metric, MetricBar, PageHeader, usePolling } from "@/components/app";
 import { fuzzyFilter } from "@/lib/fuzzy";
 import { cn } from "@/lib/utils";
 import { OnErrorBadge, categoryMeta } from "@/components/commands/command-meta";
 import { ExecuteCommandSheet } from "@/components/commands/execute-command-sheet";
 import { RecentCommandRuns } from "@/components/commands/recent-runs";
+
+/** Quiet segmented-control item, matching the card toolbar. */
+const QUIET_SEGMENT =
+  "h-6 rounded-[5px] px-2 text-xs font-normal text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground data-[state=on]:shadow-none";
 
 export default function CommandsPage() {
   return (
@@ -74,10 +77,14 @@ function CommandsPageInner() {
   return (
     <div className="space-y-6">
       <PageHeader
-        icon={Terminal}
         title="Commands"
-        description="Run vetted command templates on a machine. Variables are validated server-side before reaching the agent."
-        badge={data ? <Badge variant="muted" className="font-data">{commands.length}</Badge> : undefined}
+        stats={
+          data && (
+            <MetricBar>
+              <Metric label="Templates" value={commands.length} />
+            </MetricBar>
+          )
+        }
       />
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -108,16 +115,16 @@ function CommandsPageInner() {
             </div>
             <ToggleGroup
               type="single"
-              variant="outline"
+              size="sm"
               value={category}
               onValueChange={(v) => v && setCategory(v)}
-              className="flex-wrap"
+              className="h-auto min-h-7 flex-wrap border-0 bg-white/[0.03] p-0.5"
             >
-              <ToggleGroupItem value="all">
+              <ToggleGroupItem value="all" className={QUIET_SEGMENT}>
                 All <span className="font-data text-[11px] text-subtle-foreground">{commands.length}</span>
               </ToggleGroupItem>
               {categories.map((c) => (
-                <ToggleGroupItem key={c.key} value={c.key}>
+                <ToggleGroupItem key={c.key} value={c.key} className={QUIET_SEGMENT}>
                   <c.icon className="size-3.5" />
                   {c.label}
                   <span className="font-data text-[11px] text-subtle-foreground">{c.count}</span>

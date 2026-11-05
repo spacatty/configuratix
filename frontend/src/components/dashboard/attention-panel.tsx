@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { api, type Domain, type Machine, type NginxConfig } from "@/lib/api";
 import { machineDisplayName, machineLiveness } from "@/lib/jobs";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RelativeTime } from "@/components/app/data-display";
 import { EmptyState, Spinner, errorMessage } from "@/components/app/states";
@@ -34,6 +35,8 @@ type Severity = "critical" | "warning";
 interface Item {
   key: string;
   group: string;
+  /** Short tab label for the group. */
+  tab: string;
   severity: Severity;
   icon: React.ComponentType<{ className?: string }>;
   title: React.ReactNode;
@@ -64,6 +67,7 @@ export function AttentionPanel({ domains, machines, configs, latestAgent, loadin
         out.push({
           key: `apply:${d.id}`,
           group: "Failed applies",
+          tab: "Applies",
           severity: "critical",
           icon: Globe,
           title: <span className="font-data">{d.fqdn}</span>,
@@ -86,6 +90,7 @@ export function AttentionPanel({ domains, machines, configs, latestAgent, loadin
         out.push({
           key: `health:${d.id}`,
           group: "Unhealthy domains",
+          tab: "Health",
           severity: "critical",
           icon: HeartPulse,
           title: <span className="font-data">{d.fqdn}</span>,
@@ -119,6 +124,7 @@ export function AttentionPanel({ domains, machines, configs, latestAgent, loadin
         out.push({
           key: `offline:${m.id}`,
           group: "Offline machines",
+          tab: "Offline",
           severity: "critical",
           icon: Server,
           title: machineDisplayName(m),
@@ -138,6 +144,7 @@ export function AttentionPanel({ domains, machines, configs, latestAgent, loadin
         out.push({
           key: `sync:${c.id}`,
           group: "Configs out of sync",
+          tab: "Sync",
           severity: "warning",
           icon: FileCode,
           title: c.name,
@@ -165,6 +172,7 @@ export function AttentionPanel({ domains, machines, configs, latestAgent, loadin
         out.push({
           key: `agent:${m.id}`,
           group: "Outdated agents",
+          tab: "Agents",
           severity: "warning",
           icon: ArrowUpCircle,
           title: machineDisplayName(m),
@@ -194,6 +202,9 @@ export function AttentionPanel({ domains, machines, configs, latestAgent, loadin
     return [...m.entries()];
   }, [items]);
 
+  const [tab, setTab] = React.useState<string>();
+  const activeTab = groups.some(([g]) => g === tab) ? tab : groups[0]?.[0];
+
   const critical = items.filter((i) => i.severity === "critical").length;
 
   return (
@@ -204,7 +215,7 @@ export function AttentionPanel({ domains, machines, configs, latestAgent, loadin
       icon={TriangleAlert}
       description={items.length ? `${critical} critical · ${items.length - critical} warnings` : "Problems with a one-click fix where possible"}
       flush
-      bodyClassName="max-h-[460px] overflow-y-auto"
+      bodyClassName="flex max-h-[460px] flex-col overflow-hidden lg:max-h-none"
     >
       {loading && !domains && !machines ? (
         <div className="space-y-3 p-4">
@@ -228,25 +239,31 @@ export function AttentionPanel({ domains, machines, configs, latestAgent, loadin
           className="py-10"
         />
       ) : (
-        <div>
-          {groups.map(([group, list]) => (
-            <div key={group}>
-              <div className="sticky top-0 z-[1] flex items-center justify-between border-b border-border bg-card/95 px-4 py-1.5 text-xs backdrop-blur">
-                <span className="inline-flex items-center gap-2 text-muted-foreground">
-                  <span className={cn("size-1.5 rounded-full", list[0].severity === "critical" ? "bg-destructive" : "bg-warning")} />
-                  {group}
-                </span>
+        <Tabs value={activeTab} onValueChange={setTab} className="min-h-0 flex-1 gap-0">
+          <TabsList className="h-auto w-full shrink-0 justify-start gap-1 overflow-x-auto rounded-none border-0 border-b border-border bg-transparent px-2 py-0 [scrollbar-width:none]">
+            {groups.map(([group, list]) => (
+              <TabsTrigger
+                key={group}
+                value={group}
+                title={group}
+                className="h-9 flex-none rounded-none border-0 border-b-2 border-transparent px-2 text-xs data-[state=active]:border-b-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+              >
+                <span className={cn("size-1.5 rounded-full", list[0].severity === "critical" ? "bg-destructive" : "bg-warning")} />
+                {list[0].tab}
                 <span className="font-data text-subtle-foreground">{list.length}</span>
-              </div>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {groups.map(([group, list]) => (
+            <TabsContent key={group} value={group} className="min-h-0 overflow-y-auto data-[state=active]:animate-none">
               <ul className="divide-y divide-border/60">
-                {list.slice(0, 8).map((it) => (
+                {list.map((it) => (
                   <AttentionRow key={it.key} item={it} />
                 ))}
-                {list.length > 8 && <li className="px-4 py-2 text-xs text-muted-foreground">+{list.length - 8} more</li>}
               </ul>
-            </div>
+            </TabsContent>
           ))}
-        </div>
+        </Tabs>
       )}
     </SectionCard>
   );

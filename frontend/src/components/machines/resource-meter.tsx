@@ -128,8 +128,8 @@ function AgentBadge({ agent }: { agent: AgentBadgeInfo }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div className="flex items-end gap-1 border-l border-border pl-2.5">
-          <div className={cn("h-5 w-1.5 rounded-full", t.bar)} />
+        <div className="flex w-[64px] items-end gap-1.5">
+          <div className={cn("h-5 w-1.5 shrink-0 rounded-full", t.bar)} />
           <div className="flex flex-col leading-none">
             <span className="text-[9.5px] font-medium tracking-wide text-muted-foreground uppercase">Agent</span>
             <span className={cn("font-data text-[12px] tabular-nums", t.text)}>{agent.version ?? "—"}</span>
@@ -156,16 +156,17 @@ export function LoadCell({
   lastSeen?: string | null;
   agent?: AgentBadgeInfo;
 }) {
-  const gauges = items.every((i) => i.value == null) ? (
-    <span className="text-xs text-muted-foreground">—</span>
-  ) : (
-    <LoadGauges items={items} stale={stale} lastSeen={lastSeen} />
-  );
-  if (!agent) return gauges;
+  // Same slots in every row (empty gauges when a machine has no metrics), so the column
+  // reads as an aligned grid instead of rows of different widths.
   return (
-    <div className="flex items-end gap-2.5">
-      {gauges}
-      <AgentBadge agent={agent} />
+    <div className="inline-flex items-end gap-3">
+      <LoadGauges items={items} stale={stale} lastSeen={lastSeen} />
+      {agent && (
+        <>
+          <span aria-hidden className="h-6 w-px self-center bg-border" />
+          <AgentBadge agent={agent} />
+        </>
+      )}
     </div>
   );
 }
@@ -174,12 +175,12 @@ function LoadGauges({ items, stale, lastSeen }: { items: ResourceProps[]; stale?
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div className={cn("flex items-end gap-2.5", stale && "opacity-70")}>
+        <div className={cn("flex items-end gap-2", stale && "opacity-70")}>
           {items.map((i) => {
             const tone = usageTone(i.value);
             return (
-              <div key={i.label} className="flex items-end gap-1">
-                <div className={cn("relative h-5 w-1.5 overflow-hidden rounded-full", toneTrack[tone])}>
+              <div key={i.label} className="flex w-[42px] items-end gap-1.5">
+                <div className={cn("relative h-5 w-1.5 shrink-0 overflow-hidden rounded-full", toneTrack[tone])}>
                   {i.value != null && (
                     <div
                       className={cn("absolute inset-x-0 bottom-0 rounded-full transition-[height] duration-500", toneFill[tone])}

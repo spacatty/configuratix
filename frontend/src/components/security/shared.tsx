@@ -113,7 +113,7 @@ export function SecurityNav({ counts }: { counts?: Partial<Record<string, number
   return (
     <nav
       aria-label="Security sections"
-      className="inline-flex h-8 items-center gap-0.5 rounded-md border border-input bg-card/60 p-0.5"
+      className="inline-flex h-7 items-center gap-0.5 rounded-md bg-white/[0.03] p-0.5"
     >
       {TABS.map((t) => {
         const active = t.href === "/security" ? pathname === "/security" : pathname?.startsWith(t.href);
@@ -124,8 +124,8 @@ export function SecurityNav({ counts }: { counts?: Partial<Record<string, number
             href={t.href}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "inline-flex h-7 items-center gap-1.5 rounded-[5px] px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground",
-              active && "bg-surface-2 text-foreground shadow-[inset_0_0_0_1px_var(--border-strong)]"
+              "inline-flex h-6 items-center gap-1.5 rounded-[5px] px-2 text-xs text-muted-foreground transition-colors hover:text-foreground",
+              active && "bg-accent text-foreground"
             )}
           >
             <t.icon className="size-3.5" />

@@ -1,11 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { Pencil, Plus } from "lucide-react";
 import type { DomainGroup } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-/** Compact group label: colour swatch + emoji + name. Colour is user data, not status. */
+/** Compact tag tinted with the group colour; emoji when set, otherwise a colour dot. Colour is user data, not status. */
 export function GroupChip({
   group,
   className,
@@ -17,77 +16,19 @@ export function GroupChip({
 }) {
   return (
     <span
-      className={cn(
-        "inline-flex h-5 max-w-[140px] shrink-0 items-center gap-1 rounded-md border border-border bg-surface-2/60 px-1.5 text-[11px] text-foreground",
-        className
-      )}
+      className={cn("inline-flex h-[18px] max-w-[110px] shrink-0 items-center gap-1 rounded-[3px] px-1 text-[10.5px] leading-none text-foreground/85", className)}
+      style={{ backgroundColor: `color-mix(in oklch, ${group.color || "var(--muted-foreground)"} 16%, transparent)` }}
       title={group.name}
     >
-      <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: group.color }} />
-      {!compact && group.emoji && <span className="leading-none">{group.emoji}</span>}
+      {!compact && group.emoji ? (
+        <span className="text-[9.5px] leading-none">{group.emoji}</span>
+      ) : (
+        <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: group.color || "var(--muted-foreground)" }} />
+      )}
       <span className="truncate">{group.name}</span>
     </span>
   );
 }
 
-/** Up to `max` chips, then "+N". */
-export function GroupChips({
-  groups,
-  max = 2,
-  onEdit,
-}: {
-  groups: Pick<DomainGroup, "id" | "name" | "emoji" | "color">[];
-  max?: number;
-  /** Makes the cell editable (click to change; "+ Group" when empty). */
-  onEdit?: () => void;
-}) {
-  if (onEdit) {
-    return (
-      <EditableGroups empty={groups.length === 0} label="Edit groups" onEdit={onEdit}>
-        <GroupChips groups={groups} max={max} />
-      </EditableGroups>
-    );
-  }
-  if (!groups.length) return <span className="text-muted-foreground">—</span>;
-  const shown = groups.slice(0, max);
-  const rest = groups.length - shown.length;
-  return (
-    <span className="flex min-w-0 items-center gap-1">
-      {shown.map((g) => (
-        <GroupChip key={g.id} group={g} compact />
-      ))}
-      {rest > 0 && (
-        <span className="font-data text-[11px] text-muted-foreground" title={groups.slice(max).map((g) => g.name).join(", ")}>
-          +{rest}
-        </span>
-      )}
-    </span>
-  );
-}
-
-/** Makes a groups cell editable: dashed "+ Group" when empty, clickable chips otherwise. */
-function EditableGroups({ empty, label, onEdit, children }: { empty: boolean; label: string; onEdit: () => void; children?: React.ReactNode }) {
-  if (empty) {
-    return (
-      <button
-        type="button"
-        onClick={onEdit}
-        className="inline-flex h-6 items-center gap-1 rounded-md border border-dashed border-border-strong px-2 text-[11.5px] text-muted-foreground transition-colors hover:border-primary/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 outline-none"
-      >
-        <Plus className="size-3" />
-        Group
-      </button>
-    );
-  }
-  return (
-    <button
-      type="button"
-      onClick={onEdit}
-      aria-label={label}
-      className="group/groups -mx-1 inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-    >
-      {children}
-      <Pencil className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/groups:opacity-100" />
-    </button>
-  );
-}
+/** Table group list — same dot + text look as the machines table. */
+export { GroupChips } from "@/components/machines/group-chips";

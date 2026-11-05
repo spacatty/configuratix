@@ -114,10 +114,10 @@ export function DNSZoneView({ id }: { id: string }) {
         }
         actions={
           <>
-            <Button variant="ghost" size="icon" aria-label="Refresh" onClick={refresh}>
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" aria-label="Refresh" onClick={refresh}>
               {zoneQ.refreshing || recordsQ.refreshing ? <Spinner /> : <RefreshCw />}
             </Button>
-            <Button variant="outline" asChild>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" asChild>
               <a href={`https://${zone.fqdn}`} target="_blank" rel="noopener noreferrer">
                 <ExternalLink />
                 Open site

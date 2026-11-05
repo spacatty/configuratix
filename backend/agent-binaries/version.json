@@ -1,3 +1,16 @@
 {
-  "version": "0.6.0"
+  "version": "0.6.0",
+  "checksum": "95294ce2fb3d70c69ad5de9ccf0f8ed0cc8fb7095bd60363ee1f0a64102ef6a2",
+  "size": 7188642,
+  "updated_at": "2026-11-05T14:13:33Z",
+  "arches": {
+    "amd64": {
+      "checksum": "95294ce2fb3d70c69ad5de9ccf0f8ed0cc8fb7095bd60363ee1f0a64102ef6a2",
+      "size": 7188642
+    },
+    "arm64": {
+      "checksum": "ab4a2e81fa4bfdca142a011cdc2d0ff840f3669c246741f228eb92a39cf6eab9",
+      "size": 6619298
+    }
+  }
 }

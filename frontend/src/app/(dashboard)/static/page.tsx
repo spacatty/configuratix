@@ -17,7 +17,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { CardSkeleton, EmptyState, ErrorState, Mono, PageHeader, RelativeTime, errorMessage, useConfirm, usePolling } from "@/components/app";
+import { CardSkeleton, EmptyState, ErrorState, FillPage, Metric, MetricBar, Mono, PageHeader, RelativeTime, errorMessage, useConfirm, usePolling } from "@/components/app";
 import { formatBytes } from "@/lib/format";
 import { copyToClipboard } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
@@ -26,6 +26,9 @@ import { LandingUploadDialog } from "@/components/static/landing-upload-dialog";
 
 type View = "grid" | "table";
 const VIEW_KEY = "static.view";
+/** Quiet segmented-control item, matching the card toolbar. */
+const QUIET_SEGMENT =
+  "h-6 rounded-[5px] px-2 text-xs font-normal text-muted-foreground data-[state=on]:bg-accent data-[state=on]:text-foreground data-[state=on]:shadow-none";
 
 const TYPE_VARIANT: Record<string, "info" | "default" | "warning" | "muted"> = {
   html: "info",
@@ -198,23 +201,19 @@ export default function StaticContentPage() {
   const totalSize = landings.reduce((a, l) => a + (l.file_size || 0), 0);
 
   return (
-    <div className="space-y-6">
+    <FillPage className={view === "table" ? undefined : "md:h-auto"}>
       <PageHeader
-        icon={FolderArchive}
         title="Static content"
-        description="Landing pages, PHP apps and asset bundles you can serve from any domain."
-        meta={
-          data ? (
-            <>
-              <span>
-                <span className="font-data">{landings.length}</span> uploads
-              </span>
-              <span className="font-data">{formatBytes(totalSize)}</span>
-            </>
-          ) : undefined
+        stats={
+          data && (
+            <MetricBar>
+              <Metric label="Uploads" value={landings.length} />
+              <Metric label="Total size" value={formatBytes(totalSize)} />
+            </MetricBar>
+          )
         }
         actions={
-          <Button onClick={() => setUploadOpen(true)}>
+          <Button size="sm" onClick={() => setUploadOpen(true)}>
             <UploadCloud />
             Upload
           </Button>
@@ -237,10 +236,12 @@ export default function StaticContentPage() {
           )}
         </div>
         {types.length > 1 && (
-          <ToggleGroup type="single" variant="outline" value={type} onValueChange={(v) => v && setType(v)}>
-            <ToggleGroupItem value="all">All</ToggleGroupItem>
+          <ToggleGroup type="single" size="sm" value={type} onValueChange={(v) => v && setType(v)} className="h-auto min-h-7 flex-wrap border-0 bg-white/[0.03] p-0.5">
+            <ToggleGroupItem value="all" className={QUIET_SEGMENT}>
+              All
+            </ToggleGroupItem>
             {types.map((t) => (
-              <ToggleGroupItem key={t} value={t} className="font-data">
+              <ToggleGroupItem key={t} value={t} className={cn(QUIET_SEGMENT, "font-data")}>
                 {t}
               </ToggleGroupItem>
             ))}
@@ -248,16 +249,16 @@ export default function StaticContentPage() {
         )}
         <ToggleGroup
           type="single"
-          variant="outline"
+          size="sm"
           value={view}
           onValueChange={(v) => v && changeView(v as View)}
-          className="ml-auto"
+          className="ml-auto h-7 border-0 bg-white/[0.03] p-0.5"
           aria-label="View"
         >
-          <ToggleGroupItem value="grid" aria-label="Grid view">
+          <ToggleGroupItem value="grid" aria-label="Grid view" className={QUIET_SEGMENT}>
             <LayoutGrid />
           </ToggleGroupItem>
-          <ToggleGroupItem value="table" aria-label="Table view">
+          <ToggleGroupItem value="table" aria-label="Table view" className={QUIET_SEGMENT}>
             <Rows3 />
           </ToggleGroupItem>
         </ToggleGroup>
@@ -279,6 +280,7 @@ export default function StaticContentPage() {
         />
       ) : view === "table" ? (
         <DataTable
+          fill
           columns={columns}
           data={filtered}
           loading={loading}
@@ -377,6 +379,6 @@ export default function StaticContentPage() {
           refresh();
         }}
       />
-    </div>
+    </FillPage>
   );
 }

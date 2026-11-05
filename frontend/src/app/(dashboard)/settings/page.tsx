@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowUpRight, Cpu, Info, KeyRound, RefreshCw, Server, Settings2, Terminal, UserRound, Users } from "lucide-react";
+import { ArrowUpRight, Cpu, Info, KeyRound, RefreshCw, Server, Terminal, UserRound, Users } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -56,11 +56,27 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        icon={Settings2}
         title="Settings"
-        description="Instance information for this Configuratix deployment. Server options are set via environment variables."
+        stats={
+          isAdmin && (
+            <StatStrip>
+              <StatCard label="Users" value={formatNumber(stats.data?.total_users)} loading={stats.loading} href="/admin/users" />
+              <StatCard
+                label="Machines online"
+                value={formatNumber(stats.data?.online_machines)}
+                suffix={stats.data ? `/ ${formatNumber(stats.data.total_machines)}` : undefined}
+                progress={stats.data?.total_machines ? (stats.data.online_machines / stats.data.total_machines) * 100 : undefined}
+                progressTone="success"
+                loading={stats.loading}
+                href="/machines"
+              />
+              <StatCard label="Projects" value={formatNumber(stats.data?.total_projects)} loading={stats.loading} href="/projects" />
+              <StatCard label="Domains" value={formatNumber(stats.data?.total_domains)} loading={stats.loading} href="/domains" />
+            </StatStrip>
+          )
+        }
         actions={
-          <Button variant="outline" onClick={() => {
+          <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => {
               agent.refresh();
               if (isAdmin) stats.refresh();
             }} disabled={agent.refreshing}>
@@ -69,23 +85,6 @@ export default function SettingsPage() {
           </Button>
         }
       />
-
-      {isAdmin && (
-        <StatStrip>
-          <StatCard label="Users" value={formatNumber(stats.data?.total_users)} loading={stats.loading} href="/admin/users" />
-          <StatCard
-            label="Machines online"
-            value={formatNumber(stats.data?.online_machines)}
-            suffix={stats.data ? `/ ${formatNumber(stats.data.total_machines)}` : undefined}
-            progress={stats.data?.total_machines ? (stats.data.online_machines / stats.data.total_machines) * 100 : undefined}
-            progressTone="success"
-            loading={stats.loading}
-            href="/machines"
-          />
-          <StatCard label="Projects" value={formatNumber(stats.data?.total_projects)} loading={stats.loading} href="/projects" />
-          <StatCard label="Domains" value={formatNumber(stats.data?.total_domains)} loading={stats.loading} href="/domains" />
-        </StatStrip>
-      )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">

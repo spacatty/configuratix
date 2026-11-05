@@ -279,25 +279,6 @@ export function parseJobResult(raw: unknown): ParsedJobResult | null {
   };
 }
 
-/** Local-day key "2026-11-05" for grouping. */
-export function localDayKey(iso: string): string {
-  const d = new Date(iso);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-/** "Today", "Yesterday", "Mon, Nov 3". */
-export function dayLabel(key: string, now: Date = new Date()): string {
-  const today = localDayKey(now.toISOString());
-  const y = new Date(now);
-  y.setDate(y.getDate() - 1);
-  if (key === today) return "Today";
-  if (key === localDayKey(y.toISOString())) return "Yesterday";
-  const [yy, mm, dd] = key.split("-").map(Number);
-  const d = new Date(yy, mm - 1, dd);
-  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
-}
-
 /** Window event fired after a job was cancelled/retried from the UI (pages refresh on it). */
 export const JOBS_CHANGED_EVENT = "configuratix:jobs-changed";
 export function emitJobsChanged() {

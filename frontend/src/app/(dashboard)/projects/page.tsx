@@ -31,6 +31,7 @@ import {
 import {
   EmptyState,
   ErrorState,
+  FillPage,
   Mono,
   PageHeader,
   RelativeTime,
@@ -240,21 +241,36 @@ export default function ProjectsPage() {
   );
 
   return (
-    <div className="space-y-6">
+    <FillPage>
       <PageHeader
-        icon={FolderKanban}
         title="Projects"
-        description="Group machines into projects and share access with your team."
+        stats={
+          !(error && !data) && (
+            <StatStrip>
+              <StatCard label="Projects" value={totals.projects} sub={`${totals.owned} yours`} loading={loading} />
+              <StatCard
+                label="Machines online"
+                value={totals.online}
+                suffix={`/ ${totals.machines}`}
+                progress={totals.machines ? (totals.online / totals.machines) * 100 : undefined}
+                progressTone="success"
+                loading={loading}
+              />
+              <StatCard label="Offline" value={totals.machines - totals.online} tone={totals.machines - totals.online > 0 ? "warning" : "default"} loading={loading} />
+              <StatCard label="Shared" value={totals.shared} loading={loading} />
+            </StatStrip>
+          )
+        }
         actions={
           <>
-            <Button variant="ghost" size="icon" onClick={refresh} disabled={refreshing} aria-label="Refresh">
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" onClick={refresh} disabled={refreshing} aria-label="Refresh">
               <RefreshCw className={refreshing ? "animate-spin" : undefined} />
             </Button>
-            <Button variant="outline" onClick={() => setJoinOpen(true)}>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => setJoinOpen(true)}>
               <LogIn />
               Join with invite
             </Button>
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
               <Plus />
               New project
             </Button>
@@ -265,55 +281,40 @@ export default function ProjectsPage() {
       {error && !data ? (
         <ErrorState title="Couldn't load projects" error={error} onRetry={refresh} />
       ) : (
-        <>
-          <StatStrip>
-            <StatCard label="Projects" value={totals.projects} sub={`${totals.owned} owned by you`} loading={loading} />
-            <StatCard
-              label="Machines online"
-              value={totals.online}
-              suffix={`/ ${totals.machines}`}
-              progress={totals.machines ? (totals.online / totals.machines) * 100 : undefined}
-              progressTone="success"
-              loading={loading}
+        <DataTable
+          fill
+          columns={columns}
+          data={rows}
+          loading={loading}
+          getRowId={(p) => p.id}
+          searchKeys={["name", "owner_name", "owner_email"]}
+          searchPlaceholder="Search projects or owners…"
+          facets={[
+            { columnId: "role", title: "Access" },
+            { columnId: "sharing", title: "Sharing" },
+          ]}
+          onRowClick={(p) => router.push(`/projects/${p.id}`)}
+          initialState={{ sorting: [{ id: "created_at", desc: true }] }}
+          emptyState={
+            <EmptyState
+              icon={FolderKanban}
+              title="No projects yet"
+              description="Create a project to group machines, or join one with an invite link from a teammate."
+              action={
+                <Button onClick={() => setCreateOpen(true)}>
+                  <Plus />
+                  New project
+                </Button>
+              }
+              secondaryAction={
+                <Button variant="outline" onClick={() => setJoinOpen(true)}>
+                  <LogIn />
+                  Join with invite
+                </Button>
+              }
             />
-            <StatCard label="Offline" value={totals.machines - totals.online} tone={totals.machines - totals.online > 0 ? "warning" : "default"} loading={loading} />
-            <StatCard label="Sharing enabled" value={totals.shared} sub="Projects with an active invite link" loading={loading} />
-          </StatStrip>
-
-          <DataTable
-            columns={columns}
-            data={rows}
-            loading={loading}
-            getRowId={(p) => p.id}
-            searchKeys={["name", "owner_name", "owner_email"]}
-            searchPlaceholder="Search projects or owners…"
-            facets={[
-              { columnId: "role", title: "Access" },
-              { columnId: "sharing", title: "Sharing" },
-            ]}
-            onRowClick={(p) => router.push(`/projects/${p.id}`)}
-            initialState={{ sorting: [{ id: "created_at", desc: true }] }}
-            emptyState={
-              <EmptyState
-                icon={FolderKanban}
-                title="No projects yet"
-                description="Create a project to group machines, or join one with an invite link from a teammate."
-                action={
-                  <Button onClick={() => setCreateOpen(true)}>
-                    <Plus />
-                    New project
-                  </Button>
-                }
-                secondaryAction={
-                  <Button variant="outline" onClick={() => setJoinOpen(true)}>
-                    <LogIn />
-                    Join with invite
-                  </Button>
-                }
-              />
-            }
-          />
-        </>
+          }
+        />
       )}
 
       <ProjectNameDialog
@@ -347,7 +348,7 @@ export default function ProjectsPage() {
           setData((prev) => prev?.map((x) => (x.id === u.id ? { ...x, sharing_enabled: u.sharing_enabled, invite_token: u.invite_token, invite_expires_at: u.invite_expires_at } : x)) ?? prev)
         }
       />
-    </div>
+    </FillPage>
   );
 }
 
