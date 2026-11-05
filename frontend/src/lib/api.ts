@@ -110,6 +110,8 @@ export interface Machine {
   active_dns_target_count?: number;
   group_count?: number;
   assigned_domains_summary?: { fqdn: string; status: string }[];
+  /** Groups this machine belongs to (list + detail). */
+  group_names?: { id: string; name: string; color: string | null; emoji: string | null }[];
 }
 
 export interface MachineGroup {
@@ -171,16 +173,271 @@ export interface ProjectMember {
   user_name: string;
 }
 
+export type JobStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+
 export interface Job {
   id: string;
   agent_id: string;
   type: string;
   payload_json: unknown;
+  /** One of JobStatus; typed as string for forward compatibility. */
   status: string;
   logs: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  // Optional enrichment (backend may or may not send these yet)
+  /** Human title, e.g. "Apply nginx config to web-1". Prefer `jobTitle(job)` to read it. */
+  title?: string | null;
+  /** Free-form target label (domain, path, service...). */
+  target?: string | null;
+  machine_id?: string | null;
+  machine_name?: string | null;
+  machine_title?: string | null;
+  triggered_by?: string | null;
+  error_message?: string | null;
+  duration_ms?: number | null;
+  rollback_status?: string | null;
+}
+
+// ===== Jobs API (backend/API_CHANGES.md) =====
+
+export type JobEntityType =
+  | "domain" | "nginx_config" | "machine" | "dns_domain" | "landing"
+  | "php_runtime" | "passthrough" | "command" | "file" | "agent";
+
+/** Row of GET /api/jobs (no logs/payload unless include_logs). */
+export interface JobListItem {
+  id: string;
+  title: string;
+  type: string;
+  /** Logical action / template id, e.g. "apply_domain", "remove_domain", "nginx_inventory". */
+  action: string | null;
+  status: string;
+  agent_id: string | null;
+  machine_id: string | null;
+  machine_title: string | null;
+  machine_hostname: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  created_by_email: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  error_message: string | null;
+  attempts: number;
+  cancel_requested: boolean;
+  parent_job_id: string | null;
+  /** Only with include_logs (tail, secrets redacted). */
+  logs?: string | null;
+}
+
+export interface JobCounts {
+  pending: number;
+  running: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+}
+
+export interface JobListPage {
+  jobs: JobListItem[];
+  next_cursor: string | null;
+  counts: JobCounts;
+}
+
+export interface JobListParams {
+  machine_id?: string;
+  agent_id?: string;
+  /** One or more statuses (sent comma-separated). */
+  status?: string | string[];
+  /** Matches job type or action. */
+  type?: string;
+  action?: string;
+  entity_type?: string;
+  entity_id?: string;
+  /** Title search (ILIKE). */
+  q?: string;
+  /** RFC3339 timestamp or Go duration like "24h". */
+  since?: string;
+  /** Default 50, max 200. */
+  limit?: number;
+  cursor?: string;
+  include_logs?: boolean;
+}
+
+/** Parsed CONFIGURATIX_* markers, stored under result_json.apply. */
+export interface JobApplyResult {
+  status?: "applied" | "removed" | "rolled_back" | "failed" | string;
+  reason?: string;
+  disabled?: string[];
+  reenabled?: string[];
+}
+
+export interface JobDetail extends JobListItem {
+  timeout_seconds: number | null;
+  updated_at: string;
+  /** Full logs, secrets redacted. */
+  logs: string;
+  /** Payload with secrets masked ("••••••"). */
+  payload: unknown;
+  result_json: ({ apply?: JobApplyResult } & Record<string, unknown>) | unknown[] | null;
+  /** Ids of retry jobs cloned from this one. */
+  retries: string[];
+}
+
+/** Returned by endpoints that create a job (payload redacted). */
+export interface JobCreated {
+  id: string;
+  job_id: string;
+  agent_id: string;
+  type: string;
+  action: string | null;
+  title: string | null;
+  status: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  payload: unknown;
+  created_at: string;
+}
+
+export interface JobCancelResult {
+  id: string;
+  status: string;
+  cancel_requested: boolean;
+}
+
+export interface JobStatsBucket extends JobCounts {
+  hour: string;
+}
+
+export interface JobStats {
+  hours: number;
+  since: string;
+  counts: JobCounts;
+  total: number;
+  buckets: JobStatsBucket[];
+  top_failing: { type: string; failed: number; total: number }[];
+  avg_duration_ms: number | null;
+}
+
+// ===== Dashboard =====
+
+export interface DashboardSummary {
+  generated_at: string;
+  machines: {
+    total: number;
+    online: number;
+    offline: number;
+    outdated_agents: number | null;
+    updating: number;
+    latest_agent_version: string | null;
+  };
+  domains: {
+    total: number;
+    healthy: number;
+    unhealthy: number;
+    unknown: number;
+    apply_failed: number;
+    applying: number;
+    /** L7 proxy certificates expiring within 30 days. */
+    ssl_expiring_soon: number | null;
+  };
+  nginx_configs: { total: number; out_of_sync: number; out_of_sync_domains: number };
+  jobs: {
+    last24h?: JobCounts;
+    total_24h?: number;
+    buckets?: JobStatsBucket[];
+    top_failing?: { type: string; failed: number; total: number }[];
+    running: number;
+    recent_failed: {
+      id: string;
+      title: string;
+      machine_id: string | null;
+      machine_title: string | null;
+      finished_at: string | null;
+      error_message: string | null;
+    }[];
+  };
+  security: { active_bans: number; bans_24h: number } | null;
+  top_machines_by_cpu: { id: string; title: string; cpu: number; mem_pct: number; disk_pct: number; online: boolean }[];
+}
+
+// ===== Apply / sync =====
+
+export type DomainApplyStatus = "pending" | "applying" | "applied" | "failed" | "removing";
+
+export interface ApplyJobsResponse {
+  jobs: JobCreated[];
+  /** Main apply job (first of jobs). */
+  job_id: string;
+}
+
+export interface NginxConfigDomainRef {
+  id: string;
+  fqdn: string;
+  machine_id: string | null;
+  machine_title: string | null;
+  apply_status: DomainApplyStatus | null;
+  last_applied_at: string | null;
+  last_apply_error: string | null;
+  last_job_id: string | null;
+  out_of_sync: boolean;
+}
+
+export interface NginxConfigApplyResult {
+  config_id: string;
+  results: { domain_id: string; fqdn: string; job_id?: string; jobs?: JobCreated[]; error?: string }[];
+  jobs: JobCreated[];
+}
+
+// ===== Machine nginx view =====
+
+export type NginxFileCategory =
+  | "configuratix_domain" | "configuratix_passthrough" | "configuratix_stream"
+  | "configuratix_snippet" | "system" | "site" | "other";
+
+export interface NginxFileEntry {
+  path: string;
+  name: string;
+  category: NginxFileCategory;
+  /** active = included by nginx; inactive = present but not matched by an include (e.g. sites-available not linked). */
+  state: "active" | "disabled" | "backup" | "inactive";
+  size: number;
+  mtime: string | null;
+  sha256: string;
+  link_target?: string;
+  managed: boolean;
+  domain_fqdn?: string;
+  domain_id?: string;
+  nginx_config_id?: string;
+  expected_sha256?: string;
+  drift: boolean;
+}
+
+export interface MachineNginxInventory {
+  machine_id: string;
+  job_id: string;
+  nginx: { active: boolean; state: string; test_ok: boolean; test_output: string; version: string };
+  files: NginxFileEntry[];
+  missing_domains: { domain_id: string; fqdn: string; expected_path: string; nginx_config_id: string | null }[];
+  fetched_at: string;
+}
+
+/** 202 response when the inventory job did not finish within ~20s. */
+export interface MachineNginxPending {
+  pending: true;
+  job_id: string;
+  status: string;
+}
+
+export interface NginxJobResult {
+  job_id: string;
+  status: string;
+  finished: boolean;
+  test_ok: boolean;
+  output: string;
 }
 
 export interface VariableDef {
@@ -252,6 +509,27 @@ export interface Domain {
   machine_ip: string | null;
   config_id: string | null;
   config_name: string | null;
+  // Apply tracking (backend migration 039) — optional until every backend ships it
+  /** null | pending | applying | applied | failed | removing */
+  apply_status?: string | null;
+  last_job_id?: string | null;
+  last_apply_error?: string | null;
+  last_applied_at?: string | null;
+  last_job_status?: string | null;
+  config_updated_at?: string | null;
+  /** Config changed since the last successful apply. */
+  out_of_sync?: boolean | null;
+  /** Last health-check HTTP response code, when the backend reports it. */
+  last_check_status_code?: number | null;
+}
+
+/** Job references a domain mutation may return (assign / apply / bulk-assign). */
+export interface DomainJobsResponse {
+  message?: string;
+  job?: Job | null;
+  job_id?: string | null;
+  job_ids?: string[] | null;
+  jobs?: Array<Job | { id: string; job_id?: string; title?: string | null }> | null;
 }
 
 export interface DomainGroup {
@@ -531,6 +809,11 @@ export interface NginxConfig {
   raw_text: string | null;
   created_at: string;
   updated_at: string;
+  /** Domains using this config (list + detail responses). */
+  domains_count?: number;
+  /** Assigned domains whose last successful apply is older than updated_at. */
+  out_of_sync_count?: number;
+  domains?: NginxConfigDomainRef[];
 }
 
 export interface NginxConfigStructured {
@@ -1119,13 +1402,85 @@ class ApiClient {
   }
 
   // Jobs
+  /** Legacy helper: newest jobs (max 200, logs tail included) as a plain array. Prefer listJobsPage. */
   async listJobs(machineId?: string): Promise<Job[]> {
-    const params = machineId ? `?machine_id=${machineId}` : "";
-    return this.request<Job[]>(`/api/jobs${params}`);
+    const page = await this.listJobsPage({ machine_id: machineId, include_logs: true, limit: 200 });
+    return page.jobs.map((j) => ({ ...j, agent_id: j.agent_id ?? "", payload_json: null, logs: j.logs ?? null }));
+  }
+
+  /** GET /api/jobs — filtered, permission-scoped, cursor-paginated list with status counts. */
+  async listJobsPage(params: JobListParams = {}): Promise<JobListPage> {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined || value === null || value === "") continue;
+      if (key === "status" && Array.isArray(value)) {
+        if (value.length) qs.set("status", value.join(","));
+      } else if (key === "include_logs") {
+        if (value) qs.set("include_logs", "1");
+      } else {
+        qs.set(key, String(value));
+      }
+    }
+    const query = qs.toString();
+    return this.request<JobListPage>(`/api/jobs${query ? `?${query}` : ""}`);
   }
 
   async getJob(id: string): Promise<Job> {
     return this.request<Job>(`/api/jobs/${id}`);
+  }
+
+  /** GET /api/jobs/{id} — full detail (logs + redacted payload + result_json). */
+  async getJobDetail(id: string): Promise<JobDetail> {
+    return this.request<JobDetail>(`/api/jobs/${encodeURIComponent(id)}`);
+  }
+
+  /** Pending → cancelled immediately; running → cancel_requested. 409 when already finished. */
+  async cancelJob(id: string): Promise<JobCancelResult> {
+    return this.request<JobCancelResult>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  }
+
+  /** Clone a failed/cancelled job as a new pending job (parent_job_id = id). */
+  async retryJob(id: string): Promise<JobCreated> {
+    return this.request<JobCreated>(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: "POST" });
+  }
+
+  async getJobStats(hours = 24): Promise<JobStats> {
+    return this.request<JobStats>(`/api/jobs/stats?hours=${encodeURIComponent(String(hours))}`);
+  }
+
+  // Dashboard
+  async getDashboard(): Promise<DashboardSummary> {
+    return this.request<DashboardSummary>("/api/dashboard");
+  }
+
+  // Machine nginx view
+  /** Runs a read-only inventory job (waits ~20s). Pass jobId to fetch the result of a pending run. */
+  async getMachineNginx(machineId: string, jobId?: string): Promise<MachineNginxInventory | MachineNginxPending> {
+    const q = jobId ? `?job_id=${encodeURIComponent(jobId)}` : "";
+    return this.request<MachineNginxInventory | MachineNginxPending>(`/api/machines/${encodeURIComponent(machineId)}/nginx${q}`);
+  }
+
+  async testMachineNginx(machineId: string): Promise<NginxJobResult> {
+    return this.request<NginxJobResult>(`/api/machines/${encodeURIComponent(machineId)}/nginx/test`, { method: "POST" });
+  }
+
+  /** Tests then reloads nginx. wait=false returns the created job immediately. */
+  async reloadMachineNginx(machineId: string, wait = false): Promise<NginxJobResult | JobCreated> {
+    return this.request<NginxJobResult | JobCreated>(
+      `/api/machines/${encodeURIComponent(machineId)}/nginx/reload${wait ? "?wait=1" : ""}`,
+      { method: "POST" },
+    );
+  }
+
+  /** Re-apply an nginx config to every assigned domain using it (or a subset). */
+  async applyNginxConfig(
+    configId: string,
+    opts: { domain_ids?: string[]; only_out_of_sync?: boolean } = {},
+  ): Promise<NginxConfigApplyResult> {
+    return this.request<NginxConfigApplyResult>(`/api/nginx-configs/${encodeURIComponent(configId)}/apply`, {
+      method: "POST",
+      body: JSON.stringify(opts),
+    });
   }
 
   // Domains
@@ -1144,15 +1499,27 @@ class ApiClient {
     });
   }
 
-  async assignDomain(id: string, machineId: string | null, configId: string | null): Promise<void> {
-    await this.request(`/api/domains/${id}/assign`, {
+  async assignDomain(id: string, machineId: string | null, configId: string | null): Promise<DomainJobsResponse> {
+    const res = await this.request<DomainJobsResponse | null>(`/api/domains/${id}/assign`, {
       method: "PUT",
       body: JSON.stringify({ machine_id: machineId, config_id: configId }),
     });
+    return res ?? {};
   }
 
-  async deleteDomain(id: string): Promise<void> {
-    await this.request(`/api/domains/${id}`, { method: "DELETE" });
+  /** Re-apply the domain's nginx config on its machine (returns the created job(s)). */
+  async applyDomain(id: string): Promise<DomainJobsResponse> {
+    const res = await this.request<DomainJobsResponse | null>(`/api/domains/${id}/apply`, { method: "POST" });
+    return res ?? {};
+  }
+
+  /** Returns `{deleted, jobs, warnings}` — assigned domains get a `remove_domain` job. */
+  async deleteDomain(id: string): Promise<DomainJobsResponse & { deleted?: number; warnings?: string[] }> {
+    const res = await this.request<(DomainJobsResponse & { deleted?: number; warnings?: string[] }) | null>(
+      `/api/domains/${id}`,
+      { method: "DELETE" }
+    );
+    return res ?? {};
   }
 
   async updateDomainNotes(id: string, notes: string): Promise<void> {
@@ -1177,7 +1544,7 @@ class ApiClient {
     domainIds: string[],
     machineId: string | null,
     configId: string | null
-  ): Promise<{ ok: number; errors: { id: string; error: string }[] }> {
+  ): Promise<{ ok: number; errors: { id: string; error: string }[] } & DomainJobsResponse> {
     return this.request("/api/domains/bulk/assign", {
       method: "POST",
       body: JSON.stringify({
@@ -1188,8 +1555,8 @@ class ApiClient {
     });
   }
 
-  async bulkDeleteDomains(domainIds: string[]): Promise<{ deleted: number }> {
-    return this.request<{ deleted: number }>("/api/domains/bulk/delete", {
+  async bulkDeleteDomains(domainIds: string[]): Promise<{ deleted: number; warnings?: string[] } & DomainJobsResponse> {
+    return this.request<{ deleted: number; warnings?: string[] } & DomainJobsResponse>("/api/domains/bulk/delete", {
       method: "POST",
       body: JSON.stringify({ domain_ids: domainIds }),
     });
