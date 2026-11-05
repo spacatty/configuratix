@@ -127,7 +127,7 @@ export function FleetPanel({
               <Skeleton className="h-3 w-2/3" />
             </div>
           ) : offline.length === 0 ? (
-            <p className="px-4 pb-4 text-xs text-muted-foreground">Every machine checked in within the last 5 minutes.</p>
+            <p className="px-4 pb-4 text-xs text-muted-foreground">Every machine is sending heartbeats.</p>
           ) : (
             <ul className="max-h-[300px] overflow-y-auto pb-2">
               {offline.slice(0, 12).map((m) => (

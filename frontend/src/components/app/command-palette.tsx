@@ -24,7 +24,13 @@ import { StatusDot } from "@/components/app/status";
 import { visibleSections } from "@/components/app/nav";
 import { AddMachineDialog } from "@/components/machines/add-machine-dialog";
 
-const PaletteCtx = React.createContext<{ open: (initialSearch?: string) => void } | null>(null);
+type PaletteApi = {
+  open: (initialSearch?: string) => void;
+  /** Run a quick action by its slash (e.g. "/new") without opening the palette. */
+  runQuickAction: (slash: string) => void;
+};
+
+const PaletteCtx = React.createContext<PaletteApi | null>(null);
 
 type QuickAction = {
   slash: string;
@@ -32,13 +38,19 @@ type QuickAction = {
   hint: string;
   icon: LucideIcon;
   keywords: string[];
+  /** "create" actions also appear in the sidebar "+" menu. */
+  kind: "create" | "navigate";
   run: (ctx: { go: (href: string) => void; newToken: () => void }) => void;
 };
+
+/** Public metadata of a quick action (no runner). */
+export type QuickActionInfo = Pick<QuickAction, "slash" | "title" | "hint" | "icon" | "kind">;
 
 /** Slash commands: type "/new" (or press "/" anywhere) and hit Enter. */
 const QUICK_ACTIONS: QuickAction[] = [
   {
     slash: "/new",
+    kind: "create",
     title: "New enrollment token",
     hint: "Add a machine with a one-line install command",
     icon: KeyRound,
@@ -47,6 +59,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   },
   {
     slash: "/domain",
+    kind: "create",
     title: "Add domains",
     hint: "Paste one or many hostnames",
     icon: Globe,
@@ -55,6 +68,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   },
   {
     slash: "/config",
+    kind: "create",
     title: "New nginx config",
     hint: "Open the config editor",
     icon: FileCode2,
@@ -63,6 +77,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   },
   {
     slash: "/run",
+    kind: "create",
     title: "Run a command",
     hint: "Execute a template on a machine",
     icon: Terminal,
@@ -71,6 +86,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   },
   {
     slash: "/jobs",
+    kind: "navigate",
     title: "Open jobs",
     hint: "Live activity across the fleet",
     icon: ListChecks,
@@ -79,16 +95,31 @@ const QUICK_ACTIONS: QuickAction[] = [
   },
 ];
 
+const QUICK_ACTION_INFO: QuickActionInfo[] = QUICK_ACTIONS.map(({ slash, title, hint, icon, kind }) => ({ slash, title, hint, icon, kind }));
+
 function isTypingTarget(t: EventTarget | null) {
   const el = t as HTMLElement | null;
   if (!el || !el.tagName) return false;
   return el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || !!el.closest?.(".monaco-editor, .xterm");
 }
 
+const NOOP_PALETTE: PaletteApi = { open: () => {}, runQuickAction: () => {} };
+
 /** Open the ⌘K palette programmatically. */
 export function useCommandPalette() {
   const ctx = React.useContext(PaletteCtx);
-  return ctx ?? { open: () => {} };
+  return ctx ?? NOOP_PALETTE;
+}
+
+/**
+ * Quick actions (the palette's slash commands) runnable directly, e.g. from a "+" menu:
+ *
+ *   const { actions, run } = useQuickActions();
+ *   actions.filter((a) => a.kind === "create").map((a) => <Item onSelect={() => run(a.slash)} />)
+ */
+export function useQuickActions(): { actions: QuickActionInfo[]; run: (slash: string) => void } {
+  const { runQuickAction } = useCommandPalette();
+  return React.useMemo(() => ({ actions: QUICK_ACTION_INFO, run: runQuickAction }), [runQuickAction]);
 }
 
 export function CommandPaletteProvider({
@@ -105,15 +136,6 @@ export function CommandPaletteProvider({
   const [initialSearch, setInitialSearch] = React.useState("");
   const [tokenOpen, setTokenOpen] = React.useState(false);
   const [knownIds, setKnownIds] = React.useState<string[]>([]);
-  const value = React.useMemo(
-    () => ({
-      open: (s?: string) => {
-        setInitialSearch(s ?? "");
-        setOpen(true);
-      },
-    }),
-    []
-  );
 
   // The dialog detects enrollment by diffing against the machines that existed when it opened.
   const newToken = React.useCallback(() => {
@@ -123,6 +145,20 @@ export function CommandPaletteProvider({
       .catch(() => setKnownIds([]))
       .finally(() => setTokenOpen(true));
   }, []);
+
+  const value = React.useMemo<PaletteApi>(
+    () => ({
+      open: (s?: string) => {
+        setInitialSearch(s ?? "");
+        setOpen(true);
+      },
+      runQuickAction: (slash: string) => {
+        const a = QUICK_ACTIONS.find((x) => x.slash === slash);
+        a?.run({ go: (href) => router.push(href), newToken });
+      },
+    }),
+    [router, newToken]
+  );
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

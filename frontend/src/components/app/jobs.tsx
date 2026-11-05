@@ -322,7 +322,18 @@ export function JobLogsSheet({ jobId, initialJob, open, onOpenChange }: JobLogsS
 /* -------------------------------------------------------------------------- */
 
 /** Top-bar button: live count of pending/running jobs + popover of recent jobs. */
-export function JobsIndicator({ className }: { className?: string }) {
+export function JobsIndicator({
+  className,
+  side = "bottom",
+  align = "end",
+  iconOnly = false,
+}: {
+  className?: string;
+  side?: "top" | "right" | "bottom" | "left";
+  align?: "start" | "center" | "end";
+  /** Count without the "jobs" word (tight spots like the sidebar footer). */
+  iconOnly?: boolean;
+}) {
   const [open, setOpen] = React.useState(false);
   const tracker = React.useContext(JobTrackerContext);
   const { data, loading, error, refresh } = usePolling(() => api.listJobsPage({ limit: 8 }), open ? 4000 : 10_000);
@@ -359,13 +370,13 @@ export function JobsIndicator({ className }: { className?: string }) {
             >
               {running > 0 ? <StatusDot status="running" /> : <Activity />}
               <span className="font-data text-xs">{running}</span>
-              <span className="hidden text-xs sm:inline">{running === 1 ? "job" : "jobs"}</span>
+              {!iconOnly && <span className="hidden text-xs sm:inline">{running === 1 ? "job" : "jobs"}</span>}
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>
-        <TooltipContent>Agent jobs</TooltipContent>
+        <TooltipContent side={side === "right" ? "right" : undefined}>Agent jobs</TooltipContent>
       </Tooltip>
-      <PopoverContent align="end" className="w-[400px] p-0">
+      <PopoverContent side={side} align={align} sideOffset={8} className="w-[400px] p-0">
         <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
           <div className="flex items-center gap-2 text-[13px] font-medium">
             Jobs

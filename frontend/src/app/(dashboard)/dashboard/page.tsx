@@ -205,6 +205,19 @@ export default function DashboardPage() {
 
 
       <div className="grid gap-4 lg:grid-cols-3">
+        <FleetPanel className="lg:col-span-2" top={d?.top_machines_by_cpu} machines={machines.data} loading={loadingDash} />
+
+        <AttentionPanel
+          domains={domains.data}
+          machines={machines.data}
+          configs={configs.data}
+          latestAgent={d?.machines.latest_agent_version}
+          loading={domains.loading || machines.loading}
+          onChanged={refreshAll}
+        />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
         <SectionCard
           className="lg:col-span-2"
           title="Job activity"
@@ -264,19 +277,6 @@ export default function DashboardPage() {
             )}
           </div>
         </SectionCard>
-
-        <AttentionPanel
-          domains={domains.data}
-          machines={machines.data}
-          configs={configs.data}
-          latestAgent={d?.machines.latest_agent_version}
-          loading={domains.loading || machines.loading}
-          onChanged={refreshAll}
-        />
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <FleetPanel className="lg:col-span-2" top={d?.top_machines_by_cpu} machines={machines.data} loading={loadingDash} />
         <RecentActivity jobs={recent.data?.jobs} loading={recent.loading} />
       </div>
     </div>

@@ -141,6 +141,10 @@ func (h *MachineNginxHandler) GetMachineNginx(w http.ResponseWriter, r *http.Req
 			http.Error(w, "Inventory job not found", http.StatusNotFound)
 			return
 		}
+	} else if err := h.db.Get(&jobID, `SELECT id FROM jobs
+		WHERE agent_id = $1 AND action = 'nginx_inventory' AND status IN ('pending', 'running')
+		ORDER BY created_at DESC LIMIT 1`, agentID); err == nil {
+		// A scan is already in flight (double mount, second tab): share it instead of queueing another.
 	} else {
 		payload, _ := json.Marshal(map[string]interface{}{
 			"steps":    []map[string]interface{}{{"action": "exec", "command": nginxInventoryScript, "timeout": 30}},

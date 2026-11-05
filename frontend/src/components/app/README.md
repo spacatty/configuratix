@@ -243,6 +243,9 @@ background ticks. Use `interval 0` to fetch once. After a mutation call `refresh
 the centered grid backdrop; auth pages use `AuthCard`, `AuthField`, `AuthError`.
 Other exports: `useCommandPalette().open()`, `useBreadcrumbLabel(label, href?)`, `BrandedLoader`, `AppBackdrop`,
 `NAV_SECTIONS` (single nav config — add new pages there, sidebar + palette + breadcrumbs pick them up).
+Sections take `headless` (sidebar shows items without a heading) and `placement: "user-menu"` (rendered only in the
+sidebar footer user menu; palette + breadcrumbs still list them). `useQuickActions()` → `{ actions, run(slash) }` runs a
+palette slash action (`/new`, `/domain`, `/config`, `/run`, `/jobs`) directly — the sidebar "+" menu uses the `kind: "create"` ones.
 Command palette domain results navigate to `/domains?q=<fqdn>` — the domains page should read `q` into its table search.
 
 ## 12. New shadcn components

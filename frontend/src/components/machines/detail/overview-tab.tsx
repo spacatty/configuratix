@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { formatBytes, formatDuration } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import {
   EmptyState,
   KeyValueList,
@@ -238,13 +239,22 @@ export function OverviewTab({
                   label: "Capabilities",
                   hidden: !machine.agent_capabilities?.length,
                   value: (
-                    <div className="flex flex-wrap gap-1">
-                      {(machine.agent_capabilities ?? []).map((c) => (
-                        <Badge key={c} variant="outline" className="font-data">
-                          {c}
-                        </Badge>
-                      ))}
-                    </div>
+                    <HoverCard openDelay={150}>
+                      <HoverCardTrigger asChild>
+                        <span className="cursor-default text-muted-foreground underline decoration-dotted underline-offset-4">
+                          {machine.agent_capabilities?.length} features
+                        </span>
+                      </HoverCardTrigger>
+                      <HoverCardContent align="start" className="w-80">
+                        <div className="flex flex-wrap gap-1">
+                          {(machine.agent_capabilities ?? []).map((c) => (
+                            <Badge key={c} variant="outline" className="font-data">
+                              {c}
+                            </Badge>
+                          ))}
+                        </div>
+                      </HoverCardContent>
+                    </HoverCard>
                   ),
                 },
                 { label: "Project", value: machine.project_name },

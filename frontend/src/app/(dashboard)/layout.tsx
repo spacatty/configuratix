@@ -14,10 +14,8 @@ import {
   BrandedLoader,
   BreadcrumbLabelProvider,
   CommandPaletteProvider,
-  CommandPaletteTrigger,
   ConfirmProvider,
   JobTrackerProvider,
-  JobsIndicator,
   RouteBreadcrumbs,
 } from "@/components/app";
 
@@ -67,10 +65,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     <SidebarTrigger className="-ml-1 text-muted-foreground hover:text-foreground" />
                     <Separator orientation="vertical" className="mr-1 h-4! bg-border-strong" />
                     <RouteBreadcrumbs className="flex-1" />
-                    <div className="ml-auto flex items-center gap-1.5">
-                      <CommandPaletteTrigger className="w-9 justify-center px-0 sm:w-auto sm:justify-start sm:px-2.5 lg:w-64" />
-                      <JobsIndicator />
-                    </div>
                   </header>
                   <div className="relative flex-1 overflow-x-hidden">
                     <div className="mx-auto w-full max-w-[1600px] px-4 py-6 md:px-6 lg:px-8">{children}</div>
