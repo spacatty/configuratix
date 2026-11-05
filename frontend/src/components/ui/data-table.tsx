@@ -87,6 +87,11 @@ declare module "@tanstack/react-table" {
     /** Percent of the free width for this "fill" column; fill columns without it split the rest evenly. */
     share?: number;
   }
+
+  interface TableMeta<TData extends RowData> {
+    /** Synthetic parent rows that only group their children (see DataTableProps.isGroupRow). */
+    isGroupRow?: (row: TData) => boolean;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -177,6 +182,11 @@ export interface DataTableProps<TData, TValue> {
    * each group; filters keep a parent when any child matches; pages never split a group.
    */
   getSubRows?: (row: TData) => TData[] | undefined;
+  /**
+   * Synthetic parent rows (e.g. a header for children with no real parent). They can't be
+   * selected or clicked themselves; their checkbox selects all their children.
+   */
+  isGroupRow?: (row: TData) => boolean;
   onRowClick?: (row: TData, event: React.MouseEvent<HTMLTableRowElement>) => void;
   /** Row href for middle-click/cmd-click semantics is up to onRowClick; this just styles. */
   density?: "compact" | "default";
@@ -274,25 +284,55 @@ const facetFilter: FilterFn<unknown> = (row, columnId, value: string[]) => {
   return value.includes(String(v ?? ""));
 };
 
+function setRowsSelected<TData>(table: TanstackTable<TData>, rows: Row<TData>[], value: boolean) {
+  table.setRowSelection((prev) => {
+    const next = { ...prev };
+    for (const r of rows) {
+      if (value) next[r.id] = true;
+      else delete next[r.id];
+    }
+    return next;
+  });
+}
+
 /** Checkbox column for row selection. Pages may add it themselves; DataTable adds it if missing. */
 export function selectionColumn<TData>(): ColumnDef<TData, unknown> {
   return {
     id: "select",
-    header: ({ table }) => (
-      <Checkbox
-        checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")}
-        onCheckedChange={(v) => table.toggleAllPageRowsSelected(!!v)}
-        aria-label="Select all on page"
-      />
-    ),
-    cell: ({ row }) => (
-      <Checkbox
-        checked={row.getIsSelected()}
-        disabled={!row.getCanSelect()}
-        onCheckedChange={(v) => row.toggleSelected(!!v)}
-        aria-label="Select row"
-      />
-    ),
+    header: ({ table }) => {
+      // Rendered rows of the page, children included (tanstack's page toggle skips sub-rows).
+      const rows = table.getRowModel().rows.filter((r) => r.getCanSelect());
+      const picked = rows.filter((r) => r.getIsSelected()).length;
+      return (
+        <Checkbox
+          checked={rows.length > 0 && picked === rows.length ? true : picked > 0 ? "indeterminate" : false}
+          onCheckedChange={(v) => setRowsSelected(table, rows, !!v)}
+          aria-label="Select all on page"
+        />
+      );
+    },
+    cell: ({ row, table }) => {
+      if (table.options.meta?.isGroupRow?.(row.original)) {
+        const kids = row.subRows.filter((r) => r.getCanSelect());
+        const picked = kids.filter((r) => r.getIsSelected()).length;
+        return (
+          <Checkbox
+            checked={kids.length > 0 && picked === kids.length ? true : picked > 0 ? "indeterminate" : false}
+            disabled={!kids.length}
+            onCheckedChange={(v) => setRowsSelected(table, kids, !!v)}
+            aria-label="Select group"
+          />
+        );
+      }
+      return (
+        <Checkbox
+          checked={row.getIsSelected()}
+          disabled={!row.getCanSelect()}
+          onCheckedChange={(v) => row.toggleSelected(!!v)}
+          aria-label="Select row"
+        />
+      );
+    },
     enableSorting: false,
     enableHiding: false,
     size: 36,
@@ -330,6 +370,7 @@ export function DataTable<TData, TValue>({
   getRowClassName,
   getRowId,
   getSubRows,
+  isGroupRow,
   onRowClick,
   density = "default",
   enableRowSelection = false,
@@ -463,7 +504,12 @@ export function DataTable<TData, TValue>({
     filterFromLeafRows: !!getSubRows,
     paginateExpandedRows: false,
     enableSubRowSelection: false,
-    enableRowSelection,
+    enableRowSelection:
+      isGroupRow && enableRowSelection
+        ? (row: Row<TData>) =>
+            !isGroupRow(row.original) && (typeof enableRowSelection === "function" ? enableRowSelection(row) : true)
+        : enableRowSelection,
+    meta: { isGroupRow },
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
     getCoreRowModel: getCoreRowModel(),
@@ -674,7 +720,7 @@ export function DataTable<TData, TValue>({
                   key={row.id}
                   data-state={row.getIsSelected() ? "selected" : undefined}
                   onClick={
-                    onRowClick
+                    onRowClick && !isGroupRow?.(row.original)
                       ? (e) => {
                           const t = e.target as HTMLElement;
                           if (t.closest(INTERACTIVE)) return;
@@ -683,7 +729,7 @@ export function DataTable<TData, TValue>({
                         }
                       : undefined
                   }
-                  className={cn(onRowClick && "cursor-pointer", getRowClassName?.(row.original))}
+                  className={cn(onRowClick && !isGroupRow?.(row.original) && "cursor-pointer", getRowClassName?.(row.original))}
                 >
                   {row.getVisibleCells().map((cell) => {
                     const meta = cell.column.columnDef.meta;

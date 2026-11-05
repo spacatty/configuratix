@@ -290,3 +290,32 @@ export function sameRules(a: HealthCheckRules, b: HealthCheckRules): boolean {
     a.timeout_seconds === b.timeout_seconds
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/* Apex groups                                                                */
+/* -------------------------------------------------------------------------- */
+
+const APEX_GROUP_PREFIX = "apex-group:";
+
+/** Synthetic row grouping subdomains whose apex isn't a domain in the list. */
+export function apexGroupRow(apex: string, children: Domain[]): Domain {
+  const newest = children.reduce((a, b) => (a.created_at > b.created_at ? a : b));
+  return {
+    id: APEX_GROUP_PREFIX + apex,
+    fqdn: apex,
+    assigned_machine_id: null,
+    status: "",
+    notes_md: null,
+    last_check_at: null,
+    created_at: newest.created_at,
+    updated_at: newest.updated_at,
+    machine_name: null,
+    machine_ip: null,
+    config_id: null,
+    config_name: null,
+  };
+}
+
+export function isApexGroup(d: Pick<Domain, "id">): boolean {
+  return d.id.startsWith(APEX_GROUP_PREFIX);
+}

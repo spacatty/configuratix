@@ -35,7 +35,16 @@ import { GroupsSheet } from "./groups-sheet";
 import { HealthCheckDialog } from "./health-check-dialog";
 import { HealthPresetsSheet } from "./health-presets-sheet";
 import { DomainNotesDialog } from "./notes-dialog";
-import { domainApplyState, domainHealth, extractJobIds, getApexDomain, isApplyActive, sortDomainsByApex } from "./domain-utils";
+import {
+  apexGroupRow,
+  domainApplyState,
+  domainHealth,
+  extractJobIds,
+  getApexDomain,
+  isApexGroup,
+  isApplyActive,
+  sortDomainsByApex,
+} from "./domain-utils";
 
 
 type DialogState =
@@ -109,12 +118,20 @@ export function DomainsView() {
     return out;
   }, [machinesQ.data]);
 
-  // Subdomains become child rows of their apex when the apex itself is in the list, so sorting
-  // and filtering act on whole groups instead of tearing subdomains away from their apex.
+  // Subdomains become child rows of their apex, so sorting and filtering act on whole groups
+  // instead of tearing subdomains away from their apex. When the apex itself isn't a domain,
+  // two or more of its subdomains get a synthetic apex row to group under.
   const { topLevel, childrenOf } = React.useMemo(() => {
     const ordered = sortDomainsByApex(domains);
     const apexRow = new Map<string, Domain>();
     for (const d of ordered) if (d.fqdn.toLowerCase() === getApexDomain(d.fqdn)) apexRow.set(d.fqdn.toLowerCase(), d);
+    const orphans = new Map<string, Domain[]>();
+    for (const d of ordered) {
+      const apex = getApexDomain(d.fqdn);
+      if (!apexRow.has(apex)) orphans.set(apex, [...(orphans.get(apex) ?? []), d]);
+    }
+    for (const [apex, list] of orphans) if (list.length > 1) apexRow.set(apex, apexGroupRow(apex, list));
+
     const top: Domain[] = [];
     const kids = new Map<string, Domain[]>();
     for (const d of ordered) {
@@ -123,6 +140,7 @@ export function DomainsView() {
         const list = kids.get(parent.id) ?? [];
         list.push(d);
         kids.set(parent.id, list);
+        if (isApexGroup(parent) && list.length === 1) top.push(parent);
       } else {
         top.push(d);
       }
@@ -394,8 +412,8 @@ export function DomainsView() {
   }, [domains]);
 
   const columns = React.useMemo(
-    () => buildDomainColumns({ actions, groupsByDomain, retryingIds: retrying }),
-    [actions, groupsByDomain, retrying]
+    () => buildDomainColumns({ actions, groupsByDomain, retryingIds: retrying, childrenOf }),
+    [actions, groupsByDomain, retrying, childrenOf]
   );
 
   const facets = React.useMemo(
@@ -464,6 +482,7 @@ export function DomainsView() {
         columns={columns}
         data={topLevel}
         getSubRows={getSubRows}
+        isGroupRow={isApexGroup}
         loading={loading}
         getRowId={(d) => d.id}
         search={search}
@@ -485,7 +504,7 @@ export function DomainsView() {
         pageSize={50}
         pageSizeOptions={[25, 50, 100, 250]}
         initialState={{ columnVisibility: { health: false, apply: false }, sorting: [{ id: "created_at", desc: true }] }}
-        getRowClassName={(d) => (isApplyActive(d) ? "bg-info/[0.04]" : undefined)}
+        getRowClassName={(d) => (isApexGroup(d) ? "bg-surface-2/30" : isApplyActive(d) ? "bg-info/[0.04]" : undefined)}
         emptyState={
           <EmptyState
             icon={Globe}

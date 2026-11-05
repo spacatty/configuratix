@@ -9,6 +9,7 @@ import {
   FileText,
   FolderOpen,
   HeartPulse,
+  Layers,
   Link2,
   MoreHorizontal,
   RotateCw,
@@ -35,7 +36,15 @@ import { CopyButton, RelativeTime, openJobLogs } from "@/components/app";
 
 import { DomainApplyCell, DomainHealthLight } from "./domain-status";
 import { GroupChips } from "./group-chip";
-import { APPLY_META, HEALTH_LABEL, domainApplyState, domainHealth, getApexDomain, isApplyActive } from "./domain-utils";
+import {
+  APPLY_META,
+  HEALTH_LABEL,
+  domainApplyState,
+  domainHealth,
+  getApexDomain,
+  isApexGroup,
+  isApplyActive,
+} from "./domain-utils";
 
 export interface DomainRowActions {
   open: (d: Domain) => void;
@@ -108,37 +117,71 @@ export function FqdnCell({
   );
 }
 
+/** Synthetic apex row: the apex name, how many subdomains it groups and how many are down. */
+export function ApexGroupCell({ apex, subdomains }: { apex: string; subdomains: Domain[] }) {
+  const down = subdomains.filter((d) => domainHealth(d) === "unhealthy").length;
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground" data-no-row-click>
+            <Layers className="size-3.5" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{apex} itself isn&apos;t added, so this row only groups its subdomains.</TooltipContent>
+      </Tooltip>
+      <span className="font-data min-w-0 truncate text-[12.5px] font-medium text-muted-foreground">{apex}</span>
+      <span className="ml-1.5 inline-flex h-[18px] shrink-0 items-center rounded-full border border-dashed border-border px-2 text-[11px] leading-none text-muted-foreground">
+        {subdomains.length} subdomains
+      </span>
+      {down > 0 && <span className="shrink-0 text-[11px] text-destructive">{down} down</span>}
+    </div>
+  );
+}
+
 export function buildDomainColumns({
   actions,
   groupsByDomain,
   retryingIds,
+  childrenOf,
 }: {
   actions: DomainRowActions;
   groupsByDomain: Record<string, DomainGroup[]>;
   retryingIds: Set<string>;
+  /** Child rows by parent id; used for the synthetic apex rows. */
+  childrenOf: Map<string, Domain[]>;
 }): ColumnDef<Domain>[] {
+  // Synthetic apex rows have no machine/config/apply/health of their own: facets and cells skip them.
+  const own =
+    <T,>(fn: (d: Domain) => T) =>
+    (d: Domain) =>
+      isApexGroup(d) ? null : fn(d);
   return [
     {
       accessorKey: "fqdn",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Domain" />,
       meta: { label: "Domain", width: "fill", share: 36, minWidth: 280 },
       sortingFn: (a, b) => a.original.fqdn.localeCompare(b.original.fqdn),
-      cell: ({ row }) => (
-        <FqdnCell
-          domain={row.original}
-          nested={row.depth > 0}
-          onRetry={actions.reapply}
-          retrying={retryingIds.has(row.original.id)}
-        />
-      ),
+      cell: ({ row }) =>
+        isApexGroup(row.original) ? (
+          <ApexGroupCell apex={row.original.fqdn} subdomains={childrenOf.get(row.original.id) ?? []} />
+        ) : (
+          <FqdnCell
+            domain={row.original}
+            nested={row.depth > 0}
+            onRetry={actions.reapply}
+            retrying={retryingIds.has(row.original.id)}
+          />
+        ),
     },
     {
       id: "machine",
-      accessorFn: (d) => d.machine_name ?? (d.assigned_machine_id ? "Unknown machine" : "Unassigned"),
+      accessorFn: own((d) => d.machine_name ?? (d.assigned_machine_id ? "Unknown machine" : "Unassigned")),
       header: "Machine",
       meta: { label: "Machine", width: "fill", share: 20, minWidth: 140 },
       cell: ({ row }) => {
         const d = row.original;
+        if (isApexGroup(d)) return null;
         if (!d.assigned_machine_id) return <span className="text-muted-foreground">Unassigned</span>;
         return (
           <Link
@@ -153,11 +196,12 @@ export function buildDomainColumns({
     },
     {
       id: "config",
-      accessorFn: (d) => d.config_name ?? "No config",
+      accessorFn: own((d) => d.config_name ?? "No config"),
       header: "Config",
       meta: { label: "Nginx config", width: "fill", share: 22, minWidth: 140 },
       cell: ({ row }) => {
         const d = row.original;
+        if (isApexGroup(d)) return null;
         if (!d.config_id) return <span className="text-muted-foreground">—</span>;
         return (
           <Link
@@ -172,7 +216,7 @@ export function buildDomainColumns({
     },
     {
       id: "health",
-      accessorFn: (d) => HEALTH_LABEL[domainHealth(d)],
+      accessorFn: own((d) => HEALTH_LABEL[domainHealth(d)]),
       header: "Health",
       enableHiding: false,
       meta: { label: "Health" },
@@ -184,7 +228,7 @@ export function buildDomainColumns({
     },
     {
       id: "apply",
-      accessorFn: (d) => APPLY_META[domainApplyState(d)].label,
+      accessorFn: own((d) => APPLY_META[domainApplyState(d)].label),
       header: "Apply",
       enableHiding: false,
       // Shown inline after the domain name; the column only backs the Apply filter.
@@ -193,24 +237,28 @@ export function buildDomainColumns({
     },
     {
       id: "groups",
-      accessorFn: (d) => (groupsByDomain[d.id] ?? []).map((g) => g.name),
+      accessorFn: own((d) => (groupsByDomain[d.id] ?? []).map((g) => g.name)),
       header: "Groups",
       enableSorting: false,
       meta: { label: "Groups", width: "fill", share: 22, minWidth: 120 },
-      cell: ({ row }) => <GroupChips groups={groupsByDomain[row.original.id] ?? []} onEdit={() => actions.groups(row.original)} />,
+      cell: ({ row }) =>
+        isApexGroup(row.original) ? null : (
+          <GroupChips groups={groupsByDomain[row.original.id] ?? []} onEdit={() => actions.groups(row.original)} />
+        ),
     },
     {
       accessorKey: "created_at",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Added" align="right" />,
       meta: { label: "Added", align: "right", width: "fit" },
-      cell: ({ row }) => <RelativeTime date={row.original.created_at} className="text-xs text-muted-foreground" />,
+      cell: ({ row }) =>
+        isApexGroup(row.original) ? null : <RelativeTime date={row.original.created_at} className="text-xs text-muted-foreground" />,
     },
     {
       id: "actions",
       enableHiding: false,
       enableSorting: false,
       meta: { align: "right", width: "fit" },
-      cell: ({ row }) => <DomainRowActionsCell domain={row.original} actions={actions} />,
+      cell: ({ row }) => (isApexGroup(row.original) ? null : <DomainRowActionsCell domain={row.original} actions={actions} />),
     },
   ];
 }
