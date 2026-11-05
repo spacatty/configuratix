@@ -196,7 +196,7 @@ export interface DataTableProps<TData, TValue> {
 /* -------------------------------------------------------------------------- */
 
 /** Bump when default column orders change, so saved layouts reset to the new defaults once. */
-const LAYOUT_VERSION = "v2";
+const LAYOUT_VERSION = "v3";
 
 type SavedLayout = {
   sorting?: SortingState;
@@ -205,8 +205,24 @@ type SavedLayout = {
   pageSize?: number;
 };
 
+let staleLayoutsPurged = false;
+/** Drops table layouts saved under older LAYOUT_VERSIONs (they'd otherwise pile up forever). */
+function purgeStaleLayouts() {
+  if (staleLayoutsPurged) return;
+  staleLayoutsPurged = true;
+  try {
+    const keep = `cfx.table:${LAYOUT_VERSION}:`;
+    for (const k of Object.keys(window.localStorage)) {
+      if (k.startsWith("cfx.table:") && !k.startsWith(keep)) window.localStorage.removeItem(k);
+    }
+  } catch {
+    // storage unavailable
+  }
+}
+
 function loadLayout(key: string | null): SavedLayout | null {
   if (!key || typeof window === "undefined") return null;
+  purgeStaleLayouts();
   try {
     const v = JSON.parse(window.localStorage.getItem(key) ?? "null");
     return v && typeof v === "object" ? (v as SavedLayout) : null;

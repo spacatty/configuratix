@@ -269,7 +269,7 @@ function MachinesView() {
           facets={facets}
           columnFilters={columnFilters}
           onColumnFiltersChange={setColumnFilters}
-          initialState={{ columnVisibility: HIDDEN_FACET_COLUMNS, sorting: [{ id: "name", desc: false }] }}
+          initialState={{ columnVisibility: HIDDEN_FACET_COLUMNS, sorting: [{ id: "created_at", desc: true }] }}
           onRowClick={(m, e) => {
             const href = `/machines/${m.id}`;
             if (e.metaKey || e.ctrlKey) window.open(href, "_blank");
