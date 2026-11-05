@@ -372,7 +372,7 @@ var Commands = map[string]*CommandTemplate{
 		Description: "Allow a port through the firewall",
 		Category:    "firewall",
 		Variables: []VariableDef{
-			{Name: "port", Type: "string", Required: true, Description: "Port number"},
+			{Name: "port", Type: "port_range", Required: true, Description: "Port number or range (1000:2000)"},
 			{Name: "protocol", Type: "string", Required: false, Default: "tcp", Description: "Protocol (tcp/udp/both)"},
 		},
 		OnError: "stop",
@@ -387,7 +387,7 @@ var Commands = map[string]*CommandTemplate{
 		Description: "Remove a port rule from the firewall",
 		Category:    "firewall",
 		Variables: []VariableDef{
-			{Name: "port", Type: "string", Required: true, Description: "Port number"},
+			{Name: "port", Type: "port_range", Required: true, Description: "Port number or range (1000:2000)"},
 			{Name: "protocol", Type: "string", Required: false, Default: "tcp", Description: "Protocol (tcp/udp/both)"},
 		},
 		OnError: "continue",

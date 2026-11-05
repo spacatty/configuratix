@@ -137,6 +137,7 @@ func main() {
 	// Machine nginx view (inventory, drift, test, reload)
 	machineNginxHandler := handlers.NewMachineNginxHandler(db)
 	apiRouter.HandleFunc("/machines/{id}/nginx", machineNginxHandler.GetMachineNginx).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/machines/{id}/nginx/expected", machineNginxHandler.GetMachineNginxExpected).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/nginx/test", machineNginxHandler.TestMachineNginx).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/machines/{id}/nginx/reload", machineNginxHandler.ReloadMachineNginx).Methods("POST", "OPTIONS")
 

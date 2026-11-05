@@ -320,3 +320,35 @@ Domain list and detail responses add:
 - `updateDomainHealthCheck(id, expectedStatus, path?)` takes an optional path.
 - New method `exportSecurityBans(params)`, which returns a `Blob`.
 - New optional fields: `Domain.health_check_path`, `last_check_response_ms`, `last_check_error`; `DNSManagedDomain.records_count`.
+
+## Follow-up 3: nginx explorer
+
+### GET /api/machines/{id}/nginx/expected?path=<abs path>
+Needs view rights. Returns exactly what Configuratix would write for a managed file. It uses the same renderer as the inventory's `expected_sha256`, so `sha256` here matches `expected_sha256` there.
+```json
+{ "path": "/etc/nginx/conf.d/configuratix/shop.example.com.conf", "content": "server { … }", "sha256": "…",
+  "source": {"kind": "domain", "domain_id": "uuid", "nginx_config_id": "uuid"} }
+```
+`source.kind` is one of:
+- `domain`: `/etc/nginx/conf.d/configuratix/<fqdn>.conf`, for a domain assigned to this machine. The fqdn is the punycode, lowercase form.
+- `passthrough_stream`: `/etc/nginx/stream.d/configuratix-passthrough.conf`
+- `passthrough_http`: `/etc/nginx/conf.d/configuratix/passthrough-dns-http.conf`
+- `passthrough_l7`: `/etc/nginx/conf.d/configuratix/passthrough-dns-l7.conf`
+
+It returns `404` with a plain-text reason for:
+- unmanaged paths
+- passthrough-mode domains, which have no per-domain HTTP file
+- domains with no config
+- generated files that would be empty for this machine
+
+A path that isn't absolute returns `400`.
+
+### UFW rules: port ranges
+`POST /api/machines/{id}/ufw/rules` and `DELETE /api/machines/{id}/ufw/rules` take the body `{"port": "8080" | "1000:2000" | "1000-2000" | 8080, "protocol"?: "tcp"|"udp"|"both"}`.
+- `protocol` defaults to `tcp`.
+- `1000-2000` is normalized to `1000:2000`. Ranges must be ascending, with ports between 1 and 65535.
+- `both` creates separate `/tcp` and `/udp` rules, because ufw needs a protocol for ranges.
+- Invalid input returns `400` with a message such as `"2000:1000" … must be ascending`.
+- The same rules apply to `ufw_allow_port` and `ufw_delete_port` through `/api/commands/execute`. Their `port` variable type is now `port_range`.
+
+api.ts: new type `NginxExpectedFile`, new method `getMachineNginxExpected(machineId, path)`. The UFW method signatures are unchanged.

@@ -1221,6 +1221,7 @@ class ApiClient {
     });
   }
 
+  /** port: "8080", "1000:2000" or "1000-2000"; protocol: tcp | udp | both (default tcp). 400 with a readable message when invalid. */
   async addUFWRule(id: string, port: string, protocol: string): Promise<Job> {
     return this.request<Job>(`/api/machines/${id}/ufw/rules`, {
       method: "POST",

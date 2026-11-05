@@ -148,6 +148,8 @@ func validateVar(def VariableDef, value string) (string, error) {
 		}
 		// Encoded server side; templates decode with base64 -d.
 		return base64.StdEncoding.EncodeToString([]byte(value)), nil
+	case "port_range":
+		return NormalizePortRange(value)
 	case "txn":
 		if value == "" {
 			return NewTxnID(), nil
@@ -437,4 +439,23 @@ func TxnPrelude(txn string) string {
 // StagingPath returns the staging file path used for a transaction.
 func StagingPath(txn, name string) string {
 	return "/var/lib/configuratix/staging/" + txn + "/" + name
+}
+
+// NormalizePortRange accepts "80", "1000:2000" or "1000-2000" (normalized to the colon form
+// used by ufw). Ranges must be ascending; ports are 1-65535.
+func NormalizePortRange(s string) (string, error) {
+	v := strings.ReplaceAll(strings.TrimSpace(s), "-", ":")
+	parts := strings.Split(v, ":")
+	if len(parts) == 1 && ValidPort(parts[0]) {
+		return parts[0], nil
+	}
+	if len(parts) == 2 && ValidPort(parts[0]) && ValidPort(parts[1]) {
+		a, _ := strconv.Atoi(parts[0])
+		b, _ := strconv.Atoi(parts[1])
+		if a < b {
+			return v, nil
+		}
+		return "", verr("port", "port range %q must be ascending (e.g. 1000:2000)", s)
+	}
+	return "", verr("port", "%q is not a valid port or port range (use 8080, 1000:2000 or 1000-2000; ports 1-65535)", s)
 }

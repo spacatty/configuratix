@@ -505,3 +505,97 @@ func fileFQDN(fqdn string) string {
 	}
 	return fqdn
 }
+
+// GetMachineNginxExpected: GET /api/machines/{id}/nginx/expected?path=<abs path>
+// Returns exactly what Configuratix would write for a managed file (same renderer as drift).
+// 404 for unmanaged paths or managed paths the DB would not generate for this machine.
+func (h *MachineNginxHandler) GetMachineNginxExpected(w http.ResponseWriter, r *http.Request) {
+	machineID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid machine ID", http.StatusBadRequest)
+		return
+	}
+	if !canAccessMachineID(h.db, r, machineID) {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+	p, ok := templates.CleanAbsPath(r.URL.Query().Get("path"))
+	if !ok {
+		http.Error(w, "path must be an absolute path", http.StatusBadRequest)
+		return
+	}
+
+	type source struct {
+		Kind          string     `json:"kind"` // domain | passthrough_stream | passthrough_http | passthrough_l7
+		DomainID      *uuid.UUID `json:"domain_id,omitempty"`
+		NginxConfigID *uuid.UUID `json:"nginx_config_id,omitempty"`
+	}
+	respond := func(content string, src source) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"path": p, "content": content, "sha256": sha256Hex(content), "source": src,
+		})
+	}
+
+	passthroughFiles := map[string]string{
+		"/etc/nginx/stream.d/configuratix-passthrough.conf":        "passthrough_stream",
+		"/etc/nginx/conf.d/configuratix/passthrough-dns-http.conf": "passthrough_http",
+		"/etc/nginx/conf.d/configuratix/passthrough-dns-l7.conf":   "passthrough_l7",
+	}
+	if kind, ok := passthroughFiles[p]; ok {
+		bundle, err := NewPassthroughNginxGenerator(h.db).GenerateForMachine(machineID)
+		if err != nil {
+			http.Error(w, "Failed to render passthrough config", http.StatusInternalServerError)
+			return
+		}
+		content := map[string]string{
+			"passthrough_stream": bundle.StreamConfig,
+			"passthrough_http":   bundle.HTTPConfig,
+			"passthrough_l7":     bundle.L7Config,
+		}[kind]
+		if content == "" {
+			http.Error(w, "Configuratix does not generate this file for this machine", http.StatusNotFound)
+			return
+		}
+		respond(content, source{Kind: kind})
+		return
+	}
+
+	dir, base := path.Dir(p), path.Base(p)
+	if dir != "/etc/nginx/conf.d/configuratix" || !strings.HasSuffix(base, ".conf") || strings.HasPrefix(base, "passthrough-") {
+		http.Error(w, "Not a Configuratix-managed file", http.StatusNotFound)
+		return
+	}
+	fqdn := strings.TrimSuffix(base, ".conf")
+
+	var domains []struct {
+		ID       uuid.UUID  `db:"id"`
+		FQDN     string     `db:"fqdn"`
+		ConfigID *uuid.UUID `db:"config_id"`
+	}
+	h.db.Select(&domains, `
+		SELECT d.id, d.fqdn, (SELECT nginx_config_id FROM domain_config_links WHERE domain_id = d.id LIMIT 1) AS config_id
+		FROM domains d WHERE d.assigned_machine_id = $1`, machineID)
+	for _, d := range domains {
+		if fileFQDN(d.FQDN) != fqdn {
+			continue
+		}
+		if d.ConfigID == nil {
+			http.Error(w, "Domain has no nginx config assigned", http.StatusNotFound)
+			return
+		}
+		mID := machineID
+		rendered, cfgJSON, err := renderDomainNginxConfig(h.db, h.db, fqdn, *d.ConfigID, &mID)
+		if err != nil {
+			http.Error(w, "Failed to render config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if isPassthroughConfig(cfgJSON) || rendered == "" {
+			http.Error(w, "Passthrough domains have no per-domain HTTP config file", http.StatusNotFound)
+			return
+		}
+		id, cid := d.ID, *d.ConfigID
+		respond(rendered, source{Kind: "domain", DomainID: &id, NginxConfigID: &cid})
+		return
+	}
+	http.Error(w, "No domain assigned to this machine matches this file", http.StatusNotFound)
+}

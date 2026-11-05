@@ -797,8 +797,8 @@ func (h *MachinesHandler) AddUFWRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Port     string `json:"port"`
-		Protocol string `json:"protocol"`
+		Port     flexString `json:"port"`
+		Protocol string     `json:"protocol"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -811,7 +811,7 @@ func (h *MachinesHandler) AddUFWRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.executeTemplate(w, claims, machineID, "ufw_allow_port", map[string]string{
-		"port":     req.Port,
+		"port":     string(req.Port),
 		"protocol": protocol,
 	})
 }
@@ -826,8 +826,8 @@ func (h *MachinesHandler) RemoveUFWRule(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req struct {
-		Port     string `json:"port"`
-		Protocol string `json:"protocol"`
+		Port     flexString `json:"port"`
+		Protocol string     `json:"protocol"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -840,7 +840,7 @@ func (h *MachinesHandler) RemoveUFWRule(w http.ResponseWriter, r *http.Request) 
 	}
 
 	h.executeTemplate(w, claims, machineID, "ufw_delete_port", map[string]string{
-		"port":     req.Port,
+		"port":     string(req.Port),
 		"protocol": protocol,
 	})
 }

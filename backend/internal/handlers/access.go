@@ -74,3 +74,20 @@ func errorStatus(err error) int {
 	}
 	return http.StatusInternalServerError
 }
+
+// flexString decodes a JSON string or number into a string (e.g. "port": 8080 or "1000:2000").
+type flexString string
+
+func (f *flexString) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*f = flexString(s)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	*f = flexString(n.String())
+	return nil
+}
