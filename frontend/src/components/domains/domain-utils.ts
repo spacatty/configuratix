@@ -1,4 +1,4 @@
-import type { Domain, DomainJobsResponse, Job } from "@/lib/api";
+import type { Domain, DomainJobsResponse, HealthCheckPreset, HealthCheckRules, Job } from "@/lib/api";
 import type { StatusTone } from "@/components/app";
 
 /* -------------------------------------------------------------------------- */
@@ -204,4 +204,89 @@ export function extractJobs(res: DomainJobsResponse | null | undefined): { id: s
   }
   if (res?.job?.id) titles.set(res.job.id, res.job.title ?? titles.get(res.job.id) ?? null);
   return extractJobIds(res).map((id) => ({ id, title: titles.get(id) ?? null }));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Health check rules                                                         */
+/* -------------------------------------------------------------------------- */
+
+export const DEFAULT_CHECK_TIMEOUT = 15;
+
+export const DEFAULT_CHECK_RULES: HealthCheckRules = { path: "/", expected: "200", body_contains: "", timeout_seconds: DEFAULT_CHECK_TIMEOUT };
+
+/** Rules the next check of this domain uses (the preset's when one is attached). */
+export function domainCheckRules(d: Domain): HealthCheckRules {
+  return {
+    path: d.check_path || d.health_check_path || "/",
+    expected: d.check_expected || d.health_check_expected || String(d.health_check_expected_status ?? 200),
+    body_contains: d.check_body_contains ?? d.health_check_body_contains ?? "",
+    timeout_seconds: d.check_timeout_seconds || d.health_check_timeout_seconds || DEFAULT_CHECK_TIMEOUT,
+  };
+}
+
+/** The domain's own (custom) rules, ignoring any preset. */
+export function domainCustomRules(d: Domain): HealthCheckRules {
+  return {
+    path: d.health_check_path || "/",
+    expected: d.health_check_expected || String(d.health_check_expected_status ?? 200),
+    body_contains: d.health_check_body_contains ?? "",
+    timeout_seconds: d.health_check_timeout_seconds || DEFAULT_CHECK_TIMEOUT,
+  };
+}
+
+export function presetRules(p: HealthCheckPreset): HealthCheckRules {
+  return { path: p.path, expected: p.expected_status, body_contains: p.body_contains ?? "", timeout_seconds: p.timeout_seconds };
+}
+
+/** "/health → 2xx · body "ok" · 10s" (timeout only when not the default). */
+export function describeRules(r: HealthCheckRules): string {
+  const parts = [`${r.path || "/"} → ${r.expected.split(",").join(", ")}`];
+  if (r.body_contains) parts.push(`body “${r.body_contains.length > 24 ? `${r.body_contains.slice(0, 24)}…` : r.body_contains}”`);
+  if (r.timeout_seconds && r.timeout_seconds !== DEFAULT_CHECK_TIMEOUT) parts.push(`${r.timeout_seconds}s`);
+  return parts.join(" · ");
+}
+
+/** Mirrors the backend's status spec parser: "200", "200,301-302", "2xx". Returns an error or null. */
+export function statusSpecError(spec: string): string | null {
+  const tokens = spec.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+  if (!tokens.length) return "Enter at least one status.";
+  for (const t of tokens) {
+    let lo: number, hi: number;
+    if (/^[1-5]xx$/.test(t)) continue;
+    const range = /^(\d{3})\s*-\s*(\d{3})$/.exec(t);
+    if (range) {
+      lo = Number(range[1]);
+      hi = Number(range[2]);
+      if (lo > hi) return `“${t}” is not a valid range.`;
+    } else if (/^\d{3}$/.test(t)) {
+      lo = hi = Number(t);
+    } else {
+      return `“${t}” isn't a status. Use 200, 200-299 or 2xx.`;
+    }
+    if (lo < 100 || hi > 599) return `“${t}” must be between 100 and 599.`;
+  }
+  return null;
+}
+
+export function pathError(path: string): string | null {
+  if (!path.startsWith("/") || /\s/.test(path) || path.length > 512) return "Must start with / and contain no spaces.";
+  return null;
+}
+
+export function rulesError(r: HealthCheckRules): string | null {
+  return (
+    pathError(r.path) ??
+    statusSpecError(r.expected) ??
+    (r.timeout_seconds < 1 || r.timeout_seconds > 60 ? "Timeout must be 1–60 seconds." : null) ??
+    (r.body_contains.length > 512 ? "Body match is limited to 512 characters." : null)
+  );
+}
+
+export function sameRules(a: HealthCheckRules, b: HealthCheckRules): boolean {
+  return (
+    a.path === b.path &&
+    a.expected.replace(/\s/g, "") === b.expected.replace(/\s/g, "") &&
+    a.body_contains.trim() === b.body_contains.trim() &&
+    a.timeout_seconds === b.timeout_seconds
+  );
 }

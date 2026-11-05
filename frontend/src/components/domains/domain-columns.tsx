@@ -50,7 +50,17 @@ export interface DomainRowActions {
 }
 
 /** FQDN with the apex muted; subdomains indented under an apex present in the list. */
-export function FqdnCell({ domain, nested }: { domain: Domain; nested: boolean }) {
+export function FqdnCell({
+  domain,
+  nested,
+  onRetry,
+  retrying,
+}: {
+  domain: Domain;
+  nested: boolean;
+  onRetry?: (d: Domain) => void;
+  retrying?: boolean;
+}) {
   const apex = getApexDomain(domain.fqdn);
   const isApex = domain.fqdn.toLowerCase() === apex;
   const sub = isApex ? "" : domain.fqdn.slice(0, domain.fqdn.length - apex.length);
@@ -70,6 +80,7 @@ export function FqdnCell({ domain, nested }: { domain: Domain; nested: boolean }
           </>
         )}
       </span>
+      <DomainApplyCell domain={domain} onRetry={onRetry} retrying={retrying} inline />
       {domain.notes_md?.trim() && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -110,17 +121,22 @@ export function buildDomainColumns({
     {
       accessorKey: "fqdn",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Domain" />,
-      meta: { label: "Domain", className: "max-w-[360px]" },
+      meta: { label: "Domain", width: "fill", share: 36, minWidth: 280 },
       sortingFn: (a, b) => a.original.fqdn.localeCompare(b.original.fqdn),
       cell: ({ row }) => (
-        <FqdnCell domain={row.original} nested={row.depth > 0} />
+        <FqdnCell
+          domain={row.original}
+          nested={row.depth > 0}
+          onRetry={actions.reapply}
+          retrying={retryingIds.has(row.original.id)}
+        />
       ),
     },
     {
       id: "machine",
       accessorFn: (d) => d.machine_name ?? (d.assigned_machine_id ? "Unknown machine" : "Unassigned"),
       header: "Machine",
-      meta: { label: "Machine" },
+      meta: { label: "Machine", width: "fill", share: 20, minWidth: 140 },
       cell: ({ row }) => {
         const d = row.original;
         if (!d.assigned_machine_id) return <span className="text-muted-foreground">Unassigned</span>;
@@ -139,14 +155,14 @@ export function buildDomainColumns({
       id: "config",
       accessorFn: (d) => d.config_name ?? "No config",
       header: "Config",
-      meta: { label: "Nginx config" },
+      meta: { label: "Nginx config", width: "fill", share: 22, minWidth: 140 },
       cell: ({ row }) => {
         const d = row.original;
         if (!d.config_id) return <span className="text-muted-foreground">—</span>;
         return (
           <Link
             href={`/configs/nginx/${d.config_id}`}
-            className="inline-flex max-w-[180px] items-center gap-1.5 truncate text-[13px] hover:underline"
+            className="inline-flex max-w-full items-center gap-1.5 truncate text-[13px] hover:underline"
           >
             <FileCog className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="truncate">{d.config_name ?? "Config"}</span>
@@ -170,30 +186,30 @@ export function buildDomainColumns({
       id: "apply",
       accessorFn: (d) => APPLY_META[domainApplyState(d)].label,
       header: "Apply",
+      enableHiding: false,
+      // Shown inline after the domain name; the column only backs the Apply filter.
       meta: { label: "Apply status" },
-      cell: ({ row }) => (
-        <DomainApplyCell domain={row.original} onRetry={actions.reapply} retrying={retryingIds.has(row.original.id)} />
-      ),
+      cell: () => null,
     },
     {
       id: "groups",
       accessorFn: (d) => (groupsByDomain[d.id] ?? []).map((g) => g.name),
       header: "Groups",
       enableSorting: false,
-      meta: { label: "Groups" },
+      meta: { label: "Groups", width: "fill", share: 22, minWidth: 120 },
       cell: ({ row }) => <GroupChips groups={groupsByDomain[row.original.id] ?? []} onEdit={() => actions.groups(row.original)} />,
     },
     {
       accessorKey: "created_at",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Added" align="right" />,
-      meta: { label: "Added", align: "right" },
+      meta: { label: "Added", align: "right", width: "fit" },
       cell: ({ row }) => <RelativeTime date={row.original.created_at} className="text-xs text-muted-foreground" />,
     },
     {
       id: "actions",
       enableHiding: false,
       enableSorting: false,
-      meta: { align: "right", className: "w-[92px]" },
+      meta: { align: "right", width: "fit" },
       cell: ({ row }) => <DomainRowActionsCell domain={row.original} actions={actions} />,
     },
   ];

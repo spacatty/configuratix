@@ -9,7 +9,7 @@ import { RelativeTime, StatusDot, StatusBadge, openJobLogs } from "@/components/
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-import { APPLY_META, HEALTH_LABEL, domainApplyState, domainHealth } from "./domain-utils";
+import { APPLY_META, HEALTH_LABEL, describeRules, domainApplyState, domainCheckRules, domainHealth } from "./domain-utils";
 
 /** Dot + label + last-check time; tooltip carries the detail. */
 const HEALTH_EXPLAIN: Record<ReturnType<typeof domainHealth>, string> = {
@@ -21,7 +21,6 @@ const HEALTH_EXPLAIN: Record<ReturnType<typeof domainHealth>, string> = {
 
 function DomainHealthTooltipBody({ domain }: { domain: Domain }) {
   const h = domainHealth(domain);
-  const expected = domain.health_check_expected_status ?? 200;
   const code = domain.last_check_status_code;
   return (
     <div className="space-y-0.5 text-xs">
@@ -53,8 +52,8 @@ function DomainHealthTooltipBody({ domain }: { domain: Domain }) {
             <div className="font-data max-w-xs text-[11px] text-destructive">{domain.last_check_error.slice(0, 300)}</div>
           )}
           <div className="text-muted-foreground">
-            Healthy when <span className="font-data">{domain.health_check_path || "/"}</span> returns{" "}
-            <span className="font-data">{expected}</span>
+            {domain.health_check_preset_name ? <>Preset {domain.health_check_preset_name}: </> : "Rules: "}
+            <span className="font-data">{describeRules(domainCheckRules(domain))}</span>
           </div>
         </>
       )}
@@ -114,20 +113,37 @@ export function DomainApplyCell({
   domain,
   onRetry,
   retrying,
+  inline,
 }: {
   domain: Domain;
   onRetry?: (d: Domain) => void;
   retrying?: boolean;
+  /** Compact form placed after the domain name; renders nothing when there's no apply state. */
+  inline?: boolean;
 }) {
   const state = domainApplyState(domain);
-  if (state === "none" && !domain.assigned_machine_id) return <span className="text-muted-foreground">—</span>;
+  if (state === "none") return inline ? null : <span className="text-muted-foreground">—</span>;
   const meta = APPLY_META[state];
   const jobId = domain.last_job_id;
 
   const label = (
-    <span className="inline-flex items-center gap-2">
-      <StatusDot tone={meta.tone} pulse={meta.pulse} />
-      <span className={cn("text-[13px]", meta.tone === "muted" && "text-muted-foreground")}>{meta.label}</span>
+    <span
+      className={cn(
+        "inline-flex items-center",
+        inline
+          ? "h-[18px] gap-1.5 rounded-full border border-border bg-surface-2/50 pr-2 pl-1.5 leading-none"
+          : "gap-2"
+      )}
+    >
+      <StatusDot tone={meta.tone} pulse={meta.pulse} size={inline ? "xs" : "sm"} />
+      <span
+        className={cn(
+          inline ? "font-sans text-[11px] whitespace-nowrap" : "text-[13px]",
+          (meta.tone === "muted" || (inline && meta.tone === "success")) && "text-muted-foreground"
+        )}
+      >
+        {meta.label}
+      </span>
     </span>
   );
 
@@ -153,7 +169,7 @@ export function DomainApplyCell({
     ) : null;
 
   return (
-    <span className="inline-flex items-center gap-1" data-no-row-click>
+    <span className={cn("inline-flex items-center gap-1", inline && "ml-1.5 shrink-0")} data-no-row-click>
       {tooltipBody ? (
         <Tooltip>
           <TooltipTrigger asChild>

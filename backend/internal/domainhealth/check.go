@@ -2,6 +2,7 @@ package domainhealth
 
 import (
 	"crypto/tls"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -13,8 +14,9 @@ type Input struct {
 	FQDN               string
 	AssignedMachineID  *string // nil or empty UUID string means unassigned
 	MachineIP          *string
-	ExpectedHTTPStatus int    // 0 or invalid uses 200
-	Path               string // request path; empty uses "/"
+	ExpectedHTTPStatus int    // 0 or invalid uses 200; ignored when Rules.Expected is set
+	Path               string // request path; empty uses "/"; ignored when Rules.Path is set
+	Rules              Rules  // preset or custom rules; zero values fall back to the fields above
 }
 
 // Result is the outcome of a live check.
@@ -22,7 +24,7 @@ type Result struct {
 	Status     string // idle | healthy | unhealthy | proxied
 	StatusCode *int   // HTTP status of the probe (nil when no HTTP response)
 	ResponseMS *int   // time to response headers of the successful probe
-	Error      string // short reason when no HTTP response was received
+	Error      string // short reason when no HTTP response was received, or why the response didn't match
 }
 
 // ValidPath reports whether p is acceptable as a health check path.
@@ -56,10 +58,22 @@ func Check(in Input) Result {
 	if expected <= 0 || expected > 999 {
 		expected = 200
 	}
-	path := in.Path
+	spec, err := ParseStatusSpec(in.Rules.Expected)
+	if err != nil {
+		spec = StatusSpec{{expected, expected}}
+	}
+	path := in.Rules.Path
+	if path == "" {
+		path = in.Path
+	}
 	if path == "" || !ValidPath(path) {
 		path = "/"
 	}
+	timeout := in.Rules.TimeoutSeconds
+	if timeout <= 0 || timeout > MaxTimeoutSeconds {
+		timeout = DefaultTimeoutSeconds
+	}
+	needle := in.Rules.BodyContains
 
 	ips, dnsErr := net.LookupIP(in.FQDN)
 
@@ -74,7 +88,7 @@ func Check(in Input) Result {
 	}
 
 	client := &http.Client{
-		Timeout: 15 * time.Second,
+		Timeout: time.Duration(timeout) * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -85,14 +99,19 @@ func Check(in Input) Result {
 		},
 	}
 
-	statusCode, ms, err := probeHTTP(client, "https://"+in.FQDN+path)
+	statusCode, ms, body, err := probeHTTP(client, "https://"+in.FQDN+path, needle != "")
 	if err != nil {
-		statusCode, ms, err = probeHTTP(client, "http://"+in.FQDN+path)
+		statusCode, ms, body, err = probeHTTP(client, "http://"+in.FQDN+path, needle != "")
 	}
 
 	if err == nil {
 		res := Result{StatusCode: &statusCode, ResponseMS: &ms, Status: "unhealthy"}
-		if statusCode == expected {
+		switch {
+		case !spec.Match(statusCode):
+			res.Error = "Expected " + spec.String()
+		case needle != "" && !strings.Contains(body, needle):
+			res.Error = "Response body doesn't contain \"" + needle + "\""
+		default:
 			res.Status = "healthy"
 		}
 		return res
@@ -111,14 +130,23 @@ func Check(in Input) Result {
 	return res
 }
 
-func probeHTTP(client *http.Client, url string) (int, int, error) {
+// maxBodyRead caps how much of the response is searched for Rules.BodyContains.
+const maxBodyRead = 256 << 10
+
+func probeHTTP(client *http.Client, url string, readBody bool) (int, int, string, error) {
 	start := time.Now()
 	resp, err := client.Get(url)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, "", err
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode, int(time.Since(start).Milliseconds()), nil
+	ms := int(time.Since(start).Milliseconds())
+	var body string
+	if readBody {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyRead))
+		body = string(b)
+	}
+	return resp.StatusCode, ms, body, nil
 }
 
 func shortErr(err error) string {

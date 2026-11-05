@@ -555,6 +555,60 @@ export interface Domain {
   last_check_error?: string | null;
   /** Custom health check path (null = "/"). */
   health_check_path?: string | null;
+  /** Preset the domain is checked with; when set, its rules replace the custom ones below. */
+  health_check_preset_id?: string | null;
+  health_check_preset_name?: string | null;
+  /** Custom accepted statuses, e.g. "200,301-302" or "2xx" (null = health_check_expected_status). */
+  health_check_expected?: string | null;
+  health_check_body_contains?: string | null;
+  /** null = 15 s */
+  health_check_timeout_seconds?: number | null;
+  /** Rules the next check uses (the preset's when attached, else the custom ones). */
+  check_path?: string;
+  check_expected?: string;
+  check_body_contains?: string;
+  /** 0 = default (15 s) */
+  check_timeout_seconds?: number;
+}
+
+/** Probe settings: path, accepted statuses ("200", "200,301-302", "2xx"), optional body match, timeout. */
+export interface HealthCheckRules {
+  path: string;
+  expected: string;
+  body_contains: string;
+  timeout_seconds: number;
+}
+
+export interface HealthCheckPreset {
+  id: string;
+  owner_id: string | null;
+  name: string;
+  description: string | null;
+  path: string;
+  expected_status: string;
+  body_contains: string | null;
+  timeout_seconds: number;
+  created_at: string;
+  updated_at: string;
+  domain_count: number;
+}
+
+export interface HealthCheckPresetInput {
+  name: string;
+  description?: string;
+  path: string;
+  expected_status: string;
+  body_contains: string;
+  timeout_seconds: number;
+}
+
+/** Either a preset or custom rules (custom rules detach the preset). */
+export type HealthCheckSettings = { preset_id: string } | { rules: HealthCheckRules };
+
+export interface BulkHealthCheckResult {
+  updated: number;
+  results: { id: string; status?: string; error?: string }[];
+  errors: { id: string; error: string }[];
 }
 
 /** Job references a domain mutation may return (assign / apply / bulk-assign). */
@@ -1616,14 +1670,35 @@ class ApiClient {
     });
   }
 
-  /** expectedHttpStatus 0 keeps the current value; path "" or "/" resets to "/", undefined leaves it unchanged. */
-  async updateDomainHealthCheck(id: string, expectedHttpStatus: number, path?: string): Promise<void> {
-    const body: Record<string, unknown> = { expected_http_status: expectedHttpStatus };
-    if (path !== undefined) body.path = path;
+  async updateDomainHealthCheck(id: string, settings: HealthCheckSettings): Promise<void> {
     await this.request(`/api/domains/${id}/health-check`, {
       method: "PUT",
-      body: JSON.stringify(body),
+      body: JSON.stringify(settings),
     });
+  }
+
+  /** Applies a preset or custom rules to many domains (omit settings to keep theirs), optionally running checks. */
+  async bulkHealthCheck(domainIds: string[], settings: HealthCheckSettings | null, run: boolean): Promise<BulkHealthCheckResult> {
+    return this.request<BulkHealthCheckResult>("/api/domains/bulk/health-check", {
+      method: "POST",
+      body: JSON.stringify({ domain_ids: domainIds, run, ...(settings ?? {}) }),
+    });
+  }
+
+  async listHealthCheckPresets(): Promise<HealthCheckPreset[]> {
+    return (await this.request<HealthCheckPreset[] | null>("/api/health-check-presets")) ?? [];
+  }
+
+  async createHealthCheckPreset(input: HealthCheckPresetInput): Promise<HealthCheckPreset> {
+    return this.request<HealthCheckPreset>("/api/health-check-presets", { method: "POST", body: JSON.stringify(input) });
+  }
+
+  async updateHealthCheckPreset(id: string, input: HealthCheckPresetInput): Promise<HealthCheckPreset> {
+    return this.request<HealthCheckPreset>(`/api/health-check-presets/${id}`, { method: "PUT", body: JSON.stringify(input) });
+  }
+
+  async deleteHealthCheckPreset(id: string): Promise<void> {
+    await this.request(`/api/health-check-presets/${id}`, { method: "DELETE" });
   }
 
   async triggerDomainHealthCheck(id: string): Promise<{ status: string }> {

@@ -7,12 +7,13 @@ import type { RowSelectionState } from "@tanstack/react-table";
 import { FolderOpen, Globe, HeartPulse, Link2, Network, Plus, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { api, type Domain, type DomainGroup, type DomainGroupWithCount } from "@/lib/api";
+import { api, type Domain, type DomainGroup, type DomainGroupWithCount, type HealthCheckRules } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { DataTable } from "@/components/ui/data-table";
 import {
   EmptyState,
   ErrorState,
+  FillPage,
   PageHeader,
   Spinner,
   StatCard,
@@ -25,12 +26,14 @@ import {
 } from "@/components/app";
 
 import { AssignDomainDialog } from "./assign-domain-dialog";
+import { BulkHealthCheckDialog } from "./bulk-health-check-dialog";
 import { CreateDomainsDialog } from "./create-domains-dialog";
 import { buildDomainColumns, type DomainRowActions } from "./domain-columns";
 import { DomainGroupsDialog } from "./domain-groups-dialog";
 import { DomainSheet } from "./domain-sheet";
 import { GroupsSheet } from "./groups-sheet";
 import { HealthCheckDialog } from "./health-check-dialog";
+import { HealthPresetsSheet } from "./health-presets-sheet";
 import { DomainNotesDialog } from "./notes-dialog";
 import { domainApplyState, domainHealth, extractJobIds, getApexDomain, isApplyActive, sortDomainsByApex } from "./domain-utils";
 
@@ -39,6 +42,7 @@ type DialogState =
   | { kind: "assign"; ids: string[] }
   | { kind: "groups"; ids: string[] }
   | { kind: "health"; id: string }
+  | { kind: "bulkHealth"; ids: string[] }
   | { kind: "notes"; id: string }
   | null;
 
@@ -54,6 +58,8 @@ export function DomainsView() {
   const domainsQ = usePolling(() => api.listDomains(), fast ? 3000 : 20000);
   const machinesQ = usePolling(() => api.listMachines(), 60000);
   const configsQ = usePolling(() => api.listNginxConfigs(), 0);
+  const presetsQ = usePolling(() => api.listHealthCheckPresets(), 0);
+  const presets = React.useMemo(() => presetsQ.data ?? [], [presetsQ.data]);
   const groupsQ = usePolling(async () => {
     const groups = await api.listDomainGroups();
     const members = await Promise.all(
@@ -159,9 +165,19 @@ export function DomainsView() {
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }, [wantsNew, searchParams, router, pathname]);
   const [groupsSheet, setGroupsSheet] = React.useState<{ open: boolean; edit: string | "new" | null }>({ open: false, edit: null });
+  const [presetsSheet, setPresetsSheet] = React.useState<{ open: boolean; fromRules: HealthCheckRules | null }>({
+    open: false,
+    fromRules: null,
+  });
+  // A preset created from a health dialog ("Save as preset…") gets selected in that dialog.
+  const [newPresetId, setNewPresetId] = React.useState<string | null>(null);
+  const openPresets = React.useCallback((fromRules?: HealthCheckRules) => {
+    setNewPresetId(null);
+    setPresetsSheet({ open: true, fromRules: fromRules ?? null });
+  }, []);
   const [sheetId, setSheetId] = React.useState<string | null>(null);
   const [retrying, setRetrying] = React.useState<Set<string>>(new Set());
-  const [bulkBusy, setBulkBusy] = React.useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = React.useState<"apply" | null>(null);
 
   const dialogDomains = React.useMemo(
     () => (dialog && "ids" in dialog ? (dialog.ids.map((id) => byId.get(id)).filter(Boolean) as Domain[]) : []),
@@ -298,29 +314,6 @@ export function DomainsView() {
 
   /* ------------------------------ bulk ------------------------------ */
 
-  const bulkCheck = async (rows: Domain[]) => {
-    const targets = rows.filter((d) => d.assigned_machine_id);
-    if (!targets.length) {
-      toast.info("None of the selected domains are assigned to a machine");
-      return;
-    }
-    setBulkBusy("check");
-    try {
-      const res = await api.bulkCheckDomains(targets.map((d) => d.id));
-      const healthy = res.results.filter((r) => r.status === "healthy").length;
-      const errored = res.results.filter((r) => r.error).length;
-      const unhealthy = res.results.length - healthy - errored;
-      const msg = `${healthy} healthy · ${unhealthy} unhealthy${errored ? ` · ${errored} errors` : ""}`;
-      if (unhealthy || errored) toast.warning(`Checked ${res.results.length} domains`, { description: msg });
-      else toast.success(`Checked ${res.results.length} domains`, { description: msg });
-      void refreshDomains();
-    } catch (e) {
-      toast.error("Bulk health check failed", { description: errorMessage(e) });
-    } finally {
-      setBulkBusy(null);
-    }
-  };
-
   const bulkReapply = async (rows: Domain[], clear: () => void) => {
     const targets = rows.filter((d) => d.assigned_machine_id && d.config_id && !isApplyActive(d));
     if (!targets.length) {
@@ -420,37 +413,45 @@ export function DomainsView() {
 
   if (domainsQ.error && !domainsQ.data) {
     return (
-      <div className="space-y-6">
-        <PageHeader icon={Globe} title="Domains" />
-        <ErrorState error={domainsQ.error} onRetry={domainsQ.refresh} />
-      </div>
+      <ErrorState error={domainsQ.error} onRetry={domainsQ.refresh} />
     );
   }
 
   const loading = domainsQ.loading;
 
   return (
-    <div className="space-y-6">
+    <FillPage>
       <PageHeader
-        icon={Globe}
         title="Domains"
-        description="Hostnames, where they're served from, and whether they're healthy."
+        stats={
+          <StatStrip>
+            <StatCard label="Total" value={stats.total} loading={loading} sub={stats.applying ? `${stats.applying} applying` : undefined} />
+            <StatCard label="Healthy" value={stats.healthy} loading={loading} sub={stats.total ? `${Math.round((stats.healthy / Math.max(1, stats.total - stats.unassigned)) * 100)}% of assigned` : undefined} />
+            <StatCard label="Unhealthy" value={stats.unhealthy} loading={loading} tone={stats.unhealthy ? "destructive" : "default"} />
+            <StatCard label="Apply failed" value={stats.failed} loading={loading} tone={stats.failed ? "destructive" : "default"} />
+            <StatCard label="Unassigned" value={stats.unassigned} loading={loading} tone={stats.unassigned ? "warning" : "default"} />
+          </StatStrip>
+        }
         actions={
           <>
-            <Button variant="ghost" size="icon" aria-label="Refresh" onClick={refreshAll} disabled={domainsQ.refreshing}>
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" aria-label="Refresh" onClick={refreshAll} disabled={domainsQ.refreshing}>
               {domainsQ.refreshing ? <Spinner /> : <RefreshCw />}
             </Button>
-            <Button variant="outline" asChild>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" asChild>
               <Link href="/domains/dns">
                 <Network />
                 DNS
               </Link>
             </Button>
-            <Button variant="outline" onClick={() => setGroupsSheet({ open: true, edit: null })}>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => openPresets()}>
+              <HeartPulse />
+              Health presets
+            </Button>
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => setGroupsSheet({ open: true, edit: null })}>
               <FolderOpen />
               Groups
             </Button>
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
               <Plus />
               Add domains
             </Button>
@@ -458,15 +459,8 @@ export function DomainsView() {
         }
       />
 
-      <StatStrip>
-        <StatCard label="Total" value={stats.total} loading={loading} sub={stats.applying ? `${stats.applying} applying` : undefined} />
-        <StatCard label="Healthy" value={stats.healthy} loading={loading} sub={stats.total ? `${Math.round((stats.healthy / Math.max(1, stats.total - stats.unassigned)) * 100)}% of assigned` : undefined} />
-        <StatCard label="Unhealthy" value={stats.unhealthy} loading={loading} tone={stats.unhealthy ? "destructive" : "default"} />
-        <StatCard label="Apply failed" value={stats.failed} loading={loading} tone={stats.failed ? "destructive" : "default"} />
-        <StatCard label="Unassigned" value={stats.unassigned} loading={loading} tone={stats.unassigned ? "warning" : "default"} />
-      </StatStrip>
-
       <DataTable
+        fill
         columns={columns}
         data={topLevel}
         getSubRows={getSubRows}
@@ -490,7 +484,7 @@ export function DomainsView() {
         onRowSelectionChange={setRowSelection}
         pageSize={50}
         pageSizeOptions={[25, 50, 100, 250]}
-        initialState={{ columnVisibility: { health: false }, sorting: [{ id: "created_at", desc: true }] }}
+        initialState={{ columnVisibility: { health: false, apply: false }, sorting: [{ id: "created_at", desc: true }] }}
         getRowClassName={(d) => (isApplyActive(d) ? "bg-info/[0.04]" : undefined)}
         emptyState={
           <EmptyState
@@ -515,9 +509,9 @@ export function DomainsView() {
               {bulkBusy === "apply" ? <Spinner /> : <RotateCw />}
               Re-apply
             </Button>
-            <Button size="sm" variant="secondary" onClick={() => void bulkCheck(rows)} disabled={!!bulkBusy}>
-              {bulkBusy === "check" ? <Spinner /> : <HeartPulse />}
-              Check health
+            <Button size="sm" variant="secondary" onClick={() => setDialog({ kind: "bulkHealth", ids: rows.map((r) => r.id) })}>
+              <HeartPulse />
+              Health check…
             </Button>
             <Button size="sm" variant="secondary" onClick={() => setDialog({ kind: "groups", ids: rows.map((r) => r.id) })}>
               <FolderOpen />
@@ -579,7 +573,43 @@ export function DomainsView() {
         open={dialog?.kind === "health"}
         onOpenChange={(o) => !o && setDialog(null)}
         domain={dialog?.kind === "health" ? dialogDomain : null}
-        onChanged={() => void refreshDomains()}
+        presets={presets}
+        newPresetId={newPresetId}
+        onChanged={() => {
+          void refreshDomains();
+          void presetsQ.refresh();
+        }}
+        onManagePresets={openPresets}
+      />
+
+      <BulkHealthCheckDialog
+        open={dialog?.kind === "bulkHealth"}
+        onOpenChange={(o) => !o && setDialog(null)}
+        domains={dialog?.kind === "bulkHealth" ? dialogDomains : []}
+        presets={presets}
+        newPresetId={newPresetId}
+        onChanged={() => {
+          void refreshDomains();
+          void presetsQ.refresh();
+        }}
+        onManagePresets={openPresets}
+      />
+
+      <HealthPresetsSheet
+        open={presetsSheet.open}
+        initialEdit={presetsSheet.fromRules ? "new" : null}
+        initialRules={presetsSheet.fromRules}
+        onOpenChange={(o) => setPresetsSheet((s) => ({ ...s, open: o }))}
+        presets={presets}
+        onChanged={(saved) => {
+          void presetsQ.refresh();
+          void refreshDomains();
+          // Started from a dialog's "Save as preset…": hand the new preset back and close the sheet.
+          if (saved && presetsSheet.fromRules) {
+            setNewPresetId(saved.id);
+            setPresetsSheet({ open: false, fromRules: null });
+          }
+        }}
       />
 
       <DomainNotesDialog
@@ -605,6 +635,6 @@ export function DomainsView() {
         groups={sheetDomain ? (groupsByDomain[sheetDomain.id] ?? []) : []}
         actions={actions}
       />
-    </div>
+    </FillPage>
   );
 }

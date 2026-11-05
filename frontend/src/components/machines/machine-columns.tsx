@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Copy, ExternalLink, MoreHorizontal, RefreshCw, Tags, TerminalSquare, Trash2 } from "lucide-react";
+import { ArrowRight, Copy, ExternalLink, MoreHorizontal, RefreshCw, Tags, TerminalSquare, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
@@ -17,7 +17,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { getApexDomain } from "@/components/domains/domain-utils";
 import { RelativeTime, StatusDot, getStatusMeta, machineDisplayName, machineIp } from "@/components/app";
 import { GroupChips } from "./group-chips";
 import { LoadCell, type AgentBadgeInfo } from "./resource-meter";
@@ -43,40 +45,120 @@ export function machineGroups(m: FleetMachine, map: MachineColumnHandlers["group
   return refs.length || Array.isArray(m.group_names) ? refs : (map[m.id] ?? []);
 }
 
+const DOMAIN_STATUS_RANK: Record<string, number> = { unhealthy: 0, idle: 1, linked: 1, healthy: 2 };
+
+/** "shop." bright, "aurora-goods.test" muted. */
+function FqdnParts({ fqdn }: { fqdn: string }) {
+  const apex = getApexDomain(fqdn);
+  const sub = fqdn.toLowerCase() === apex ? "" : fqdn.slice(0, fqdn.length - apex.length);
+  return (
+    <span className="font-data min-w-0 truncate text-[12px]">
+      {sub ? (
+        <>
+          <span className="text-foreground">{sub}</span>
+          <span className="text-muted-foreground">{apex}</span>
+        </>
+      ) : (
+        <span className="text-foreground">{fqdn}</span>
+      )}
+    </span>
+  );
+}
+
+function HealthBar({ healthy, unhealthy, unknown, className }: { healthy: number; unhealthy: number; unknown: number; className?: string }) {
+  const total = healthy + unhealthy + unknown;
+  return (
+    <div className={cn("flex h-1.5 overflow-hidden rounded-full bg-white/[0.07]", className)} aria-hidden>
+      {healthy > 0 && <div className="h-full bg-success" style={{ width: `${(healthy / total) * 100}%` }} />}
+      {unhealthy > 0 && <div className="h-full bg-destructive" style={{ width: `${(unhealthy / total) * 100}%` }} />}
+      {unknown > 0 && <div className="h-full bg-muted-foreground/40" style={{ width: `${(unknown / total) * 100}%` }} />}
+    </div>
+  );
+}
+
+const DOMAINS_PREVIEW = 8;
+
 function DomainsCell({ m }: { m: FleetMachine }) {
   const total = m.assigned_domains_count ?? 0;
   const healthy = m.healthy_domains_count ?? 0;
   const unhealthy = m.unhealthy_domains_count ?? 0;
   const unknown = Math.max(0, total - healthy - unhealthy);
-  if (!total) return <span className="text-xs text-subtle-foreground">—</span>;
-  const summary = m.assigned_domains_summary ?? [];
-  const body = (
-    <div className="flex items-center gap-2">
-      <div className="flex h-1.5 w-12 overflow-hidden rounded-full bg-white/[0.07]" aria-hidden>
-        {healthy > 0 && <div className="h-full bg-success" style={{ width: `${(healthy / total) * 100}%` }} />}
-        {unhealthy > 0 && <div className="h-full bg-destructive" style={{ width: `${(unhealthy / total) * 100}%` }} />}
-        {unknown > 0 && <div className="h-full bg-muted-foreground/40" style={{ width: `${(unknown / total) * 100}%` }} />}
-      </div>
-      <span className="font-data min-w-6 text-right text-[12.5px]">{total}</span>
-      {unhealthy > 0 && <span className="font-data text-[11px] text-destructive">{unhealthy}↓</span>}
-    </div>
+  const summary = React.useMemo(
+    () =>
+      [...(m.assigned_domains_summary ?? [])].sort(
+        (a, b) => (DOMAIN_STATUS_RANK[a.status] ?? 1) - (DOMAIN_STATUS_RANK[b.status] ?? 1) || a.fqdn.localeCompare(b.fqdn)
+      ),
+    [m.assigned_domains_summary]
   );
+  if (!total) return <span className="text-xs text-subtle-foreground">—</span>;
+  const name = machineDisplayName(m);
+
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>{body}</TooltipTrigger>
-      <TooltipContent side="left" className="max-w-xs">
-        <div className="font-data mb-1 text-[11px]">
-          {healthy} healthy · {unhealthy} unhealthy · {unknown} unknown
+    <HoverCard openDelay={150} closeDelay={120}>
+      <HoverCardTrigger asChild>
+        <div className="flex w-full cursor-default items-center gap-2 pr-8">
+          <HealthBar healthy={healthy} unhealthy={unhealthy} unknown={unknown} className="min-w-8 flex-1" />
+          <span className="font-data shrink-0 text-[12.5px] tabular-nums">{total}</span>
+          {unhealthy > 0 && <span className="font-data shrink-0 text-[11px] text-destructive">{unhealthy} down</span>}
         </div>
-        {summary.slice(0, 8).map((d) => (
-          <div key={d.fqdn} className="flex items-center gap-1.5 text-[11px]">
-            <StatusDot status={d.status} pulse={false} size="xs" />
-            <span className="font-data truncate">{d.fqdn}</span>
+      </HoverCardTrigger>
+      <HoverCardContent
+        side="left"
+        align="start"
+        className="w-80 p-0"
+        // Portaled, but React still bubbles clicks to the row; keep them here.
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="space-y-2.5 px-3.5 pt-3 pb-2.5">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-[13px] font-medium">Domains</span>
+            <span className="font-data text-[12px] text-muted-foreground tabular-nums">{total} assigned</span>
           </div>
-        ))}
-        {summary.length > 8 && <div className="text-[11px] text-muted-foreground">+{summary.length - 8} more</div>}
-      </TooltipContent>
-    </Tooltip>
+          <HealthBar healthy={healthy} unhealthy={unhealthy} unknown={unknown} />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              <StatusDot status="healthy" pulse={false} size="xs" />
+              <span className="font-data text-foreground tabular-nums">{healthy}</span> healthy
+            </span>
+            {unhealthy > 0 && (
+              <span className="inline-flex items-center gap-1.5">
+                <StatusDot status="unhealthy" pulse={false} size="xs" />
+                <span className="font-data text-foreground tabular-nums">{unhealthy}</span> down
+              </span>
+            )}
+            {unknown > 0 && (
+              <span className="inline-flex items-center gap-1.5">
+                <StatusDot status="unknown" pulse={false} size="xs" />
+                <span className="font-data text-foreground tabular-nums">{unknown}</span> not checked
+              </span>
+            )}
+          </div>
+        </div>
+        {summary.length > 0 && (
+          <ul className="max-h-64 overflow-y-auto border-t border-border py-1">
+            {summary.slice(0, DOMAINS_PREVIEW).map((d) => (
+              <li key={d.fqdn}>
+                <Link
+                  href={`/domains?q=${encodeURIComponent(d.fqdn)}`}
+                  className="flex items-center gap-2 px-3.5 py-1.5 transition-colors hover:bg-accent"
+                >
+                  <StatusDot status={d.status} pulse={false} size="xs" />
+                  <FqdnParts fqdn={d.fqdn} />
+                  {d.status === "unhealthy" && <span className="ml-auto shrink-0 text-[11px] text-destructive">down</span>}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+        <Link
+          href={`/domains?q=${encodeURIComponent(name)}`}
+          className="flex items-center justify-between border-t border-border px-3.5 py-2 text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          {summary.length > DOMAINS_PREVIEW ? `+${summary.length - DOMAINS_PREVIEW} more · view all` : "Open in Domains"}
+          <ArrowRight className="size-3.5" />
+        </Link>
+      </HoverCardContent>
+    </HoverCard>
   );
 }
 
@@ -107,8 +189,8 @@ function resourceColumns(latest?: string | null): ColumnDef<FleetMachine>[] {
     {
       id: "system",
       accessorFn: (m) => Math.max(cpuPct(m) ?? -1, memPct(m) ?? -1, diskPct(m) ?? -1),
-      header: ({ column }) => <DataTableColumnHeader column={column} title="System" />,
-      meta: { label: "System (load + agent)", width: "fit" },
+      header: ({ column }) => <DataTableColumnHeader column={column} title="System" align="center" />,
+      meta: { label: "System (load + agent)", width: "fill", minWidth: 250, align: "center" },
       sortDescFirst: true,
       cell: ({ row }) => {
         const items = [...resourceProps(row.original)];
@@ -126,7 +208,7 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       id: "name",
       accessorFn: (m) => machineDisplayName(m),
       header: ({ column }) => <DataTableColumnHeader column={column} title="Machine" />,
-      meta: { label: "Machine", width: "fill" },
+      meta: { label: "Machine", width: "fill", share: 35, minWidth: 200 },
       enableHiding: false,
       cell: ({ row }) => {
         const m = row.original;
@@ -211,7 +293,7 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       id: "domains",
       accessorFn: (m) => m.assigned_domains_count ?? 0,
       header: ({ column }) => <DataTableColumnHeader column={column} title="Domains" />,
-      meta: { label: "Domains", width: "fill" },
+      meta: { label: "Domains", width: "fill", share: 24, minWidth: 140 },
       sortDescFirst: true,
       cell: ({ row }) => <DomainsCell m={row.original} />,
     },
@@ -220,7 +302,7 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       id: "groups",
       accessorFn: (m) => machineGroups(m, h.groupsByMachine).map((g) => g.name),
       header: "Groups",
-      meta: { label: "Groups", width: "fit" },
+      meta: { label: "Groups", width: "fill", share: 16, minWidth: 110 },
       enableSorting: false,
       cell: ({ row }) => <GroupChips groups={machineGroups(row.original, h.groupsByMachine)} onEdit={() => h.onAssignGroups(row.original)} />,
     },

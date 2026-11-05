@@ -13,6 +13,7 @@ import (
 
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
+	"configuratix/backend/internal/domainhealth"
 	"configuratix/backend/internal/jobs"
 	"configuratix/backend/internal/models"
 
@@ -468,6 +469,17 @@ type DomainWithConfig struct {
 	LastCheckStatusCode *int    `db:"last_check_status_code" json:"last_check_status_code"`
 	LastCheckResponseMS *int    `db:"last_check_response_ms" json:"last_check_response_ms"`
 	LastCheckError      *string `db:"last_check_error" json:"last_check_error"`
+	// Health check presets and custom rules (migration 042)
+	HealthCheckPresetID       *uuid.UUID `db:"health_check_preset_id" json:"health_check_preset_id"`
+	HealthCheckPresetName     *string    `db:"health_check_preset_name" json:"health_check_preset_name"`
+	HealthCheckExpected       *string    `db:"health_check_expected" json:"health_check_expected"`
+	HealthCheckBodyContains   *string    `db:"health_check_body_contains" json:"health_check_body_contains"`
+	HealthCheckTimeoutSeconds *int       `db:"health_check_timeout_seconds" json:"health_check_timeout_seconds"`
+	// Rules the next check uses: the preset's when one is attached, else the domain's own.
+	CheckPath           string `db:"eff_path" json:"check_path"`
+	CheckExpected       string `db:"eff_expected" json:"check_expected"`
+	CheckBodyContains   string `db:"eff_body_contains" json:"check_body_contains"`
+	CheckTimeoutSeconds int    `db:"eff_timeout_seconds" json:"check_timeout_seconds"`
 }
 
 // ListDomains returns all domains with their machine and config info
@@ -487,12 +499,14 @@ func (h *DomainsHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 				nc.name as config_name,
 			lj.status as last_job_status,
 			nc.updated_at as config_updated_at,
-			COALESCE(nc.id IS NOT NULL AND d.assigned_machine_id IS NOT NULL AND (d.last_applied_at IS NULL OR d.last_applied_at < nc.updated_at), false) as out_of_sync
+			COALESCE(nc.id IS NOT NULL AND d.assigned_machine_id IS NOT NULL AND (d.last_applied_at IS NULL OR d.last_applied_at < nc.updated_at), false) as out_of_sync,
+			hp.name as health_check_preset_name,`+domainhealth.EffectiveRulesColumns+`
 			FROM domains d
 			LEFT JOIN machines m ON d.assigned_machine_id = m.id
 			LEFT JOIN domain_config_links dcl ON d.id = dcl.domain_id
 			LEFT JOIN nginx_configs nc ON dcl.nginx_config_id = nc.id
 			LEFT JOIN jobs lj ON lj.id = d.last_job_id
+			LEFT JOIN health_check_presets hp ON hp.id = d.health_check_preset_id
 			ORDER BY d.created_at DESC
 		`)
 	} else {
@@ -504,12 +518,14 @@ func (h *DomainsHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 				nc.name as config_name,
 			lj.status as last_job_status,
 			nc.updated_at as config_updated_at,
-			COALESCE(nc.id IS NOT NULL AND d.assigned_machine_id IS NOT NULL AND (d.last_applied_at IS NULL OR d.last_applied_at < nc.updated_at), false) as out_of_sync
+			COALESCE(nc.id IS NOT NULL AND d.assigned_machine_id IS NOT NULL AND (d.last_applied_at IS NULL OR d.last_applied_at < nc.updated_at), false) as out_of_sync,
+			hp.name as health_check_preset_name,`+domainhealth.EffectiveRulesColumns+`
 			FROM domains d
 			LEFT JOIN machines m ON d.assigned_machine_id = m.id
 			LEFT JOIN domain_config_links dcl ON d.id = dcl.domain_id
 			LEFT JOIN nginx_configs nc ON dcl.nginx_config_id = nc.id
 			LEFT JOIN jobs lj ON lj.id = d.last_job_id
+			LEFT JOIN health_check_presets hp ON hp.id = d.health_check_preset_id
 			WHERE d.owner_id = $1 OR d.owner_id IS NULL
 			ORDER BY d.created_at DESC
 		`, userID)
@@ -546,12 +562,14 @@ func (h *DomainsHandler) GetDomain(w http.ResponseWriter, r *http.Request) {
 			nc.name as config_name,
 			lj.status as last_job_status,
 			nc.updated_at as config_updated_at,
-			COALESCE(nc.id IS NOT NULL AND d.assigned_machine_id IS NOT NULL AND (d.last_applied_at IS NULL OR d.last_applied_at < nc.updated_at), false) as out_of_sync
+			COALESCE(nc.id IS NOT NULL AND d.assigned_machine_id IS NOT NULL AND (d.last_applied_at IS NULL OR d.last_applied_at < nc.updated_at), false) as out_of_sync,
+			hp.name as health_check_preset_name,`+domainhealth.EffectiveRulesColumns+`
 		FROM domains d
 		LEFT JOIN machines m ON d.assigned_machine_id = m.id
 		LEFT JOIN domain_config_links dcl ON d.id = dcl.domain_id
 		LEFT JOIN nginx_configs nc ON dcl.nginx_config_id = nc.id
 			LEFT JOIN jobs lj ON lj.id = d.last_job_id
+			LEFT JOIN health_check_presets hp ON hp.id = d.health_check_preset_id
 		WHERE d.id = $1
 	`, id)
 	if err != nil {

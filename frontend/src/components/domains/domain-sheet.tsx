@@ -26,7 +26,7 @@ import { formatDateTime } from "@/lib/format";
 import type { DomainRowActions } from "./domain-columns";
 import { DomainApplyCell, DomainHealthCell } from "./domain-status";
 import { GroupChip } from "./group-chip";
-import { domainApplyState, isApplyActive } from "./domain-utils";
+import { describeRules, domainApplyState, domainCheckRules, isApplyActive } from "./domain-utils";
 
 export function DomainSheet({
   domain,
@@ -180,7 +180,8 @@ export function DomainSheet({
                   labelWidth={120}
                   items={[
                     { label: "Status", value: <DomainHealthCell domain={d} /> },
-                    { label: "Check", value: `${d.health_check_path || "/"} → ${d.health_check_expected_status ?? 200}`, mono: true },
+                    { label: "Preset", value: d.health_check_preset_name ?? "Custom rules" },
+                    { label: "Rules", value: describeRules(domainCheckRules(d)), mono: true },
                     {
                       label: "Last response",
                       value:

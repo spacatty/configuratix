@@ -190,6 +190,7 @@ func main() {
 	apiRouter.HandleFunc("/domains/bulk/assign", domainsHandler.BulkAssignDomains).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/domains/bulk/delete", domainsHandler.BulkDeleteDomains).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/domains/bulk/check", domainsHandler.BulkCheckDomains).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/domains/bulk/health-check", domainsHandler.BulkHealthCheck).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}", domainsHandler.GetDomain).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/assign", domainsHandler.AssignDomain).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/notes", domainsHandler.UpdateDomainNotes).Methods("PUT", "OPTIONS")
@@ -197,6 +198,13 @@ func main() {
 	apiRouter.HandleFunc("/domains/{id}/check", domainsHandler.TriggerDomainHealthCheck).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/apply", domainsHandler.ApplyDomain).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}", domainsHandler.DeleteDomain).Methods("DELETE", "OPTIONS")
+
+	// Health check presets
+	hcPresetsHandler := handlers.NewHealthCheckPresetsHandler(db)
+	apiRouter.HandleFunc("/health-check-presets", hcPresetsHandler.ListPresets).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/health-check-presets", hcPresetsHandler.CreatePreset).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/health-check-presets/{id}", hcPresetsHandler.UpdatePreset).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/health-check-presets/{id}", hcPresetsHandler.DeletePreset).Methods("DELETE", "OPTIONS")
 
 	// Domain Groups
 	domainGroupsHandler := handlers.NewDomainGroupsHandler(db)

@@ -28,4 +28,9 @@ type Domain struct {
 	LastCheckStatusCode *int    `db:"last_check_status_code" json:"last_check_status_code"`
 	LastCheckResponseMS *int    `db:"last_check_response_ms" json:"last_check_response_ms"`
 	LastCheckError      *string `db:"last_check_error" json:"last_check_error"`
+	// Health check presets and custom rules (migration 042)
+	HealthCheckPresetID       *uuid.UUID `db:"health_check_preset_id" json:"health_check_preset_id"`
+	HealthCheckExpected       *string    `db:"health_check_expected" json:"health_check_expected"`
+	HealthCheckBodyContains   *string    `db:"health_check_body_contains" json:"health_check_body_contains"`
+	HealthCheckTimeoutSeconds *int       `db:"health_check_timeout_seconds" json:"health_check_timeout_seconds"`
 }
