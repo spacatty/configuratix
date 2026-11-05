@@ -178,6 +178,7 @@ searchKeys?: (keyof T | (row) => string|…)[]   // global search fields (defaul
 search? / onSearchChange?                         // controlled search (e.g. ?q=)
 hideSearch?; toolbar?: ReactNode (left); toolbarActions?: ReactNode (right)
 facets?: { columnId; title; options?: { label; value; icon? }[] }[]   // multi-select chips with counts
+columnFilters? / onColumnFiltersChange?            // controlled facet state (e.g. sync to URL, see /machines)
 loading?; skeletonRows?; emptyState?: ReactNode (when data is empty); emptyMessage? (when filtered to 0)
 onRowClick?(row, e)       // ignores clicks on buttons/links/checkboxes/[data-no-row-click]
 density?: "compact"|"default"; stickyHeader? (true); maxHeight? (scroll area; "none" disables)

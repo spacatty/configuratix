@@ -1,412 +1,298 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { api, PHPRuntime, PHPExtensionTemplate } from "@/lib/api";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
-import { Loader2, Download, Trash2, RefreshCw, Package, Settings, AlertCircle, CheckCircle2, Clock, Server } from "lucide-react";
+import * as React from "react";
 import { toast } from "sonner";
+import { Download, Package, RefreshCw, Trash2, X } from "lucide-react";
+import { api, type PHPExtensionTemplate, type PHPRuntimeResponse } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Combobox, MultiCombobox } from "@/components/ui/combobox";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
+  CardSkeleton,
+  CopyableMono,
+  ErrorState,
+  KeyValueList,
+  RelativeTime,
+  SectionCard,
+  Spinner,
+  StatusBadge,
+  errorMessage,
+  trackJob,
+  useConfirm,
+  usePolling,
+} from "@/components/app";
 
 interface PHPRuntimeTabProps {
   machineId: string;
+  machineName?: string;
 }
 
 const PHP_VERSIONS = ["8.4", "8.3", "8.2", "8.1", "8.0"];
 
 const AVAILABLE_EXTENSIONS = [
-  "bcmath", "bz2", "curl", "dba", "enchant", "exif", "ffi", "gd", "gmp",
-  "imap", "imagick", "intl", "ldap", "mbstring", "memcached", "mongodb",
-  "mysqli", "odbc", "opcache", "pdo_mysql", "pdo_odbc", "pdo_pgsql",
-  "pgsql", "pspell", "readline", "redis", "soap", "sockets", "sqlite3",
-  "ssh2", "tidy", "xml", "xmlrpc", "xsl", "yaml", "zip", "apcu",
-  "igbinary", "msgpack", "uuid", "xdebug"
+  "apcu", "bcmath", "bz2", "curl", "dba", "enchant", "exif", "ffi", "gd", "gmp", "igbinary", "imagick", "imap", "intl",
+  "ldap", "mbstring", "memcached", "mongodb", "msgpack", "mysqli", "odbc", "opcache", "pdo_mysql", "pdo_odbc", "pdo_pgsql",
+  "pgsql", "pspell", "readline", "redis", "soap", "sockets", "sqlite3", "ssh2", "tidy", "uuid", "xdebug", "xml", "xmlrpc",
+  "xsl", "yaml", "zip",
 ];
 
-export function PHPRuntimeTab({ machineId }: PHPRuntimeTabProps) {
-  const [initialLoading, setInitialLoading] = useState(true);
-  const [installing, setInstalling] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [runtime, setRuntime] = useState<PHPRuntime | null>(null);
-  const [installed, setInstalled] = useState(false);
-  const [templates, setTemplates] = useState<PHPExtensionTemplate[]>([]);
-  
-  // Form state
-  const [selectedVersion, setSelectedVersion] = useState("8.3");
-  const [selectedExtensions, setSelectedExtensions] = useState<string[]>(["mysqli", "curl", "mbstring", "xml", "zip"]);
-  const [selectedTemplate, setSelectedTemplate] = useState<string>("");
+const BUSY = new Set(["installing", "removing", "pending"]);
 
-  // Load runtime without affecting loading state (for polling)
-  const refreshRuntime = useCallback(async () => {
-    try {
-      const response = await api.getPHPRuntime(machineId);
-      setInstalled(response.installed);
-      if (response.runtime) {
-        setRuntime(response.runtime);
-        // Only update form state if not currently editing (runtime is installing/removing)
-        if (response.runtime.status === "installing" || response.runtime.status === "removing" || response.runtime.status === "installed") {
-          setSelectedVersion(response.runtime.version);
-          setSelectedExtensions(response.runtime.extensions || []);
-        }
-      } else {
-        setRuntime(null);
-      }
-    } catch (error) {
-      console.error("Failed to load PHP runtime:", error);
-    }
-  }, [machineId]);
+export function PHPRuntimeTab({ machineId, machineName }: PHPRuntimeTabProps) {
+  const confirm = useConfirm();
+  const [busyHint, setBusyHint] = React.useState(false);
+  const runtimeQ = usePolling<PHPRuntimeResponse>(() => api.getPHPRuntime(machineId), busyHint ? 3000 : 15000, { deps: [machineId] });
+  const templatesQ = usePolling<PHPExtensionTemplate[]>(() => api.listPHPExtensionTemplates(), 0);
+  const templates = React.useMemo(() => templatesQ.data ?? [], [templatesQ.data]);
 
-  // Initial load with loading state
-  const loadRuntime = useCallback(async () => {
+  const runtime = runtimeQ.data?.runtime ?? null;
+  const installed = !!runtimeQ.data?.installed;
+  const busy = !!runtime && BUSY.has(runtime.status);
+
+  React.useEffect(() => setBusyHint(busy), [busy]);
+
+  const [version, setVersion] = React.useState("8.3");
+  const [extensions, setExtensions] = React.useState<string[]>(["mysqli", "curl", "mbstring", "xml", "zip"]);
+  const [templateId, setTemplateId] = React.useState<string | null>(null);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [dirty, setDirty] = React.useState(false);
+
+  // Sync form from the server unless the user is editing.
+  React.useEffect(() => {
+    if (!runtime || dirty) return;
+    setVersion(runtime.version);
+    setExtensions(runtime.extensions ?? []);
+  }, [runtime, dirty]);
+
+  const run = async (kind: "install" | "update") => {
+    setSubmitting(true);
     try {
-      setInitialLoading(true);
-      await refreshRuntime();
+      const res =
+        kind === "install"
+          ? await api.installPHPRuntime(machineId, version, extensions)
+          : await api.updatePHPRuntime(machineId, version, extensions);
+      setDirty(false);
+      setBusyHint(true);
+      void runtimeQ.refresh();
+      if (res?.job_id)
+        trackJob(res.job_id, {
+          title: kind === "install" ? `Install PHP ${version}` : `Update PHP ${version}`,
+          description: machineName,
+          onDone: () => runtimeQ.refresh(),
+        });
+    } catch (e) {
+      toast.error(kind === "install" ? "Couldn't start PHP install" : "Couldn't start PHP update", { description: errorMessage(e) });
     } finally {
-      setInitialLoading(false);
-    }
-  }, [refreshRuntime]);
-
-  const loadTemplates = useCallback(async () => {
-    try {
-      const tmpl = await api.listPHPExtensionTemplates();
-      setTemplates(tmpl);
-    } catch (error) {
-      console.error("Failed to load templates:", error);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadRuntime();
-    loadTemplates();
-  }, [loadRuntime, loadTemplates]);
-
-  // Reload runtime status periodically when installing/removing (no loading flash)
-  useEffect(() => {
-    if (runtime?.status === "installing" || runtime?.status === "removing") {
-      const interval = setInterval(refreshRuntime, 3000);
-      return () => clearInterval(interval);
-    }
-  }, [runtime?.status, refreshRuntime]);
-
-  const handleInstall = async () => {
-    try {
-      setInstalling(true);
-      await api.installPHPRuntime(machineId, selectedVersion, selectedExtensions);
-      toast.success("PHP installation started");
-      await refreshRuntime();
-    } catch (error) {
-      toast.error("Failed to start PHP installation: " + (error instanceof Error ? error.message : "Unknown error"));
-    } finally {
-      setInstalling(false);
+      setSubmitting(false);
     }
   };
 
-  const handleUpdate = async () => {
-    try {
-      setInstalling(true);
-      await api.updatePHPRuntime(machineId, selectedVersion, selectedExtensions);
-      toast.success("PHP update started");
-      await refreshRuntime();
-    } catch (error) {
-      toast.error("Failed to start PHP update: " + (error instanceof Error ? error.message : "Unknown error"));
-    } finally {
-      setInstalling(false);
-    }
+  const remove = async () => {
+    if (!runtime) return;
+    const ok = await confirm({
+      title: `Remove PHP ${runtime.version}?`,
+      description: "PHP-FPM and its extensions are uninstalled. Sites routing .php to FPM will return 502 until PHP is reinstalled.",
+      destructive: true,
+      confirmText: "Remove PHP",
+      icon: Trash2,
+      onConfirm: async () => {
+        const res = await api.removePHPRuntime(machineId);
+        setBusyHint(true);
+        if (res?.job_id) trackJob(res.job_id, { title: `Remove PHP ${runtime.version}`, description: machineName, onDone: () => runtimeQ.refresh() });
+      },
+    });
+    if (ok) void runtimeQ.refresh();
   };
 
-  const handleRemove = async () => {
-    try {
-      setRemoving(true);
-      await api.removePHPRuntime(machineId);
-      toast.success("PHP removal started");
-      await refreshRuntime();
-    } catch (error) {
-      toast.error("Failed to start PHP removal: " + (error instanceof Error ? error.message : "Unknown error"));
-    } finally {
-      setRemoving(false);
-    }
-  };
+  if (runtimeQ.loading && !runtimeQ.data) return <CardSkeleton lines={6} />;
+  if (runtimeQ.error && !runtimeQ.data) return <ErrorState error={runtimeQ.error} onRetry={runtimeQ.refresh} title="Couldn't load PHP runtime" />;
 
-  const handleTemplateSelect = (templateId: string) => {
-    setSelectedTemplate(templateId);
-    const template = templates.find(t => t.id === templateId);
-    if (template) {
-      setSelectedExtensions(template.extensions);
-    }
-  };
-
-  const toggleExtension = (ext: string) => {
-    setSelectedExtensions(prev => 
-      prev.includes(ext) 
-        ? prev.filter(e => e !== ext)
-        : [...prev, ext]
-    );
-    setSelectedTemplate(""); // Clear template selection when manually editing
-  };
-
-  const getStatusBadge = () => {
-    if (!runtime) return null;
-    
-    switch (runtime.status) {
-      case "installed":
-        return <Badge className="bg-green-500/20 text-green-400 border-green-500/30"><CheckCircle2 className="h-3 w-3 mr-1" />Installed</Badge>;
-      case "installing":
-        return <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30 animate-pulse"><Loader2 className="h-3 w-3 mr-1 animate-spin" />Installing</Badge>;
-      case "removing":
-        return <Badge className="bg-orange-500/20 text-orange-400 border-orange-500/30 animate-pulse"><Loader2 className="h-3 w-3 mr-1 animate-spin" />Removing</Badge>;
-      case "failed":
-        return <Badge className="bg-red-500/20 text-red-400 border-red-500/30"><AlertCircle className="h-3 w-3 mr-1" />Failed</Badge>;
-      case "pending":
-        return <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30"><Clock className="h-3 w-3 mr-1" />Pending</Badge>;
-      default:
-        return <Badge variant="outline">{runtime.status}</Badge>;
-    }
-  };
-
-  if (initialLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
+  const versionChanged = installed && runtime && runtime.version !== version;
+  const template = templates.find((t) => t.id === templateId);
 
   return (
-    <div className="space-y-6">
-      {/* Current Runtime Status */}
-      {installed && runtime && (
-        <Card className="border-border/50">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-purple-500/20 to-blue-500/20 flex items-center justify-center">
-                  <Server className="h-5 w-5 text-purple-400" />
-                </div>
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    PHP {runtime.version}
-                    {getStatusBadge()}
-                  </CardTitle>
-                  <CardDescription>
-                    {runtime.socket_path && (
-                      <span className="font-mono text-xs">{runtime.socket_path}</span>
-                    )}
-                  </CardDescription>
-                </div>
-              </div>
+    <div className="grid gap-4 lg:grid-cols-3">
+      <div className="space-y-4 lg:col-span-2">
+        <SectionCard
+          icon={Package}
+          title={installed ? "Configure PHP-FPM" : "Install PHP-FPM"}
+          description={installed ? "Change the version or the extension set. Applied as a job on the machine." : "Pick a version and extensions. Uses the ondrej/php PPA."}
+          footer={
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                {versionChanged ? `Switching ${runtime?.version} → ${version} removes the old version.` : installed ? "Only the differences are applied." : "Adds the PPA and installs php-fpm with the selected extensions."}
+              </p>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={refreshRuntime}>
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                  Refresh
+                {dirty && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setDirty(false);
+                      setTemplateId(null);
+                    }}
+                  >
+                    <X />
+                    Discard
+                  </Button>
+                )}
+                <Button onClick={() => run(installed ? "update" : "install")} disabled={submitting || busy || (installed && !dirty)}>
+                  {submitting ? <Spinner /> : installed ? <RefreshCw /> : <Download />}
+                  {installed ? "Apply changes" : `Install PHP ${version}`}
                 </Button>
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button variant="destructive" size="sm" disabled={removing || runtime.status === "removing"}>
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Remove
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Remove PHP Runtime?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        This will remove PHP {runtime.version} and all its extensions from this machine.
-                        Any PHP applications will stop working.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={handleRemove} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                        Remove PHP
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
               </div>
             </div>
-          </CardHeader>
-          <CardContent>
-            {runtime.status === "failed" && runtime.error_message && (
-              <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-                <p className="text-sm text-red-400">{runtime.error_message}</p>
-              </div>
-            )}
-            
-            {runtime.status === "installed" && runtime.extensions && runtime.extensions.length > 0 && (
+          }
+        >
+          <div className="space-y-5">
+            <div className="space-y-2">
+              <Label>Version</Label>
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                value={version}
+                onValueChange={(v) => {
+                  if (!v) return;
+                  setVersion(v);
+                  setDirty(true);
+                }}
+              >
+                {PHP_VERSIONS.map((v) => (
+                  <ToggleGroupItem key={v} value={v} className="font-data px-3">
+                    {v}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <Label className="text-sm font-medium">Installed Extensions</Label>
-                <div className="flex flex-wrap gap-2">
-                  {runtime.extensions.map(ext => (
-                    <Badge key={ext} variant="secondary" className="text-xs">
-                      <Package className="h-3 w-3 mr-1" />
-                      {ext}
-                    </Badge>
-                  ))}
-                </div>
+                <Label>Preset</Label>
+                <Combobox
+                  items={templates}
+                  value={templateId}
+                  onValueChange={(id, t) => {
+                    setTemplateId(id);
+                    if (t) {
+                      setExtensions(t.extensions);
+                      setDirty(true);
+                    }
+                  }}
+                  getValue={(t) => t.id}
+                  getLabel={(t) => t.name}
+                  getKeywords={(t) => [t.description, ...t.extensions]}
+                  renderItem={(t) => (
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate">{t.name}</span>
+                        {t.is_default && <Badge variant="muted">default</Badge>}
+                      </div>
+                      <div className="font-data truncate text-[11px] text-muted-foreground">{t.extensions.join(", ")}</div>
+                    </div>
+                  )}
+                  placeholder="Choose a preset…"
+                  searchPlaceholder="Search presets or extensions…"
+                  loading={templatesQ.loading}
+                  clearable
+                />
+                {template?.description && <p className="text-xs text-muted-foreground">{template.description}</p>}
               </div>
-            )}
+              <div className="space-y-2">
+                <Label>Extensions</Label>
+                <MultiCombobox
+                  items={AVAILABLE_EXTENSIONS}
+                  value={extensions}
+                  onValueChange={(ids) => {
+                    setExtensions(ids);
+                    setTemplateId(null);
+                    setDirty(true);
+                  }}
+                  getValue={(e) => e}
+                  getLabel={(e) => e}
+                  renderItem={(e) => <span className="font-data">{e}</span>}
+                  placeholder="Add extensions…"
+                  searchPlaceholder="Search extensions…"
+                  maxChips={0}
+                />
+              </div>
+            </div>
 
-            {runtime.installed_at && (
-              <p className="text-xs text-muted-foreground mt-4">
-                Installed on {new Date(runtime.installed_at).toLocaleString()}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Install/Update Configuration */}
-      <Card className="border-border/50">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Settings className="h-5 w-5" />
-            {installed ? "Update PHP Configuration" : "Install PHP Runtime"}
-          </CardTitle>
-          <CardDescription>
-            {installed 
-              ? "Change PHP version or add/remove extensions"
-              : "Install PHP-FPM on this machine with your preferred version and extensions"
-            }
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {/* Version Selection */}
-          <div className="space-y-2">
-            <Label>PHP Version</Label>
-            <Select value={selectedVersion} onValueChange={setSelectedVersion}>
-              <SelectTrigger className="w-[200px]">
-                <SelectValue placeholder="Select version" />
-              </SelectTrigger>
-              <SelectContent>
-                {PHP_VERSIONS.map(v => (
-                  <SelectItem key={v} value={v}>PHP {v}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              Uses Ondřej Surý&apos;s PPA for the latest PHP versions
-            </p>
-          </div>
-
-          {/* Extension Template */}
-          <div className="space-y-2">
-            <Label>Extension Template</Label>
-            <Select value={selectedTemplate} onValueChange={handleTemplateSelect}>
-              <SelectTrigger className="w-[300px]">
-                <SelectValue placeholder="Choose a preset..." />
-              </SelectTrigger>
-              <SelectContent>
-                {templates.map(t => (
-                  <SelectItem key={t.id} value={t.id}>
-                    {t.name}
-                    {t.is_default && <Badge className="ml-2 text-xs" variant="secondary">Default</Badge>}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selectedTemplate && (
-              <p className="text-xs text-muted-foreground">
-                {templates.find(t => t.id === selectedTemplate)?.description}
-              </p>
-            )}
-          </div>
-
-          {/* Extension Selection */}
-          <div className="space-y-2">
-            <Label>Extensions ({selectedExtensions.length} selected)</Label>
-            <ScrollArea className="h-[200px] border rounded-lg p-3">
-              <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
-                {AVAILABLE_EXTENSIONS.map(ext => (
-                  <div key={ext} className="flex items-center space-x-2">
-                    <Checkbox
-                      id={`ext-${ext}`}
-                      checked={selectedExtensions.includes(ext)}
-                      onCheckedChange={() => toggleExtension(ext)}
-                    />
-                    <Label
-                      htmlFor={`ext-${ext}`}
-                      className="text-sm font-normal cursor-pointer"
+            <div className="flex min-h-8 flex-wrap gap-1.5 rounded-lg border border-border bg-background/40 p-2">
+              {extensions.length === 0 ? (
+                <span className="px-1 text-xs text-muted-foreground">No extensions selected — only the PHP core is installed.</span>
+              ) : (
+                [...extensions].sort().map((e) => (
+                  <span key={e} className="font-data inline-flex h-6 items-center gap-1 rounded-[4px] border border-border bg-surface-2/70 pr-1 pl-2 text-[11.5px]">
+                    {e}
+                    <button
+                      type="button"
+                      className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      onClick={() => {
+                        setExtensions((xs) => xs.filter((x) => x !== e));
+                        setTemplateId(null);
+                        setDirty(true);
+                      }}
+                      aria-label={`Remove ${e}`}
                     >
-                      {ext}
-                    </Label>
-                  </div>
-                ))}
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+          </div>
+        </SectionCard>
+      </div>
+
+      <div className="space-y-4">
+        <SectionCard
+          title="Runtime"
+          actions={
+            installed && runtime ? (
+              <Button variant="destructive" size="sm" onClick={remove} disabled={busy}>
+                <Trash2 />
+                Remove
+              </Button>
+            ) : undefined
+          }
+        >
+          {runtime ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="font-data text-2xl font-medium tracking-tight">PHP {runtime.version}</span>
+                <StatusBadge status={runtime.status === "installing" || runtime.status === "removing" ? "running" : runtime.status} label={runtime.status} />
               </div>
-            </ScrollArea>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="flex items-center gap-3 pt-4 border-t">
-            {installed ? (
-              <Button 
-                onClick={handleUpdate} 
-                disabled={installing || runtime?.status === "installing" || runtime?.status === "removing"}
-              >
-                {(installing || runtime?.status === "installing") ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Updating...</>
-                ) : (
-                  <><RefreshCw className="h-4 w-4 mr-2" />Update PHP</>
-                )}
-              </Button>
-            ) : (
-              <Button 
-                onClick={handleInstall} 
-                disabled={installing}
-              >
-                {installing ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Installing...</>
-                ) : (
-                  <><Download className="h-4 w-4 mr-2" />Install PHP</>
-                )}
-              </Button>
-            )}
-            
-            <p className="text-xs text-muted-foreground">
-              {installed 
-                ? "Changing version will remove the old version and install the new one"
-                : "This will add the PHP PPA and install PHP-FPM with selected extensions"
-              }
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Socket Path Info */}
-      <Card className="border-border/50 bg-muted/20">
-        <CardContent className="pt-6">
-          <div className="flex items-start gap-3">
-            <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
-              <Package className="h-4 w-4 text-primary" />
+              {runtime.status === "failed" && runtime.error_message && (
+                <Alert variant="destructive">
+                  <AlertTitle>Last operation failed</AlertTitle>
+                  <AlertDescription className="font-data text-xs break-words">{runtime.error_message}</AlertDescription>
+                </Alert>
+              )}
+              <KeyValueList
+                labelWidth={96}
+                items={[
+                  { label: "FPM socket", value: runtime.socket_path ? <CopyableMono value={runtime.socket_path} /> : null },
+                  { label: "Extensions", value: <span className="font-data">{runtime.extensions?.length ?? 0}</span> },
+                  { label: "Installed", value: runtime.installed_at ? <RelativeTime date={runtime.installed_at} /> : null },
+                  { label: "Updated", value: <RelativeTime date={runtime.updated_at} /> },
+                ]}
+              />
             </div>
-            <div className="space-y-1">
-              <p className="text-sm font-medium">Nginx Integration</p>
-              <p className="text-xs text-muted-foreground">
-                When PHP is installed, the socket path <code className="bg-muted px-1 py-0.5 rounded text-xs font-mono">/run/php/php{selectedVersion}-fpm.sock</code> will be 
-                automatically used for Nginx configurations with PHP enabled.
-              </p>
-              <p className="text-xs text-muted-foreground mt-2">
-                Enable &quot;Use PHP&quot; on any static location in your Nginx configs to route .php files to PHP-FPM.
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          ) : (
+            <p className="text-[13px] text-muted-foreground">PHP is not installed on this machine.</p>
+          )}
+        </SectionCard>
+        <SectionCard title="Nginx integration">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Locations with “Use PHP” enabled route <span className="font-data">.php</span> requests to{" "}
+            <span className="font-data text-foreground">/run/php/php{version}-fpm.sock</span>. The socket path updates automatically when the
+            version changes.
+          </p>
+        </SectionCard>
+      </div>
     </div>
   );
 }
-

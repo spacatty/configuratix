@@ -124,6 +124,9 @@ export interface DataTableProps<TData, TValue> {
   toolbarActions?: React.ReactNode;
   /** Faceted filter chips. */
   facets?: DataTableFacet[];
+  /** Controlled facet/column filters (e.g. synced to URL query params). */
+  columnFilters?: ColumnFiltersState;
+  onColumnFiltersChange?: (filters: ColumnFiltersState) => void;
   showColumnToggle?: boolean;
 
   /* ---- pagination ---- */
@@ -234,6 +237,8 @@ export function DataTable<TData, TValue>({
   toolbar,
   toolbarActions,
   facets,
+  columnFilters: columnFiltersControlled,
+  onColumnFiltersChange: onColumnFiltersChangeControlled,
   showColumnToggle = true,
   showPagination = true,
   pageSize: pageSizeProp,
@@ -258,7 +263,16 @@ export function DataTable<TData, TValue>({
 }: DataTableProps<TData, TValue>) {
   const defaultPageSize = pageSizeProp ?? 20;
   const [sorting, setSorting] = React.useState<SortingState>(initialStateProp?.sorting ?? []);
-  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
+  const [columnFiltersInner, setColumnFiltersInner] = React.useState<ColumnFiltersState>([]);
+  const columnFilters = columnFiltersControlled ?? columnFiltersInner;
+  const setColumnFilters = React.useCallback<OnChangeFn<ColumnFiltersState>>(
+    (u) => {
+      const next = typeof u === "function" ? u(columnFilters) : u;
+      if (columnFiltersControlled === undefined) setColumnFiltersInner(next);
+      onColumnFiltersChangeControlled?.(next);
+    },
+    [columnFilters, columnFiltersControlled, onColumnFiltersChangeControlled]
+  );
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(initialStateProp?.columnVisibility ?? {});
   const [rowSelectionInternal, setRowSelectionInternal] = React.useState<RowSelectionState>({});
   const rowSelection = rowSelectionControlled ?? rowSelectionInternal;
