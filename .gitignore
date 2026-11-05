@@ -31,3 +31,6 @@ logs/
 
 backend/agent-binaries/configuratix-agent*
 !backend/agent-binaries/version.json
+
+# Task checksums
+.task/

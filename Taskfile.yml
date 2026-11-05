@@ -113,8 +113,13 @@ tasks:
     cmds:
       - echo "Installing frontend dependencies..."
       - pnpm install --frozen-lockfile
-    status:
-      - test -d node_modules
+    # Re-run whenever dependencies change (a bare "node_modules exists" check
+    # skipped newly added packages on existing installs).
+    sources:
+      - package.json
+      - pnpm-lock.yaml
+    generates:
+      - node_modules/.modules.yaml
 
   deps:agent:
     desc: Install agent Go dependencies

@@ -359,7 +359,7 @@ func (h *AgentHandler) GetJobs(w http.ResponseWriter, r *http.Request) {
 	})
 
 	for _, j := range jobs {
-		jobhooks.OnJobStarted(context.WithoutCancel(r.Context()), h.db, j.ID.String())
+		jobhooks.OnJobStarted(context.Background(), h.db, j.ID.String())
 		if j.Type == "update_agent" {
 			h.db.Exec(`
 				UPDATE agents SET update_state = 'downloading'
@@ -459,7 +459,7 @@ func (h *AgentHandler) afterJobFinished(ctx context.Context, jobID uuid.UUID, st
 		l7Status = "failed"
 	}
 	h.updateL7CertificateStatuses(jobID, l7Status, logs.String)
-	jobhooks.OnJobFinished(context.WithoutCancel(ctx), h.db, jobID.String())
+	jobhooks.OnJobFinished(context.Background(), h.db, jobID.String())
 }
 
 func (h *AgentHandler) applyJobUpdate(ctx context.Context, agentID uuid.UUID, req *JobUpdateRequest, legacy bool) (*JobUpdateResponse, bool, error) {

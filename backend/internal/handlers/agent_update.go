@@ -829,7 +829,7 @@ func confirmAgentUpdate(ctx context.Context, db *database.DB, agentID uuid.UUID,
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		log.Printf("Agent %s confirmed update to %s (job %s)", agentID, version, *jobID)
-		jobhooks.OnJobFinished(context.WithoutCancel(ctx), db, jobID.String())
+		jobhooks.OnJobFinished(context.Background(), db, jobID.String())
 	}
 }
 
@@ -855,7 +855,7 @@ func finishAgentUpdate(ctx context.Context, db *database.DB, agentID uuid.UUID, 
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		log.Printf("Agent %s update %s (job %s): %s", agentID, stateVal, *jobID, msg)
-		jobhooks.OnJobFinished(context.WithoutCancel(ctx), db, jobID.String())
+		jobhooks.OnJobFinished(context.Background(), db, jobID.String())
 	}
 }
 
