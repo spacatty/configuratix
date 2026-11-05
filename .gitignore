@@ -1,8 +1,11 @@
 # Dependencies
 node_modules/
 vendor/
+# Frontend uses pnpm (pnpm-lock.yaml)
+frontend/package-lock.json
 
 # Build outputs
+backend/data/
 backend/bin/
 backend/agent-binaries/configuratix-agent
 frontend/.next/
@@ -14,6 +17,8 @@ frontend/out/
 .env
 .env.local
 .env.production
+.env.*
+!.env.example
 
 # IDE
 .vscode/
