@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { HttpError } from "@/lib/api";
 import { useSidebarPrefs } from "@/components/app/sidebar-resize";
 import { useRouter } from "next/navigation";
 
@@ -33,12 +34,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         router.push("/login");
         return;
       }
-      try {
-        const userData = await api.getMe();
-        setUser(userData);
-        setLoading(false);
-      } catch {
-        router.push("/login");
+      // Only a real 401 means "signed out"; an unreachable backend (restart/deploy) is retried.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const userData = await api.getMe();
+          setUser(userData);
+          setLoading(false);
+          return;
+        } catch (e) {
+          if (e instanceof HttpError && e.status === 401) {
+            router.push("/login");
+            return;
+          }
+          await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 8000)));
+        }
       }
     };
     checkAuth();

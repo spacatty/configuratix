@@ -655,27 +655,72 @@ export function DataTable<TData, TValue>({
 /* Toolbar pieces                                                             */
 /* -------------------------------------------------------------------------- */
 
-function SearchInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
+/**
+ * Search box with its own draft state: keystrokes render instantly and are never lost,
+ * while the (possibly expensive) consumer - table filtering, URL sync, server queries -
+ * only sees the value after a short pause.
+ */
+function SearchInput({
+  value,
+  onChange,
+  placeholder,
+  delay = 200,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  delay?: number;
+}) {
+  const [draft, setDraft] = React.useState(value);
+  const sent = React.useRef(value);
+  const onChangeRef = React.useRef(onChange);
+  React.useLayoutEffect(() => {
+    onChangeRef.current = onChange;
+  });
+
+  // External changes (URL navigation, "clear filters") replace the draft; our own echoes don't.
+  React.useEffect(() => {
+    if (value !== sent.current) {
+      sent.current = value;
+      setDraft(value);
+    }
+  }, [value]);
+
+  React.useEffect(() => {
+    if (draft === sent.current) return;
+    const t = setTimeout(() => {
+      sent.current = draft;
+      onChangeRef.current(draft);
+    }, delay);
+    return () => clearTimeout(t);
+  }, [draft, delay]);
+
+  const clear = () => {
+    setDraft("");
+    sent.current = "";
+    onChangeRef.current("");
+  };
+
   return (
     <div className="relative w-full sm:w-64">
       <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
       <Input
         placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
         className="h-8 pr-7 pl-8"
         onKeyDown={(e) => {
-          if (e.key === "Escape" && value) {
+          if (e.key === "Escape" && draft) {
             e.stopPropagation();
-            onChange("");
+            clear();
           }
         }}
       />
-      {value && (
+      {draft && (
         <button
           type="button"
           aria-label="Clear search"
-          onClick={() => onChange("")}
+          onClick={clear}
           className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           <X className="size-3.5" />

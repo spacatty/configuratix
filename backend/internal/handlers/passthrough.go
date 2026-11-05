@@ -160,7 +160,7 @@ func (h *PassthroughHandler) GetRecordPool(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Get direct members with machine details
-	var members []models.PassthroughMemberWithMachine
+	members := []models.PassthroughMemberWithMachine{}
 	h.db.Select(&members, `
 		SELECT pm.*, COALESCE(NULLIF(m.title, ''), m.hostname) as machine_name, COALESCE(m.primary_ip, m.ip_address) as machine_ip, a.last_seen
 		FROM dns_passthrough_members pm
@@ -178,7 +178,7 @@ func (h *PassthroughHandler) GetRecordPool(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Get groups info
-	var groups []models.MachineGroupWithCount
+	groups := []models.MachineGroupWithCount{}
 	if len(pool.GroupIDs) > 0 {
 		h.db.Select(&groups, `
 			SELECT g.*, COUNT(DISTINCT gm.machine_id) as item_count
@@ -596,7 +596,7 @@ func (h *PassthroughHandler) GetWildcardPool(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Get direct members
-	var members []models.WildcardMemberWithMachine
+	members := []models.WildcardMemberWithMachine{}
 	h.db.Select(&members, `
 		SELECT wm.*, COALESCE(NULLIF(m.title, ''), m.hostname) as machine_name, COALESCE(m.primary_ip, m.ip_address) as machine_ip, a.last_seen
 		FROM dns_wildcard_pool_members wm
@@ -613,7 +613,7 @@ func (h *PassthroughHandler) GetWildcardPool(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Get groups info
-	var groups []models.MachineGroupWithCount
+	groups := []models.MachineGroupWithCount{}
 	if len(pool.GroupIDs) > 0 {
 		h.db.Select(&groups, `
 			SELECT g.*, COUNT(DISTINCT gm.machine_id) as item_count

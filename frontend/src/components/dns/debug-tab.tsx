@@ -190,8 +190,8 @@ export function DebugTab({ zone, hasAccount, onNsChecked }: { zone: DNSManagedDo
                     <dd className="font-data min-w-0 text-[12px]">
                       {data.error ? (
                         <span className="text-muted-foreground">{data.error}</span>
-                      ) : data.records.length ? (
-                        data.records.map((r) => (
+                      ) : (data.records ?? []).length ? (
+                        (data.records ?? []).map((r) => (
                           <div key={r} className="truncate">
                             {r}
                           </div>

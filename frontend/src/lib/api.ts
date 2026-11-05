@@ -925,6 +925,23 @@ export interface AdminStats {
   total_domains: number;
 }
 
+/** HTTP error from the backend; network failures stay plain TypeErrors. */
+export class HttpError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+  }
+}
+
+/** Go encodes empty slices as null; pool consumers expect arrays. */
+function normalizePool<T extends { pool: { group_ids?: string[] | null; scheduled_times?: string[] | null }; members?: unknown[] | null }>(r: T): T {
+  if (!r) return r;
+  return {
+    ...r,
+    members: r.members ?? [],
+    pool: r.pool ? { ...r.pool, group_ids: r.pool.group_ids ?? [], scheduled_times: r.pool.scheduled_times ?? [] } : r.pool,
+  };
+}
+
 class ApiClient {
   private token: string | null = null;
 
@@ -988,7 +1005,7 @@ class ApiClient {
         this.handleSessionExpired();
       }
       const text = await response.text();
-      throw new Error(text || response.statusText || "An error occurred");
+      throw new HttpError(text || response.statusText || "An error occurred", response.status);
     }
 
     if (response.status === 204) {
@@ -1845,7 +1862,7 @@ class ApiClient {
 
   // Record pool (for separate mode)
   async getRecordPool(recordId: string): Promise<PassthroughPoolResponse> {
-    return this.request(`/api/dns/records/${recordId}/passthrough`);
+    return normalizePool(await this.request<PassthroughPoolResponse>(`/api/dns/records/${recordId}/passthrough`));
   }
 
   async createOrUpdateRecordPool(recordId: string, data: PassthroughPoolRequest): Promise<PassthroughPool> {
@@ -1881,7 +1898,7 @@ class ApiClient {
 
   // Wildcard pool (for wildcard mode)
   async getWildcardPool(domainId: string): Promise<WildcardPoolResponse> {
-    return this.request(`/api/dns-domains/${domainId}/wildcard`);
+    return normalizePool(await this.request<WildcardPoolResponse>(`/api/dns-domains/${domainId}/wildcard`));
   }
 
   async createOrUpdateWildcardPool(domainId: string, data: WildcardPoolRequest): Promise<WildcardPool> {

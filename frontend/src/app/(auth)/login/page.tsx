@@ -7,7 +7,7 @@ import { ShieldCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { api } from "@/lib/api";
+import { api, HttpError } from "@/lib/api";
 import { AuthCard, AuthError, AuthField } from "@/components/app/auth-card";
 import { Spinner } from "@/components/app/states";
 
@@ -43,8 +43,9 @@ export default function LoginPage() {
       try {
         await api.getMe();
         goNext();
-      } catch {
-        localStorage.removeItem("auth_token");
+      } catch (e) {
+        // Keep the token if the backend is merely unreachable.
+        if (e instanceof HttpError && e.status === 401) localStorage.removeItem("auth_token");
       }
     };
     checkAuth();
