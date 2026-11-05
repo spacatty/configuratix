@@ -1157,6 +1157,12 @@ exit 0
 
 // ApplyToAllPoolMembers applies config to all members of a pool (direct + group members)
 func (g *PassthroughNginxGenerator) ApplyToAllPoolMembers(poolID uuid.UUID, isWildcard bool) error {
+	g.ApplyToAllPoolMembersJobs(poolID, isWildcard, PassthroughJobMeta{})
+	return nil
+}
+
+// ApplyToAllPoolMembersJobs is ApplyToAllPoolMembers returning the created jobs and per-machine errors.
+func (g *PassthroughNginxGenerator) ApplyToAllPoolMembersJobs(poolID uuid.UUID, isWildcard bool, meta PassthroughJobMeta) ([]*models.Job, []string) {
 	var machineIDs []uuid.UUID
 
 	if isWildcard {
@@ -1215,11 +1221,16 @@ func (g *PassthroughNginxGenerator) ApplyToAllPoolMembers(poolID uuid.UUID, isWi
 		}
 	}
 
+	var created []*models.Job
+	var errs []string
 	for _, machineID := range machineIDs {
-		if err := g.ApplyToMachine(machineID); err != nil {
+		job, err := g.applyToMachine(machineID, meta)
+		if err != nil {
 			log.Printf("Failed to apply config to machine %s: %v", machineID, err)
+			errs = append(errs, fmt.Sprintf("machine %s: %v", machineID, err))
+			continue
 		}
+		created = append(created, job)
 	}
-
-	return nil
+	return created, errs
 }

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -191,7 +192,7 @@ func TemplateTitle(templateID string, vars map[string]string) string {
 	case "install_package":
 		return "Install package · " + v("package")
 	case "exec_command":
-		return "Run command '" + shorten(v("command"), 50) + "'"
+		return CommandTitle(v("command"))
 	case "nginx_test_reload":
 		return "Test & reload nginx"
 	case "deploy_landing":
@@ -208,7 +209,15 @@ func TemplateTitle(templateID string, vars map[string]string) string {
 
 // CommandTitle renders a title for an ad-hoc shell command.
 func CommandTitle(command string) string {
-	return "Run command '" + shorten(command, 50) + "'"
+	return "Run command '" + shorten(maskSecretAssignments(command), 50) + "'"
+}
+
+// secretAssignRe matches "password=...", "token: ..." style assignments in commands.
+var secretAssignRe = regexp.MustCompile(`(?i)((?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*['"]?)[^\s'"]+`)
+
+// maskSecretAssignments hides assigned secret values so they never end up in job titles.
+func maskSecretAssignments(s string) string {
+	return secretAssignRe.ReplaceAllString(s, "${1}••••••")
 }
 
 func defaultTitle(spec Spec) string {

@@ -277,6 +277,7 @@ func main() {
 	// IP Bans
 	apiRouter.HandleFunc("/security/bans", securityHandler.ListBans).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/security/bans", securityHandler.CreateBan).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/security/bans/export", securityHandler.ExportBans).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/security/bans/import", securityHandler.ImportBans).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/security/bans/{id}", securityHandler.DeleteBan).Methods("DELETE", "OPTIONS")
 	apiRouter.HandleFunc("/security/bans", securityHandler.DeleteAllBans).Methods("DELETE", "OPTIONS")

@@ -25,10 +25,11 @@ func RunCheckAndPersist(db *database.DB, id uuid.UUID) (newStatus string, err er
 		MachineIP                 *string    `db:"machine_ip"`
 		Status                    string     `db:"status"`
 		HealthCheckExpectedStatus int        `db:"health_check_expected_status"`
+		HealthCheckPath           *string    `db:"health_check_path"`
 	}
 
 	err = db.Get(&row, `
-		SELECT d.fqdn, d.assigned_machine_id, d.status, d.health_check_expected_status,
+		SELECT d.fqdn, d.assigned_machine_id, d.status, d.health_check_expected_status, d.health_check_path,
 			COALESCE(m.primary_ip, m.ip_address) AS machine_ip
 		FROM domains d
 		LEFT JOIN machines m ON d.assigned_machine_id = m.id
@@ -50,18 +51,22 @@ func RunCheckAndPersist(db *database.DB, id uuid.UUID) (newStatus string, err er
 		MachineIP:          row.MachineIP,
 		ExpectedHTTPStatus: row.HealthCheckExpectedStatus,
 	}
-	newStatus = ComputeStatus(in)
-
-	if newStatus != row.Status {
-		_, err = db.Exec(`
-			UPDATE domains SET status = $1, last_check_at = NOW(), updated_at = NOW()
-			WHERE id = $2
-		`, newStatus, id)
-		if err != nil {
-			return newStatus, err
-		}
-	} else {
-		_, err = db.Exec(`UPDATE domains SET last_check_at = NOW() WHERE id = $1`, id)
+	if row.HealthCheckPath != nil {
+		in.Path = *row.HealthCheckPath
 	}
+	res := Check(in)
+	newStatus = res.Status
+	var checkErr *string
+	if res.Error != "" {
+		checkErr = &res.Error
+	}
+
+	// updated_at only changes with the status (it feeds other change tracking).
+	_, err = db.Exec(`
+		UPDATE domains SET status = $1, last_check_at = NOW(),
+			last_check_status_code = $3, last_check_response_ms = $4, last_check_error = $5,
+			updated_at = CASE WHEN status IS DISTINCT FROM $1 THEN NOW() ELSE updated_at END
+		WHERE id = $2
+	`, newStatus, id, res.StatusCode, res.ResponseMS, checkErr)
 	return newStatus, err
 }

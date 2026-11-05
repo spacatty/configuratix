@@ -463,6 +463,11 @@ type DomainWithConfig struct {
 	LastJobStatus  *string    `db:"last_job_status" json:"last_job_status"`
 	ConfigUpdatedAt *time.Time `db:"config_updated_at" json:"config_updated_at"`
 	OutOfSync      bool       `db:"out_of_sync" json:"out_of_sync"`
+	// Health check details (migration 041)
+	HealthCheckPath     *string `db:"health_check_path" json:"health_check_path"`
+	LastCheckStatusCode *int    `db:"last_check_status_code" json:"last_check_status_code"`
+	LastCheckResponseMS *int    `db:"last_check_response_ms" json:"last_check_response_ms"`
+	LastCheckError      *string `db:"last_check_error" json:"last_check_error"`
 }
 
 // ListDomains returns all domains with their machine and config info

@@ -423,7 +423,8 @@ func (h *DNSHandler) ListDNSManagedDomains(w http.ResponseWriter, r *http.Reques
 		SELECT 
 			d.*,
 			a.name as dns_account_name,
-			a.provider as dns_account_provider
+			a.provider as dns_account_provider,
+			(SELECT COUNT(*)::int FROM dns_records r WHERE r.dns_domain_id = d.id) as records_count
 		FROM dns_managed_domains d
 		LEFT JOIN dns_accounts a ON d.dns_account_id = a.id
 		WHERE d.owner_id = $1
@@ -458,7 +459,8 @@ func (h *DNSHandler) GetDNSManagedDomain(w http.ResponseWriter, r *http.Request)
 		SELECT 
 			d.*,
 			a.name as dns_account_name,
-			a.provider as dns_account_provider
+			a.provider as dns_account_provider,
+			(SELECT COUNT(*)::int FROM dns_records r WHERE r.dns_domain_id = d.id) as records_count
 		FROM dns_managed_domains d
 		LEFT JOIN dns_accounts a ON d.dns_account_id = a.id
 		WHERE d.id = $1 AND d.owner_id = $2

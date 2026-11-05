@@ -269,3 +269,54 @@ Rules:
 ### Other fixes
 - `PUT /api/machines/{id}/php` with no existing runtime now installs correctly. It used to try to read the request body a second time.
 - Job rows with a NULL `result_json`, `payload_json`, `status` or `created_at` scan correctly. `models.NullRawMessage` is a new type for nullable JSONB.
+
+## Follow-up 2: page-agent gaps
+
+### Passthrough endpoints return their jobs
+| endpoint | before | now |
+|---|---|---|
+| `POST /api/dns-domains/{domainId}/l7-certificates/issue` | `{"status":"queued"}` | `202 {"status":"queued","jobs":[JobCreated…],"errors":["machine <id>: …"]}` |
+| `POST /api/dns/passthrough/{poolId}/apply-nginx[?wildcard=true]` | `{"status":"applied"}` | `202 {"status":"queued","jobs":[…],"errors":[…]}` |
+| `POST /api/dns/passthrough/nginx/{machineId}/apply` | `{"status":"applied"}` | `202 {"status":"queued","job":JobCreated,"jobs":[JobCreated]}`. Now requires manage rights on the machine. |
+
+Every job here is a `passthrough_apply` job (`Apply DNS passthrough · <machine>`), with `created_by` set to the caller.
+
+### Bulk assign
+`POST /api/domains/bulk/assign` now returns `{"ok":N,"errors":[{"id","error"}],"jobs":[JobCreated…]}`. `jobs` holds every remove, apply and landing job that was created.
+
+### Domain health details (migration 041)
+New columns on domains: `health_check_path`, `last_check_status_code`, `last_check_response_ms`, `last_check_error`.
+
+Domain list and detail responses add:
+```json
+"health_check_path": "/healthz" | null,
+"last_check_status_code": 200 | null,
+"last_check_response_ms": 143 | null,
+"last_check_error": "DNS lookup failed: …" | null
+```
+- `last_check_status_code` and `last_check_response_ms` describe the probe that got an HTTP response (HTTPS first, then HTTP). Both are null when there was no response, and `last_check_error` then says why.
+- The checker requests `https://<fqdn><health_check_path>`; a null path means `/`.
+- Each check now writes these fields. `updated_at` changes only when the health status changes.
+
+`PUT /api/domains/{id}/health-check` body:
+- `{"expected_http_status": 100-599 | 0, "path"?: "/healthz"}`.
+- `expected_http_status: 0` keeps the current value.
+- `path` omitted leaves the path unchanged; `""` or `"/"` resets it to `/`.
+- The path must start with `/`, contain no whitespace or control characters, and be at most 512 characters; otherwise `400`. Sending neither field returns `400`.
+
+### DNS managed domains
+`GET /api/dns-domains` and `GET /api/dns-domains/{id}` add `"records_count": <int>` (the number of rows in `dns_records`).
+
+### Security bans
+- `GET /api/security/bans`: `page_size` is now clamped to the range 1–500. Values above 500 become 500 instead of silently becoming 50. The response shape is unchanged, and `page_size` in the response reports the value actually used.
+- **New:** `GET /api/security/bans/export?format=csv|txt&active_only=true&search=&reason=&machine_id=` streams every matching row, with no paging and the same visibility rules as the list. It returns a file via `Content-Disposition: attachment; filename="bans-<ts>.<fmt>"`.
+  - csv: the columns are `ip_address,reason,source_machine,banned_at,expires_at,is_active,created_by` (timestamps in RFC3339).
+  - txt: one IP per line, with `/32` and `/128` stripped.
+  - Any other format returns `400`.
+
+### api.ts
+- New type `PassthroughJobsResponse`. `issueDomainL7Certificates` and `regeneratePoolConfigs` now return it.
+- New method `applyMachinePassthroughNginx(machineId)`.
+- `updateDomainHealthCheck(id, expectedStatus, path?)` takes an optional path.
+- New method `exportSecurityBans(params)`, which returns a `Blob`.
+- New optional fields: `Domain.health_check_path`, `last_check_response_ms`, `last_check_error`; `DNSManagedDomain.records_count`.

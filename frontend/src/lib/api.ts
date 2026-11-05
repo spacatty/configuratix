@@ -521,6 +521,12 @@ export interface Domain {
   out_of_sync?: boolean | null;
   /** Last health-check HTTP response code, when the backend reports it. */
   last_check_status_code?: number | null;
+  /** Response time of the last successful health probe (ms). */
+  last_check_response_ms?: number | null;
+  /** Why the last probe got no HTTP response (DNS/connection error). */
+  last_check_error?: string | null;
+  /** Custom health check path (null = "/"). */
+  health_check_path?: string | null;
 }
 
 /** Job references a domain mutation may return (assign / apply / bulk-assign). */
@@ -571,6 +577,18 @@ export interface DNSManagedDomain {
   updated_at: string;
   dns_account_name?: string | null;
   dns_account_provider?: string | null;
+  /** Number of DNS records stored for this domain (list + detail). */
+  records_count?: number;
+}
+
+/** Response of endpoints that queue passthrough nginx jobs (pool regenerate, L7 issue, machine apply). */
+export interface PassthroughJobsResponse {
+  status: "queued";
+  jobs: JobCreated[];
+  /** Per-machine failures (job not created). */
+  errors?: string[];
+  /** Single-machine apply only. */
+  job?: JobCreated;
 }
 
 export interface DNSAccount {
@@ -1529,10 +1547,13 @@ class ApiClient {
     });
   }
 
-  async updateDomainHealthCheck(id: string, expectedHttpStatus: number): Promise<void> {
+  /** expectedHttpStatus 0 keeps the current value; path "" or "/" resets to "/", undefined leaves it unchanged. */
+  async updateDomainHealthCheck(id: string, expectedHttpStatus: number, path?: string): Promise<void> {
+    const body: Record<string, unknown> = { expected_http_status: expectedHttpStatus };
+    if (path !== undefined) body.path = path;
     await this.request(`/api/domains/${id}/health-check`, {
       method: "PUT",
-      body: JSON.stringify({ expected_http_status: expectedHttpStatus }),
+      body: JSON.stringify(body),
     });
   }
 
@@ -1764,7 +1785,7 @@ class ApiClient {
     return this.request(`/api/dns-domains/${domainId}/l7-certificates`);
   }
 
-  async issueDomainL7Certificates(domainId: string): Promise<{ status: string }> {
+  async issueDomainL7Certificates(domainId: string): Promise<PassthroughJobsResponse> {
     return this.request(`/api/dns-domains/${domainId}/l7-certificates/issue`, {
       method: "POST",
     });
@@ -1839,8 +1860,13 @@ class ApiClient {
   }
 
   // Regenerate nginx passthrough configs for all pool members
-  async regeneratePoolConfigs(poolId: string, isWildcard: boolean): Promise<void> {
+  async regeneratePoolConfigs(poolId: string, isWildcard: boolean): Promise<PassthroughJobsResponse> {
     return this.request(`/api/dns/passthrough/${poolId}/apply-nginx?wildcard=${isWildcard}`, { method: "POST" });
+  }
+
+  /** Push the generated passthrough nginx config to one machine (needs manage rights). */
+  async applyMachinePassthroughNginx(machineId: string): Promise<PassthroughJobsResponse> {
+    return this.request(`/api/dns/passthrough/nginx/${encodeURIComponent(machineId)}/apply`, { method: "POST" });
   }
 
   // Nginx Configs
@@ -2136,6 +2162,28 @@ class ApiClient {
     if (params?.active_only) searchParams.set("active_only", "true");
     const query = searchParams.toString();
     return this.request(`/api/security/bans${query ? "?" + query : ""}`);
+  }
+
+  /** Download all bans matching the filters (streamed; no page limit). csv or txt (one IP per line). */
+  async exportSecurityBans(params: {
+    format?: "csv" | "txt";
+    active_only?: boolean;
+    search?: string;
+    reason?: string;
+    machine_id?: string;
+  } = {}): Promise<Blob> {
+    const qs = new URLSearchParams({ format: params.format ?? "csv" });
+    if (params.active_only) qs.set("active_only", "true");
+    if (params.search) qs.set("search", params.search);
+    if (params.reason) qs.set("reason", params.reason);
+    if (params.machine_id) qs.set("machine_id", params.machine_id);
+    const headers: Record<string, string> = {};
+    if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+    const response = await fetch(`${this.baseUrl}/api/security/bans/export?${qs.toString()}`, { headers });
+    if (!response.ok) {
+      throw new Error((await response.text()) || response.statusText || "Export failed");
+    }
+    return response.blob();
   }
 
   async createSecurityBan(data: CreateBanRequest): Promise<SecurityIPBan> {

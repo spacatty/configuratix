@@ -23,4 +23,9 @@ type Domain struct {
 	LastJobID      *uuid.UUID `db:"last_job_id" json:"last_job_id"`
 	LastApplyError *string    `db:"last_apply_error" json:"last_apply_error"`
 	LastAppliedAt  *time.Time `db:"last_applied_at" json:"last_applied_at"`
+	// Health check details (migration 041)
+	HealthCheckPath     *string `db:"health_check_path" json:"health_check_path"`
+	LastCheckStatusCode *int    `db:"last_check_status_code" json:"last_check_status_code"`
+	LastCheckResponseMS *int    `db:"last_check_response_ms" json:"last_check_response_ms"`
+	LastCheckError      *string `db:"last_check_error" json:"last_check_error"`
 }

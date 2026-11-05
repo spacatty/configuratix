@@ -43,6 +43,7 @@ type DNSManagedDomainWithAccount struct {
 	DNSManagedDomain
 	DNSAccountName     *string `db:"dns_account_name" json:"dns_account_name"`
 	DNSAccountProvider *string `db:"dns_account_provider" json:"dns_account_provider"`
+	RecordsCount       int     `db:"records_count" json:"records_count"`
 }
 
 // DNSRecord represents a DNS record stored in our database

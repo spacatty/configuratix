@@ -737,7 +737,8 @@ func redactLogs(logs string, secrets []string) string {
 			logs = strings.ReplaceAll(logs, s, redactedMarker)
 		}
 	}
-	return logs
+	// Commands are echoed into logs ("$ cmd"): mask inline secret assignments too.
+	return sensitiveAssignRe.ReplaceAllString(logs, "${1}"+redactedMarker)
 }
 
 func derefStr(s *string) string {

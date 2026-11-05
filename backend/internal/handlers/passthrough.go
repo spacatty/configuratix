@@ -13,6 +13,7 @@ import (
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/database"
 	"configuratix/backend/internal/dns"
+	"configuratix/backend/internal/jobs"
 	"configuratix/backend/internal/models"
 
 	"github.com/google/uuid"
@@ -1613,14 +1614,15 @@ func (h *PassthroughHandler) TriggerL7CertificateIssue(w http.ResponseWriter, r 
 		return
 	}
 
+	meta := PassthroughJobMeta{CreatedBy: &userID}
+	var created []*models.Job
+	errs := []string{}
 	for _, poolID := range poolIDs {
-		if err := h.nginx.ApplyToAllPoolMembers(poolID, false); err != nil {
-			log.Printf("Failed to trigger L7 issuance for pool %s: %v", poolID, err)
-		}
+		j, e := h.nginx.ApplyToAllPoolMembersJobs(poolID, false, meta)
+		created = append(created, j...)
+		errs = append(errs, e...)
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"status": "queued", "jobs": jobsResponse(created), "errors": errs})
 }
 
 // GetNginxConfig returns the generated nginx passthrough config for a machine
@@ -1654,14 +1656,17 @@ func (h *PassthroughHandler) ApplyNginxConfig(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if err := h.nginx.ApplyToMachine(machineID); err != nil {
-		log.Printf("Failed to apply nginx config: %v", err)
-		http.Error(w, "Failed to apply config", http.StatusInternalServerError)
+	if !canManageMachineID(h.db, r, machineID) {
+		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "applied"})
+	job, err := h.nginx.ApplyToMachineJob(machineID, PassthroughJobMeta{CreatedBy: jobs.UserID(r)})
+	if err != nil {
+		log.Printf("Failed to apply nginx config: %v", err)
+		http.Error(w, "Failed to apply config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"status": "queued", "job": jobCreatedResponse(job), "jobs": jobsResponse([]*models.Job{job})})
 }
 
 // ApplyPoolNginxConfigs triggers nginx config deployment to all pool members
@@ -1674,12 +1679,9 @@ func (h *PassthroughHandler) ApplyPoolNginxConfigs(w http.ResponseWriter, r *htt
 
 	isWildcard := r.URL.Query().Get("wildcard") == "true"
 
-	if err := h.nginx.ApplyToAllPoolMembers(poolID, isWildcard); err != nil {
-		log.Printf("Failed to apply nginx configs: %v", err)
-		http.Error(w, "Failed to apply configs", http.StatusInternalServerError)
-		return
+	created, errs := h.nginx.ApplyToAllPoolMembersJobs(poolID, isWildcard, PassthroughJobMeta{CreatedBy: jobs.UserID(r)})
+	if errs == nil {
+		errs = []string{}
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "applied"})
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"status": "queued", "jobs": jobsResponse(created), "errors": errs})
 }
