@@ -4,7 +4,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/format";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { toneBg, toneText, usageTone } from "./utils";
+import { toneText, usageTone, type UsageTone } from "./utils";
 
 /** Compact "used/total" for table cells, e.g. 3.3/7.8 GB. */
 function usedOfTotal(used: number | null | undefined, total: number | null | undefined): string | null {
@@ -15,52 +15,6 @@ function usedOfTotal(used: number | null | undefined, total: number | null | und
   const u = used / div;
   // "3.2/7.8G": the unit initial keeps the column narrow.
   return `${u >= 100 ? Math.round(u) : u.toFixed(1)}/${full.replace(/\s*([KMGT])B$/, "$1")}`;
-}
-
-/**
- * One table cell per resource: value · slim bar · used/total.
- * `stale` (machine not reporting) greys everything out: last known values, not live load.
- */
-export function UsageCell({
-  value,
-  used,
-  total,
-  label,
-  stale,
-  lastSeen,
-}: {
-  value: number | null;
-  used?: number | null;
-  total?: number | null;
-  label: string;
-  stale?: boolean;
-  lastSeen?: string | null;
-}) {
-  if (value == null) return <span className="text-xs text-subtle-foreground">—</span>;
-  const tone = stale ? "muted" : usageTone(value);
-  const amount = usedOfTotal(used, total);
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div className={cn("flex items-center gap-1.5 whitespace-nowrap", stale && "opacity-55")}>
-          <span className={cn("font-data w-9 shrink-0 text-right text-[12.5px] tabular-nums", stale ? "text-muted-foreground" : toneText[tone])}>
-            {Math.round(value)}%
-          </span>
-          <div className="relative h-1 w-10 shrink-0 overflow-hidden rounded-full bg-white/[0.07]">
-            <div
-              className={cn("absolute inset-y-0 left-0 rounded-full transition-[width] duration-500", stale ? "bg-muted-foreground/50" : toneBg[tone])}
-              style={{ width: `${Math.max(2, Math.min(100, value))}%` }}
-            />
-          </div>
-          {amount && <span className="font-data hidden text-[11px] text-subtle-foreground 2xl:inline">{amount}</span>}
-        </div>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="font-data text-[11px]">
-        {label} {value.toFixed(1)}%{amount ? ` · ${amount}` : ""}
-        {stale && <div className="font-sans text-muted-foreground">Last reported {lastSeen ? new Date(lastSeen).toLocaleString() : "unknown"} · machine not reporting</div>}
-      </TooltipContent>
-    </Tooltip>
-  );
 }
 
 /** Ring gauge for the detail overview. */
@@ -123,19 +77,6 @@ export function RingGauge({
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Resource display variants (machines table). Pick one, then delete the rest. */
-/* -------------------------------------------------------------------------- */
-
-export type ResourceStyle = "compact" | "numbers" | "meters" | "load";
-
-export const RESOURCE_STYLES: { value: ResourceStyle; label: string; hint: string }[] = [
-  { value: "compact", label: "Compact", hint: "Value, slim bar, used/total on wide screens" },
-  { value: "numbers", label: "Numbers", hint: "Plain percentages, colour only when high" },
-  { value: "meters", label: "Meters", hint: "Wide labelled bars with used/total" },
-  { value: "load", label: "Load", hint: "One column of three small gauges" },
-];
-
 type ResourceProps = {
   label: string;
   value: number | null;
@@ -160,82 +101,31 @@ function ResourceTooltip({ label, value, used, total, stale, lastSeen }: Resourc
   );
 }
 
-/** Variant "numbers": just the percentage; neutral unless it needs attention. */
-export function NumberCell(p: ResourceProps) {
-  if (p.value == null) return <span className="text-xs text-subtle-foreground">—</span>;
-  const tone = usageTone(p.value);
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={cn(
-            "font-data text-[13px] tabular-nums",
-            p.stale ? "text-subtle-foreground" : tone === "warning" || tone === "destructive" ? cn(toneText[tone], "font-semibold") : "text-foreground"
-          )}
-        >
-          {Math.round(p.value)}
-          <span className="text-[11px] text-subtle-foreground">%</span>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="font-data text-[11px]">
-        <ResourceTooltip {...p} />
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-/** Variant "meters": wide bar, value on the bar's right, used/total underneath. */
-export function MeterCell(p: ResourceProps) {
-  if (p.value == null) return <span className="text-xs text-subtle-foreground">—</span>;
-  const tone = p.stale ? "muted" : usageTone(p.value);
-  const amount = usedOfTotal(p.used, p.total);
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div className={cn("w-[120px] space-y-1", p.stale && "opacity-55")}>
-          <div className="flex items-center gap-2">
-            <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.07]">
-              <div
-                className={cn("absolute inset-y-0 left-0 rounded-full transition-[width] duration-500", p.stale ? "bg-muted-foreground/50" : toneBg[tone])}
-                style={{ width: `${Math.max(2, Math.min(100, p.value))}%` }}
-              />
-            </div>
-            <span className={cn("font-data w-8 text-right text-[12px] tabular-nums", p.stale ? "text-muted-foreground" : toneText[tone])}>
-              {Math.round(p.value)}%
-            </span>
-          </div>
-          {amount && <div className="font-data text-[10.5px] leading-none text-subtle-foreground">{amount}</div>}
-        </div>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="font-data text-[11px]">
-        <ResourceTooltip {...p} />
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-/** Variant "load": CPU / memory / disk as three small vertical gauges in one cell. */
+/**
+ * CPU / memory / disk as three small vertical gauges in one cell.
+ * Machines that stopped reporting keep their colours (last known load), dimmed, never grey.
+ */
 export function LoadCell({ items, stale, lastSeen }: { items: ResourceProps[]; stale?: boolean; lastSeen?: string | null }) {
-  if (items.every((i) => i.value == null)) return <span className="text-xs text-subtle-foreground">—</span>;
+  if (items.every((i) => i.value == null)) return <span className="text-xs text-muted-foreground">—</span>;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div className={cn("flex items-end gap-2.5", stale && "opacity-55")}>
+        <div className={cn("flex items-end gap-2.5", stale && "opacity-70")}>
           {items.map((i) => {
-            const tone = stale ? "muted" : usageTone(i.value);
+            const tone = usageTone(i.value);
             return (
               <div key={i.label} className="flex items-end gap-1">
-                <div className="relative h-5 w-1.5 overflow-hidden rounded-full bg-white/[0.07]">
+                <div className={cn("relative h-5 w-1.5 overflow-hidden rounded-full", toneTrack[tone])}>
                   {i.value != null && (
                     <div
-                      className={cn("absolute inset-x-0 bottom-0 rounded-full transition-[height] duration-500", stale ? "bg-muted-foreground/50" : toneBg[tone])}
-                      style={{ height: `${Math.max(6, Math.min(100, i.value))}%` }}
+                      className={cn("absolute inset-x-0 bottom-0 rounded-full transition-[height] duration-500", toneFill[tone])}
+                      style={{ height: `${Math.max(8, Math.min(100, i.value))}%` }}
                     />
                   )}
                 </div>
                 <div className="flex flex-col leading-none">
-                  <span className="text-[9.5px] text-subtle-foreground uppercase">{i.label.slice(0, 3)}</span>
-                  <span className={cn("font-data text-[11.5px] tabular-nums", stale ? "text-muted-foreground" : toneText[tone])}>
+                  <span className="text-[9.5px] font-medium tracking-wide text-muted-foreground uppercase">{SHORT[i.label] ?? i.label}</span>
+                  <span className={cn("font-data text-[12px] tabular-nums", toneValue[tone])}>
                     {i.value == null ? "—" : Math.round(i.value)}
                   </span>
                 </div>
@@ -259,3 +149,25 @@ export function LoadCell({ items, stale, lastSeen }: { items: ResourceProps[]; s
     </Tooltip>
   );
 }
+
+const SHORT: Record<string, string> = { CPU: "CPU", Memory: "MEM", Disk: "DSK" };
+
+// Coloured track + fill per load level (no neutral greys).
+const toneTrack: Record<UsageTone, string> = {
+  success: "bg-success/15",
+  warning: "bg-warning/15",
+  destructive: "bg-destructive/15",
+  muted: "bg-info/12",
+};
+const toneFill: Record<UsageTone, string> = {
+  success: "bg-success",
+  warning: "bg-warning",
+  destructive: "bg-destructive",
+  muted: "bg-info",
+};
+const toneValue: Record<UsageTone, string> = {
+  success: "text-success",
+  warning: "text-warning",
+  destructive: "text-destructive",
+  muted: "text-info",
+};

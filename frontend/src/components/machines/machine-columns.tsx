@@ -21,7 +21,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { RelativeTime, StatusDot, getStatusMeta, machineDisplayName, machineIp } from "@/components/app";
 import { GroupChips } from "./group-chips";
-import { LoadCell, MeterCell, NumberCell, UsageCell, type ResourceStyle } from "./resource-meter";
+import { LoadCell } from "./resource-meter";
 import { cpuPct, diskPct, groupRefs, isAgentOutdated, isAgentUpdating, liveness, memPct, LIVENESS_LABEL, type FleetMachine } from "./utils";
 
 export interface MachineColumnHandlers {
@@ -30,7 +30,6 @@ export interface MachineColumnHandlers {
   onUpdateAgent: (m: FleetMachine) => void;
   onAssignGroups: (m: FleetMachine) => void;
   onDelete: (m: FleetMachine) => void;
-  resourceStyle?: ResourceStyle;
 }
 
 export function agentFacet(m: FleetMachine, latest?: string | null): string {
@@ -127,35 +126,21 @@ function resourceProps(m: FleetMachine) {
   ] as const;
 }
 
-/** CPU / memory / disk columns in the chosen display style ("load" folds them into one column). */
-function resourceColumns(style: ResourceStyle): ColumnDef<FleetMachine>[] {
-  if (style === "load") {
-    return [
-      {
-        id: "load",
-        accessorFn: (m) => Math.max(cpuPct(m) ?? -1, memPct(m) ?? -1, diskPct(m) ?? -1),
-        header: ({ column }) => <DataTableColumnHeader column={column} title="Load" />,
-        meta: { label: "Load (CPU / Mem / Disk)" },
-        sortDescFirst: true,
-        cell: ({ row }) => {
-          const items = [...resourceProps(row.original)];
-          return <LoadCell items={items} stale={items[0].stale} lastSeen={row.original.last_seen} />;
-        },
+/** CPU / memory / disk as one "Load" column of small gauges. */
+function resourceColumns(): ColumnDef<FleetMachine>[] {
+  return [
+    {
+      id: "load",
+      accessorFn: (m) => Math.max(cpuPct(m) ?? -1, memPct(m) ?? -1, diskPct(m) ?? -1),
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Load" />,
+      meta: { label: "Load (CPU / Mem / Disk)" },
+      sortDescFirst: true,
+      cell: ({ row }) => {
+        const items = [...resourceProps(row.original)];
+        return <LoadCell items={items} stale={items[0].stale} lastSeen={row.original.last_seen} />;
       },
-    ];
-  }
-  const Cell = style === "numbers" ? NumberCell : style === "meters" ? MeterCell : UsageCell;
-  const align = style === "numbers" ? "right" : undefined;
-  return (["cpu", "memory", "disk"] as const).map((key, i) => ({
-    id: key,
-    accessorFn: (m: FleetMachine) => (key === "cpu" ? cpuPct(m) : key === "memory" ? memPct(m) : diskPct(m)) ?? -1,
-    header: ({ column }) => <DataTableColumnHeader column={column} title={["CPU", "Memory", "Disk"][i]} align={align} />,
-    meta: { label: ["CPU", "Memory", "Disk"][i], align },
-    sortDescFirst: true,
-    cell: ({ row }) => {
-      return <Cell {...resourceProps(row.original)[i]} />;
     },
-  }));
+  ];
 }
 
 export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMachine>[] {
@@ -240,7 +225,7 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       enableSorting: false,
       cell: ({ row }) => <GroupChips groups={machineGroups(row.original, h.groupsByMachine)} />,
     },
-    ...resourceColumns(h.resourceStyle ?? "compact"),
+    ...resourceColumns(),
     {
       id: "domains",
       accessorFn: (m) => m.assigned_domains_count ?? 0,
