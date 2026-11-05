@@ -21,7 +21,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { RelativeTime, StatusDot, getStatusMeta, machineDisplayName, machineIp } from "@/components/app";
 import { GroupChips } from "./group-chips";
-import { UsageCell } from "./resource-meter";
+import { LoadCell, MeterCell, NumberCell, UsageCell, type ResourceStyle } from "./resource-meter";
 import { cpuPct, diskPct, groupRefs, isAgentOutdated, isAgentUpdating, liveness, memPct, LIVENESS_LABEL, type FleetMachine } from "./utils";
 
 export interface MachineColumnHandlers {
@@ -30,6 +30,7 @@ export interface MachineColumnHandlers {
   onUpdateAgent: (m: FleetMachine) => void;
   onAssignGroups: (m: FleetMachine) => void;
   onDelete: (m: FleetMachine) => void;
+  resourceStyle?: ResourceStyle;
 }
 
 export function agentFacet(m: FleetMachine, latest?: string | null): string {
@@ -117,6 +118,46 @@ function AgentCell({ m, latest }: { m: FleetMachine; latest?: string | null }) {
   );
 }
 
+function resourceProps(m: FleetMachine) {
+  const stale = liveness(m) !== "online";
+  return [
+    { label: "CPU", value: cpuPct(m), stale, lastSeen: m.last_seen },
+    { label: "Memory", value: memPct(m), used: m.memory_used, total: m.memory_total, stale, lastSeen: m.last_seen },
+    { label: "Disk", value: diskPct(m), used: m.disk_used, total: m.disk_total, stale, lastSeen: m.last_seen },
+  ] as const;
+}
+
+/** CPU / memory / disk columns in the chosen display style ("load" folds them into one column). */
+function resourceColumns(style: ResourceStyle): ColumnDef<FleetMachine>[] {
+  if (style === "load") {
+    return [
+      {
+        id: "load",
+        accessorFn: (m) => Math.max(cpuPct(m) ?? -1, memPct(m) ?? -1, diskPct(m) ?? -1),
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Load" />,
+        meta: { label: "Load (CPU / Mem / Disk)" },
+        sortDescFirst: true,
+        cell: ({ row }) => {
+          const items = [...resourceProps(row.original)];
+          return <LoadCell items={items} stale={items[0].stale} lastSeen={row.original.last_seen} />;
+        },
+      },
+    ];
+  }
+  const Cell = style === "numbers" ? NumberCell : style === "meters" ? MeterCell : UsageCell;
+  const align = style === "numbers" ? "right" : undefined;
+  return (["cpu", "memory", "disk"] as const).map((key, i) => ({
+    id: key,
+    accessorFn: (m: FleetMachine) => (key === "cpu" ? cpuPct(m) : key === "memory" ? memPct(m) : diskPct(m)) ?? -1,
+    header: ({ column }) => <DataTableColumnHeader column={column} title={["CPU", "Memory", "Disk"][i]} align={align} />,
+    meta: { label: ["CPU", "Memory", "Disk"][i], align },
+    sortDescFirst: true,
+    cell: ({ row }) => {
+      return <Cell {...resourceProps(row.original)[i]} />;
+    },
+  }));
+}
+
 export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMachine>[] {
   return [
     {
@@ -199,50 +240,7 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       enableSorting: false,
       cell: ({ row }) => <GroupChips groups={machineGroups(row.original, h.groupsByMachine)} />,
     },
-    {
-      id: "cpu",
-      accessorFn: (m) => cpuPct(m) ?? -1,
-      header: ({ column }) => <DataTableColumnHeader column={column} title="CPU" />,
-      meta: { label: "CPU" },
-      sortDescFirst: true,
-      cell: ({ row }) => (
-        <UsageCell label="CPU" value={cpuPct(row.original)} stale={liveness(row.original) !== "online"} lastSeen={row.original.last_seen} />
-      ),
-    },
-    {
-      id: "memory",
-      accessorFn: (m) => memPct(m) ?? -1,
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Memory" />,
-      meta: { label: "Memory" },
-      sortDescFirst: true,
-      cell: ({ row }) => (
-        <UsageCell
-          label="Memory"
-          value={memPct(row.original)}
-          used={row.original.memory_used}
-          total={row.original.memory_total}
-          stale={liveness(row.original) !== "online"}
-          lastSeen={row.original.last_seen}
-        />
-      ),
-    },
-    {
-      id: "disk",
-      accessorFn: (m) => diskPct(m) ?? -1,
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Disk" />,
-      meta: { label: "Disk" },
-      sortDescFirst: true,
-      cell: ({ row }) => (
-        <UsageCell
-          label="Disk"
-          value={diskPct(row.original)}
-          used={row.original.disk_used}
-          total={row.original.disk_total}
-          stale={liveness(row.original) !== "online"}
-          lastSeen={row.original.last_seen}
-        />
-      ),
-    },
+    ...resourceColumns(h.resourceStyle ?? "compact"),
     {
       id: "domains",
       accessorFn: (m) => m.assigned_domains_count ?? 0,

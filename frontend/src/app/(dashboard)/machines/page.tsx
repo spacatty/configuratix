@@ -10,6 +10,8 @@ import { api, type Machine, type MachineGroupMember, type MachineGroupWithCount 
 import { Button } from "@/components/ui/button";
 import { DataTable } from "@/components/ui/data-table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { RESOURCE_STYLES, type ResourceStyle } from "@/components/machines/resource-meter";
 import {
   EmptyState,
   ErrorState,
@@ -118,6 +120,23 @@ function MachinesView() {
   const [groupsOpen, setGroupsOpen] = React.useState(false);
   const [addOpen, setAddOpen] = React.useState(false);
 
+  // Temporary: resource display variants to compare on real data.
+  const [resourceStyle, setResourceStyle] = React.useState<ResourceStyle>(() => {
+    try {
+      const v = localStorage.getItem("cfx.machines.resourceStyle") as ResourceStyle | null;
+      return v && RESOURCE_STYLES.some((r) => r.value === v) ? v : "compact";
+    } catch {
+      return "compact";
+    }
+  });
+  const chooseResourceStyle = (v: string) => {
+    if (!v) return;
+    setResourceStyle(v as ResourceStyle);
+    try {
+      localStorage.setItem("cfx.machines.resourceStyle", v);
+    } catch {}
+  };
+
   const handlers: MachineColumnHandlers = React.useMemo(
     () => ({
       latestAgent,
@@ -125,8 +144,9 @@ function MachinesView() {
       onUpdateAgent: (m) => actions.updateAgent(m),
       onAssignGroups: (m) => setAssignFor([m]),
       onDelete: (m) => void actions.deleteMachine(m),
+      resourceStyle,
     }),
-    [latestAgent, groupsByMachine, actions]
+    [latestAgent, groupsByMachine, actions, resourceStyle]
   );
   const columns = React.useMemo(() => buildMachineColumns(handlers), [handlers]);
 
@@ -271,6 +291,25 @@ function MachinesView() {
           }}
           toolbarActions={
             <>
+              <ToggleGroup
+                type="single"
+                size="sm"
+                variant="outline"
+                value={resourceStyle}
+                onValueChange={chooseResourceStyle}
+                aria-label="Resource display style"
+              >
+                {RESOURCE_STYLES.map((r) => (
+                  <Tooltip key={r.value}>
+                    <TooltipTrigger asChild>
+                      <ToggleGroupItem value={r.value} className="h-8 px-2.5 text-xs">
+                        {r.label}
+                      </ToggleGroupItem>
+                    </TooltipTrigger>
+                    <TooltipContent>{r.hint}</TooltipContent>
+                  </Tooltip>
+                ))}
+              </ToggleGroup>
               {outdatedMachines.length > 0 && (
                 <Tooltip>
                   <TooltipTrigger asChild>
