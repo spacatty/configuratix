@@ -218,15 +218,6 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       enableHiding: false,
     },
     {
-      id: "groups",
-      accessorFn: (m) => machineGroups(m, h.groupsByMachine).map((g) => g.name),
-      header: "Groups",
-      meta: { label: "Groups", width: "fit" },
-      enableSorting: false,
-      cell: ({ row }) => <GroupChips groups={machineGroups(row.original, h.groupsByMachine)} onEdit={() => h.onAssignGroups(row.original)} />,
-    },
-    ...resourceColumns(),
-    {
       id: "domains",
       accessorFn: (m) => m.assigned_domains_count ?? 0,
       header: ({ column }) => <DataTableColumnHeader column={column} title="Domains" />,
@@ -234,12 +225,29 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       sortDescFirst: true,
       cell: ({ row }) => <DomainsCell m={row.original} />,
     },
+    ...resourceColumns(),
     {
       id: "agent_version",
       accessorFn: (m) => m.agent_version ?? "",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Agent" />,
       meta: { label: "Agent", width: "fit" },
       cell: ({ row }) => <AgentCell m={row.original} latest={h.latestAgent} />,
+    },
+    {
+      id: "groups",
+      accessorFn: (m) => machineGroups(m, h.groupsByMachine).map((g) => g.name),
+      header: "Groups",
+      meta: { label: "Groups", width: "fit" },
+      enableSorting: false,
+      cell: ({ row }) => <GroupChips groups={machineGroups(row.original, h.groupsByMachine)} onEdit={() => h.onAssignGroups(row.original)} />,
+    },
+    {
+      id: "created_at",
+      accessorFn: (m) => (m.created_at ? new Date(m.created_at).getTime() : 0),
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Added" align="right" />,
+      meta: { label: "Added", align: "right", width: "fit" },
+      sortDescFirst: true,
+      cell: ({ row }) => <RelativeTime date={row.original.created_at} className="text-xs text-muted-foreground" />,
     },
     {
       id: "last_seen",
@@ -338,7 +346,8 @@ function RowActions({ m, h }: { m: FleetMachine; h: MachineColumnHandlers }) {
   );
 }
 
-export const HIDDEN_FACET_COLUMNS = { status: false, project: false, agent: false, php: false };
+// Facet-only columns, plus "Last seen" (hidden by default; the status dot already shows liveness).
+export const HIDDEN_FACET_COLUMNS = { status: false, project: false, agent: false, php: false, last_seen: false };
 
 /** Sort helper for unknown statuses in the facet list. */
 export const STATUS_FACET_OPTIONS = (["online", "stale", "offline"] as const).map((s) => ({ value: s, label: getStatusMeta(s).label }));

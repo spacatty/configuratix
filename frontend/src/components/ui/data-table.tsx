@@ -195,6 +195,9 @@ export interface DataTableProps<TData, TValue> {
 /* Helpers                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/** Bump when default column orders change, so saved layouts reset to the new defaults once. */
+const LAYOUT_VERSION = "v2";
+
 type SavedLayout = {
   sorting?: SortingState;
   columnVisibility?: VisibilityState;
@@ -305,10 +308,10 @@ export function DataTable<TData, TValue>({
   const pathname = usePathname() ?? "";
   const storageKey = React.useMemo(() => {
     if (persistKey === false) return null;
-    if (persistKey) return `cfx.table:${persistKey}`;
+    if (persistKey) return `cfx.table:${LAYOUT_VERSION}:${persistKey}`;
     const route = pathname.replace(/\/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "/:id").replace(/\/\d+(?=\/|$)/g, "/:n");
     const ids = columns.map((c) => columnKey(c) ?? "").filter(Boolean).sort().join(",");
-    return `cfx.table:${route}:${ids}`;
+    return `cfx.table:${LAYOUT_VERSION}:${route}:${ids}`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [persistKey, pathname]);
   const saved = React.useMemo(() => loadLayout(storageKey), [storageKey]);
