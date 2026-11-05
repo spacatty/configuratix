@@ -105,8 +105,72 @@ function ResourceTooltip({ label, value, used, total, stale, lastSeen }: Resourc
  * CPU / memory / disk as three small vertical gauges in one cell.
  * Machines that stopped reporting keep their colours (last known load), dimmed, never grey.
  */
-export function LoadCell({ items, stale, lastSeen }: { items: ResourceProps[]; stale?: boolean; lastSeen?: string | null }) {
-  if (items.every((i) => i.value == null)) return <span className="text-xs text-muted-foreground">—</span>;
+export type AgentBadgeState = "current" | "outdated" | "updating" | "failed" | "none";
+
+export interface AgentBadgeInfo {
+  version: string | null;
+  state: AgentBadgeState;
+  /** Tooltip line, e.g. "Latest is 0.6.0". */
+  hint?: string;
+}
+
+const AGENT_TONE: Record<AgentBadgeState, { bar: string; text: string; label: string }> = {
+  current: { bar: "bg-success", text: "text-success", label: "Up to date" },
+  outdated: { bar: "bg-warning", text: "text-warning", label: "Outdated" },
+  updating: { bar: "bg-info animate-pulse", text: "text-info", label: "Updating" },
+  failed: { bar: "bg-destructive", text: "text-destructive", label: "Update failed" },
+  none: { bar: "bg-info/40", text: "text-muted-foreground", label: "Not enrolled" },
+};
+
+/** Agent version as a vertical badge matching the gauges. */
+function AgentBadge({ agent }: { agent: AgentBadgeInfo }) {
+  const t = AGENT_TONE[agent.state];
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="flex items-end gap-1 border-l border-border pl-2.5">
+          <div className={cn("h-5 w-1.5 rounded-full", t.bar)} />
+          <div className="flex flex-col leading-none">
+            <span className="text-[9.5px] font-medium tracking-wide text-muted-foreground uppercase">Agent</span>
+            <span className={cn("font-data text-[12px] tabular-nums", t.text)}>{agent.version ?? "—"}</span>
+          </div>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-[11px]">
+        <span className="font-medium">{t.label}</span>
+        {agent.version && <span className="font-data"> · v{agent.version}</span>}
+        {agent.hint && <div className="text-muted-foreground">{agent.hint}</div>}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+export function LoadCell({
+  items,
+  stale,
+  lastSeen,
+  agent,
+}: {
+  items: ResourceProps[];
+  stale?: boolean;
+  lastSeen?: string | null;
+  agent?: AgentBadgeInfo;
+}) {
+  const gauges = items.every((i) => i.value == null) ? (
+    <span className="text-xs text-muted-foreground">—</span>
+  ) : (
+    <LoadGauges items={items} stale={stale} lastSeen={lastSeen} />
+  );
+  if (!agent) return gauges;
+  return (
+    <div className="flex items-end gap-2.5">
+      {gauges}
+      <AgentBadge agent={agent} />
+    </div>
+  );
+}
+
+function LoadGauges({ items, stale, lastSeen }: { items: ResourceProps[]; stale?: boolean; lastSeen?: string | null }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>

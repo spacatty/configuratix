@@ -7,7 +7,6 @@ import { Copy, ExternalLink, MoreHorizontal, RefreshCw, Tags, TerminalSquare, Tr
 import { toast } from "sonner";
 import { copyToClipboard } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTableColumnHeader } from "@/components/ui/data-table";
 import {
@@ -21,7 +20,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { RelativeTime, StatusDot, getStatusMeta, machineDisplayName, machineIp } from "@/components/app";
 import { GroupChips } from "./group-chips";
-import { LoadCell } from "./resource-meter";
+import { LoadCell, type AgentBadgeInfo } from "./resource-meter";
 import { cpuPct, diskPct, groupRefs, isAgentOutdated, isAgentUpdating, liveness, memPct, LIVENESS_LABEL, type FleetMachine } from "./utils";
 
 export interface MachineColumnHandlers {
@@ -81,42 +80,6 @@ function DomainsCell({ m }: { m: FleetMachine }) {
   );
 }
 
-function AgentCell({ m, latest }: { m: FleetMachine; latest?: string | null }) {
-  if (!m.agent_version) return <span className="text-xs text-subtle-foreground">—</span>;
-  const updating = isAgentUpdating(m);
-  const outdated = !updating && isAgentOutdated(m, latest);
-  return (
-    <div className="flex items-center gap-1.5">
-      <span className="font-data text-[12px] text-muted-foreground">{m.agent_version}</span>
-      {updating ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Badge variant="info" className="gap-1">
-              <RefreshCw className="size-3 animate-spin" />
-              {m.agent_update_state}
-            </Badge>
-          </TooltipTrigger>
-          <TooltipContent>Updating to {m.agent_update_target_version ?? latest ?? "latest"}</TooltipContent>
-        </Tooltip>
-      ) : outdated ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Badge variant="warning">outdated</Badge>
-          </TooltipTrigger>
-          <TooltipContent>{latest ? `Latest is ${latest}` : "A newer agent is available"}</TooltipContent>
-        </Tooltip>
-      ) : m.agent_update_state === "failed" ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Badge variant="destructive">update failed</Badge>
-          </TooltipTrigger>
-          <TooltipContent className="max-w-xs">{m.agent_last_update_error ?? "Last update failed"}</TooltipContent>
-        </Tooltip>
-      ) : null}
-    </div>
-  );
-}
-
 function resourceProps(m: FleetMachine) {
   const stale = liveness(m) !== "online";
   return [
@@ -126,18 +89,32 @@ function resourceProps(m: FleetMachine) {
   ] as const;
 }
 
-/** CPU / memory / disk as one "Load" column of small gauges. */
-function resourceColumns(): ColumnDef<FleetMachine>[] {
+function agentBadge(m: FleetMachine, latest?: string | null): AgentBadgeInfo {
+  if (!m.agent_version) return { version: null, state: "none", hint: "No agent has reported yet" };
+  if (isAgentUpdating(m)) {
+    return { version: m.agent_version, state: "updating", hint: `Updating to ${m.agent_update_target_version ?? latest ?? "latest"} (${m.agent_update_state})` };
+  }
+  if (m.agent_update_state === "failed") {
+    return { version: m.agent_version, state: "failed", hint: m.agent_last_update_error ?? "Last update failed" };
+  }
+  if (isAgentOutdated(m, latest)) return { version: m.agent_version, state: "outdated", hint: latest ? `Latest is ${latest}` : "A newer agent is available" };
+  return { version: m.agent_version, state: "current" };
+}
+
+/** "System": CPU / memory / disk gauges plus the agent version badge in one column. */
+function resourceColumns(latest?: string | null): ColumnDef<FleetMachine>[] {
   return [
     {
-      id: "load",
+      id: "system",
       accessorFn: (m) => Math.max(cpuPct(m) ?? -1, memPct(m) ?? -1, diskPct(m) ?? -1),
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Load" />,
-      meta: { label: "Load (CPU / Mem / Disk)", width: "fit" },
+      header: ({ column }) => <DataTableColumnHeader column={column} title="System" />,
+      meta: { label: "System (load + agent)", width: "fit" },
       sortDescFirst: true,
       cell: ({ row }) => {
         const items = [...resourceProps(row.original)];
-        return <LoadCell items={items} stale={items[0].stale} lastSeen={row.original.last_seen} />;
+        return (
+          <LoadCell items={items} stale={items[0].stale} lastSeen={row.original.last_seen} agent={agentBadge(row.original, latest)} />
+        );
       },
     },
   ];
@@ -225,14 +202,7 @@ export function buildMachineColumns(h: MachineColumnHandlers): ColumnDef<FleetMa
       sortDescFirst: true,
       cell: ({ row }) => <DomainsCell m={row.original} />,
     },
-    ...resourceColumns(),
-    {
-      id: "agent_version",
-      accessorFn: (m) => m.agent_version ?? "",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Agent" />,
-      meta: { label: "Agent", width: "fit" },
-      cell: ({ row }) => <AgentCell m={row.original} latest={h.latestAgent} />,
-    },
+    ...resourceColumns(h.latestAgent),
     {
       id: "groups",
       accessorFn: (m) => machineGroups(m, h.groupsByMachine).map((g) => g.name),
