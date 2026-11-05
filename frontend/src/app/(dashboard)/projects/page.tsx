@@ -1,437 +1,352 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import * as React from "react";
 import { useRouter } from "next/navigation";
-import { ColumnDef } from "@tanstack/react-table";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import type { ColumnDef } from "@tanstack/react-table";
+import {
+  ExternalLink,
+  FolderKanban,
+  Link2,
+  LogIn,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Share2,
+  Trash2,
+} from "lucide-react";
+import { toast } from "sonner";
+
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { DataTable } from "@/components/ui/data-table";
-import { api, ProjectWithStats } from "@/lib/api";
-import { copyToClipboard } from "@/lib/clipboard";
-import { toast } from "sonner";
-import { 
-  Plus, 
-  FolderKanban, 
-  Server, 
-  Users,
-  MoreHorizontal,
-  ExternalLink,
-  Trash2,
-  Share2,
-  Copy
-} from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  EmptyState,
+  ErrorState,
+  Mono,
+  PageHeader,
+  RelativeTime,
+  StatCard,
+  StatStrip,
+  invalidatePickerCache,
+  useConfirm,
+  usePolling,
+} from "@/components/app";
+import { JoinProjectDialog, ProjectNameDialog, ShareProjectDialog } from "@/components/projects/project-dialogs";
+import { ProjectRoleBadge, baseProjectRole, inviteLink } from "@/components/projects/project-shared";
+import { api, type ProjectWithStats } from "@/lib/api";
+import { copyToClipboard } from "@/lib/clipboard";
+
+type Row = ProjectWithStats & { access: string; sharing: string };
 
 export default function ProjectsPage() {
   const router = useRouter();
-  const [projects, setProjects] = useState<ProjectWithStats[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [showJoinDialog, setShowJoinDialog] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [projectToDelete, setProjectToDelete] = useState<ProjectWithStats | null>(null);
-  const [projectName, setProjectName] = useState("");
-  const [inviteToken, setInviteToken] = useState("");
-  const [creating, setCreating] = useState(false);
+  const confirm = useConfirm();
+  const { data: me } = usePolling(() => api.getMe(), 0);
+  const { data, loading, error, refresh, refreshing, setData } = usePolling(() => api.listProjects(), 30000);
 
-  useEffect(() => {
-    loadProjects();
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [joinOpen, setJoinOpen] = React.useState(false);
+  const [renaming, setRenaming] = React.useState<ProjectWithStats | null>(null);
+  const [sharing, setSharing] = React.useState<ProjectWithStats | null>(null);
+
+  const rows: Row[] = React.useMemo(
+    () =>
+      (data ?? []).map((p) => {
+        const role = baseProjectRole(p, me);
+        return {
+          ...p,
+          access: role === "owner" ? "Owned by me" : role === "admin" ? "Admin access" : "Shared with me",
+          sharing: p.sharing_enabled ? "Sharing on" : "Private",
+        };
+      }),
+    [data, me]
+  );
+
+  const isSuper = me?.role === "superadmin";
+  const canManage = React.useCallback((p: ProjectWithStats) => !!me && (p.owner_id === me.id || isSuper), [me, isSuper]);
+
+  const totals = React.useMemo(() => {
+    const list = data ?? [];
+    const machines = list.reduce((a, p) => a + p.machine_count, 0);
+    const online = list.reduce((a, p) => a + p.online_machines, 0);
+    return {
+      projects: list.length,
+      owned: me ? list.filter((p) => p.owner_id === me.id).length : 0,
+      machines,
+      online,
+      shared: list.filter((p) => p.sharing_enabled).length,
+    };
+  }, [data, me]);
+
+  const copyInvite = React.useCallback(async (token: string) => {
+    if (await copyToClipboard(inviteLink(token))) toast.success("Invite link copied");
+    else toast.error("Couldn't access the clipboard");
   }, []);
 
-  const loadProjects = async () => {
-    try {
-      const data = await api.listProjects();
-      setProjects(data);
-    } catch (err) {
-      console.error("Failed to load projects:", err);
-      toast.error("Failed to load projects");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCreateProject = async () => {
-    if (!projectName.trim()) {
-      toast.error("Project name is required");
-      return;
-    }
-
-    setCreating(true);
-    try {
-      await api.createProject(projectName);
-      setShowCreateDialog(false);
-      setProjectName("");
-      loadProjects();
-      toast.success("Project created");
-    } catch (err) {
-      console.error("Failed to create project:", err);
-      toast.error("Failed to create project");
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const handleJoinProject = async () => {
-    if (!inviteToken.trim()) {
-      toast.error("Invite token is required");
-      return;
-    }
-
-    setCreating(true);
-    try {
-      const result = await api.requestJoinProject(inviteToken);
-      setShowJoinDialog(false);
-      setInviteToken("");
-      toast.success(`Requested to join "${result.project_name}". Waiting for approval.`);
-    } catch (err) {
-      console.error("Failed to join project:", err);
-      toast.error("Invalid or expired invite link");
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const openDeleteDialog = (project: ProjectWithStats) => {
-    setProjectToDelete(project);
-    setShowDeleteDialog(true);
-  };
-
-  const handleDeleteProject = async () => {
-    if (!projectToDelete) return;
-    try {
-      await api.deleteProject(projectToDelete.id);
-      setShowDeleteDialog(false);
-      setProjectToDelete(null);
-      loadProjects();
-      toast.success("Project deleted");
-    } catch (err) {
-      console.error("Failed to delete project:", err);
-      toast.error("Failed to delete project");
-    }
-  };
-
-
-  const toggleSharing = async (project: ProjectWithStats) => {
-    try {
-      const updated = await api.toggleProjectSharing(project.id, !project.sharing_enabled);
-      if (updated.sharing_enabled && updated.invite_token) {
-        const copied = await copyToClipboard(updated.invite_token);
-        if (copied) {
-          toast.success("Sharing enabled! Invite token copied to clipboard.");
-        } else {
-          toast.success("Sharing enabled! Token: " + updated.invite_token);
-        }
-      } else {
-        toast.success("Sharing disabled");
+  const deleteProject = React.useCallback(
+    async (p: ProjectWithStats) => {
+      const ok = await confirm({
+        title: `Delete project “${p.name}”?`,
+        description: "Members lose access. Machines are unlinked from the project but not deleted.",
+        details:
+          p.machine_count > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              <Mono>{p.machine_count}</Mono> machine{p.machine_count === 1 ? "" : "s"} will become unassigned.
+            </p>
+          ) : undefined,
+        destructive: true,
+        typeToConfirm: p.name,
+        confirmText: "Delete project",
+        onConfirm: () => api.deleteProject(p.id),
+      });
+      if (ok) {
+        toast.success("Project deleted");
+        setData((prev) => prev?.filter((x) => x.id !== p.id) ?? prev);
+        invalidatePickerCache("machines");
+        refresh();
       }
-      loadProjects();
-    } catch (err) {
-      console.error("Failed to toggle sharing:", err);
-      toast.error("Failed to toggle sharing");
-    }
-  };
+    },
+    [confirm, refresh, setData]
+  );
 
-  const copyInviteToken = async (token: string) => {
-    const copied = await copyToClipboard(token);
-    if (copied) {
-      toast.success("Invite token copied");
-    } else {
-      toast.error("Failed to copy. Token: " + token);
-    }
-  };
-
-  const columns: ColumnDef<ProjectWithStats>[] = [
-    {
-      accessorKey: "name",
-      header: "Project",
-      cell: ({ row }) => {
-        const project = row.original;
-        return (
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-blue-500/20 to-blue-500/5 flex items-center justify-center">
-              <FolderKanban className="h-5 w-5 text-blue-500" />
-            </div>
-            <div>
-              <a 
-                href={`/projects/${project.id}`}
-                className="font-medium hover:text-primary transition-colors cursor-pointer"
-              >
-                {project.name}
-              </a>
-              <div className="text-xs text-muted-foreground">
-                by {project.owner_name}
+  const columns: ColumnDef<Row>[] = React.useMemo(
+    () => [
+      {
+        accessorKey: "name",
+        header: "Project",
+        cell: ({ row }) => {
+          const p = row.original;
+          return (
+            <div className="flex min-w-0 items-center gap-2.5">
+              <FolderKanban className="size-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0">
+                <div className="truncate font-medium">{p.name}</div>
+                <div className="truncate text-xs text-muted-foreground">{p.owner_name || p.owner_email}</div>
               </div>
             </div>
-          </div>
-        );
+          );
+        },
       },
-    },
-    {
-      accessorKey: "machine_count",
-      header: "Machines",
-      cell: ({ row }) => {
-        const project = row.original;
-        return (
-          <div className="flex items-center gap-2">
-            <Server className="h-4 w-4 text-muted-foreground" />
-            <span>{project.machine_count}</span>
-            <span className="text-muted-foreground text-xs">
-              ({project.online_machines} online)
-            </span>
-          </div>
-        );
+      {
+        id: "role",
+        accessorFn: (p) => p.access,
+        header: "Your access",
+        cell: ({ row }) => <ProjectRoleBadge role={baseProjectRole(row.original, me)} />,
+        meta: { label: "Access" },
       },
-    },
-    {
-      accessorKey: "member_count",
-      header: "Members",
-      cell: ({ row }) => (
-        <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-muted-foreground" />
-          <span>{row.original.member_count + 1}</span>
-        </div>
-      ),
-    },
-    {
-      accessorKey: "sharing_enabled",
-      header: "Sharing",
-      cell: ({ row }) => {
-        const project = row.original;
-        return project.sharing_enabled ? (
-          <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
-            <Share2 className="h-3 w-3 mr-1" />
-            Enabled
-          </Badge>
-        ) : (
-          <Badge variant="secondary" className="text-xs">Disabled</Badge>
-        );
+      {
+        accessorKey: "machine_count",
+        header: "Machines",
+        cell: ({ row }) => {
+          const p = row.original;
+          if (p.machine_count === 0) return <span className="text-muted-foreground">0</span>;
+          const pct = (p.online_machines / p.machine_count) * 100;
+          return (
+            <div className="flex items-center gap-2.5">
+              <span className="font-data w-14 text-right">
+                {p.online_machines}
+                <span className="text-muted-foreground">/{p.machine_count}</span>
+              </span>
+              <Progress value={pct} size="sm" tone={pct === 100 ? "success" : pct === 0 ? "destructive" : "warning"} className="w-16" />
+            </div>
+          );
+        },
+        meta: { label: "Machines (online/total)" },
       },
-    },
-    {
-      accessorKey: "created_at",
-      header: "Created",
-      cell: ({ row }) => (
-        <span className="text-sm text-muted-foreground">
-          {new Date(row.original.created_at).toLocaleDateString()}
-        </span>
-      ),
-    },
-    {
-      id: "actions",
-      cell: ({ row }) => {
-        const project = row.original;
-        return (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="h-8 w-8 p-0">
-                <span className="sr-only">Open menu</span>
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Actions</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => router.push(`/projects/${project.id}`)}>
-                <ExternalLink className="mr-2 h-4 w-4" />
-                View Details
-              </DropdownMenuItem>
-              {project.sharing_enabled && project.invite_token && (
-                <DropdownMenuItem onClick={() => copyInviteToken(project.invite_token!)}>
-                  <Copy className="mr-2 h-4 w-4" />
-                  Copy Invite Token
+      {
+        accessorKey: "member_count",
+        header: "Members",
+        cell: ({ row }) => <span className="font-data">{row.original.member_count + 1}</span>,
+        meta: { align: "right" },
+      },
+      {
+        id: "sharing",
+        accessorFn: (p) => p.sharing,
+        header: "Sharing",
+        cell: ({ row }) =>
+          row.original.sharing_enabled ? (
+            <Badge variant="success">
+              <Share2 />
+              Invite link on
+            </Badge>
+          ) : (
+            <span className="text-xs text-muted-foreground">Private</span>
+          ),
+      },
+      {
+        accessorKey: "created_at",
+        header: "Created",
+        cell: ({ row }) => <RelativeTime date={row.original.created_at} className="text-muted-foreground" />,
+        meta: { align: "right" },
+      },
+      {
+        id: "actions",
+        enableHiding: false,
+        cell: ({ row }) => {
+          const p = row.original;
+          const manage = canManage(p);
+          return (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${p.name}`}>
+                  <MoreHorizontal />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onClick={() => router.push(`/projects/${p.id}`)}>
+                  <ExternalLink />
+                  Open
                 </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={() => toggleSharing(project)}>
-                <Share2 className="mr-2 h-4 w-4" />
-                {project.sharing_enabled ? "Disable Sharing" : "Enable Sharing"}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem 
-                className="text-destructive"
-                onClick={() => openDeleteDialog(project)}
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        );
+                {p.sharing_enabled && p.invite_token && (
+                  <DropdownMenuItem onClick={() => copyInvite(p.invite_token!)}>
+                    <Link2 />
+                    Copy invite link
+                  </DropdownMenuItem>
+                )}
+                {manage && (
+                  <>
+                    <DropdownMenuItem onClick={() => setSharing(p)}>
+                      <Share2 />
+                      Sharing…
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setRenaming(p)}>
+                      <Pencil />
+                      Rename…
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" onClick={() => deleteProject(p)}>
+                      <Trash2 />
+                      Delete…
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          );
+        },
+        meta: { align: "right" },
       },
-    },
-  ];
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" />
-      </div>
-    );
-  }
+    ],
+    [me, canManage, router, copyInvite, deleteProject]
+  );
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Projects</h1>
-          <p className="text-muted-foreground mt-1">
-            Organize machines into projects and collaborate with your team.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" onClick={() => setShowJoinDialog(true)}>
-            Join Project
-          </Button>
-          <Button onClick={() => setShowCreateDialog(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            New Project
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={FolderKanban}
+        title="Projects"
+        description="Group machines into projects and share access with your team."
+        actions={
+          <>
+            <Button variant="ghost" size="icon" onClick={refresh} disabled={refreshing} aria-label="Refresh">
+              <RefreshCw className={refreshing ? "animate-spin" : undefined} />
+            </Button>
+            <Button variant="outline" onClick={() => setJoinOpen(true)}>
+              <LogIn />
+              Join with invite
+            </Button>
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus />
+              New project
+            </Button>
+          </>
+        }
+      />
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Projects</CardTitle>
-            <FolderKanban className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{projects.length}</div>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Machines</CardTitle>
-            <Server className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {projects.reduce((acc, p) => acc + p.machine_count, 0)}
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50 bg-card/50">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Online Machines</CardTitle>
-            <Server className="h-4 w-4 text-green-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-500">
-              {projects.reduce((acc, p) => acc + p.online_machines, 0)}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      {error && !data ? (
+        <ErrorState title="Couldn't load projects" error={error} onRetry={refresh} />
+      ) : (
+        <>
+          <StatStrip>
+            <StatCard label="Projects" value={totals.projects} sub={`${totals.owned} owned by you`} loading={loading} />
+            <StatCard
+              label="Machines online"
+              value={totals.online}
+              suffix={`/ ${totals.machines}`}
+              progress={totals.machines ? (totals.online / totals.machines) * 100 : undefined}
+              progressTone="success"
+              loading={loading}
+            />
+            <StatCard label="Offline" value={totals.machines - totals.online} tone={totals.machines - totals.online > 0 ? "warning" : "default"} loading={loading} />
+            <StatCard label="Sharing enabled" value={totals.shared} sub="Projects with an active invite link" loading={loading} />
+          </StatStrip>
 
-      {/* Projects Table */}
-      <Card className="border-border/50 bg-card/50">
-        <CardHeader>
-          <CardTitle className="text-lg">Your Projects</CardTitle>
-          <CardDescription>
-            Projects you own or are a member of.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <DataTable 
-            columns={columns} 
-            data={projects}
-            searchKey="name"
-            searchPlaceholder="Search projects..."
+          <DataTable
+            columns={columns}
+            data={rows}
+            loading={loading}
+            getRowId={(p) => p.id}
+            searchKeys={["name", "owner_name", "owner_email"]}
+            searchPlaceholder="Search projects or owners…"
+            facets={[
+              { columnId: "role", title: "Access" },
+              { columnId: "sharing", title: "Sharing" },
+            ]}
+            onRowClick={(p) => router.push(`/projects/${p.id}`)}
+            initialState={{ sorting: [{ id: "created_at", desc: true }] }}
+            emptyState={
+              <EmptyState
+                icon={FolderKanban}
+                title="No projects yet"
+                description="Create a project to group machines, or join one with an invite link from a teammate."
+                action={
+                  <Button onClick={() => setCreateOpen(true)}>
+                    <Plus />
+                    New project
+                  </Button>
+                }
+                secondaryAction={
+                  <Button variant="outline" onClick={() => setJoinOpen(true)}>
+                    <LogIn />
+                    Join with invite
+                  </Button>
+                }
+              />
+            }
           />
-        </CardContent>
-      </Card>
+        </>
+      )}
 
-      {/* Create Project Dialog */}
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create New Project</DialogTitle>
-            <DialogDescription>
-              Create a project to organize your machines and collaborate with others.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="project-name">Project Name</Label>
-              <Input
-                id="project-name"
-                placeholder="e.g., Production Servers"
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleCreateProject} disabled={creating}>
-              {creating ? "Creating..." : "Create Project"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Join Project Dialog */}
-      <Dialog open={showJoinDialog} onOpenChange={setShowJoinDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Join a Project</DialogTitle>
-            <DialogDescription>
-              Enter the invite token you received to request access to a project.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="invite-token">Invite Token</Label>
-              <Input
-                id="invite-token"
-                placeholder="Paste the invite token here"
-                value={inviteToken}
-                onChange={(e) => setInviteToken(e.target.value)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowJoinDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleJoinProject} disabled={creating}>
-              {creating ? "Requesting..." : "Request Access"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirmation */}
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Project</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete &quot;{projectToDelete?.name}&quot;? 
-              Machines will be unlinked but not deleted.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteProject} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ProjectNameDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        mode="create"
+        onSubmit={async (name) => {
+          const p = await api.createProject(name);
+          toast.success(`Project “${name}” created`);
+          router.push(`/projects/${p.id}`);
+        }}
+      />
+      <ProjectNameDialog
+        open={!!renaming}
+        onOpenChange={(o) => !o && setRenaming(null)}
+        mode="rename"
+        initialName={renaming?.name ?? ""}
+        onSubmit={async (name) => {
+          if (!renaming) return;
+          await api.updateProject(renaming.id, { name });
+          toast.success("Project renamed");
+          refresh();
+        }}
+      />
+      <JoinProjectDialog open={joinOpen} onOpenChange={setJoinOpen} />
+      <ShareProjectDialog
+        project={sharing}
+        open={!!sharing}
+        onOpenChange={(o) => !o && setSharing(null)}
+        onChanged={(u) =>
+          setData((prev) => prev?.map((x) => (x.id === u.id ? { ...x, sharing_enabled: u.sharing_enabled, invite_token: u.invite_token, invite_expires_at: u.invite_expires_at } : x)) ?? prev)
+        }
+      />
     </div>
   );
 }
