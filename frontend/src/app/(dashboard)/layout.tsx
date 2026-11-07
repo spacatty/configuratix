@@ -77,7 +77,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     <Separator orientation="vertical" className="mr-1 h-4! bg-border-strong" />
                     <RouteBreadcrumbs className="flex-1" />
                   </header>
-                  <div className="relative flex-1 overflow-x-hidden">
+                  <div className="relative flex-1 overflow-x-clip">
                     <div className="mx-auto w-full max-w-[1600px] px-4 py-6 md:px-6 lg:px-8">{children}</div>
                   </div>
                 </SidebarInset>

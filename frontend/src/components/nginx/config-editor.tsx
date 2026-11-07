@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Eye, Save } from "lucide-react";
+import { Save } from "lucide-react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CopyButton } from "@/components/app/data-display";
 import { Spinner, errorMessage } from "@/components/app/states";
 import { invalidatePickerCache } from "@/components/app/pickers";
@@ -101,40 +102,27 @@ export function NginxConfigEditor({
   const structured = f.mode === "auto";
   const sections: NavItem[] = React.useMemo(() => {
     const out: NavItem[] = [{ id: "basics", label: "Basics" }];
-    if (!structured) out.push({ id: "raw", label: "Raw config" });
-    else if (f.isPassthrough) out.push({ id: "passthrough", label: "L4 passthrough" });
-    else
+    if (structured && f.isPassthrough) out.push({ id: "passthrough", label: "L4 passthrough" });
+    else if (structured)
       out.push(
         { id: "ssl", label: "SSL / TLS" },
-        { id: "proxy", label: "Proxy / real IP" },
+        { id: "proxy", label: "Real IP" },
         { id: "php", label: "PHP" },
         { id: "security", label: "Security" },
-        { id: "endpoints", label: "Endpoint rules", count: rules.length },
+        { id: "endpoints", label: "Endpoints", count: rules.length },
         { id: "locations", label: "Locations", count: f.locations.length }
       );
     out.push({ id: "domains", label: "Domains", count: liveConfig?.domains_count ?? config?.domains_count });
+    out.push({ id: "editor", label: "Editor" });
     return out;
   }, [structured, f.isPassthrough, rules.length, f.locations.length, liveConfig?.domains_count, config?.domains_count]);
 
   const errorSections = React.useMemo(() => new Set(Object.keys(errors).map(sectionOfField)), [errors]);
 
   const [active, setActive] = React.useState("basics");
-  React.useEffect(() => {
-    const els = sections.map((s) => document.getElementById(`section-${s.id}`)).filter(Boolean) as HTMLElement[];
-    if (!els.length) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        const vis = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        if (vis[0]) setActive((vis[0].target as HTMLElement).dataset.section ?? "basics");
-      },
-      { rootMargin: "-80px 0px -60% 0px", threshold: 0 }
-    );
-    els.forEach((e) => io.observe(e));
-    return () => io.disconnect();
-  }, [sections]);
+  const activeTab = sections.some((section) => section.id === active) ? active : "basics";
   const jump = (id: string) => {
-    document.getElementById(`section-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-    setActive(id);
+    setActive(id === "raw" ? "editor" : id);
   };
 
   /* ------------------------------------------------------------- preview */
@@ -266,101 +254,106 @@ export function NginxConfigEditor({
   const shownErrors = showErrors ? errors : Object.fromEntries(Object.entries(errors).filter(([k]) => k !== "name"));
   const sp = { f, set, errors: shownErrors, warnings };
 
+  const previewProps = { preview, lines: previewLines, domain: sampleDomain, previewDomain, setPreviewDomain, passthrough: f.isPassthrough };
+
   return (
-    <div className="grid gap-6 lg:grid-cols-[180px_minmax(0,1fr)] xl:grid-cols-[180px_minmax(0,1fr)_minmax(0,440px)]">
-      {/* Section nav */}
-      <nav aria-label="Config sections" className="hidden lg:block">
-        <div className="sticky top-16 space-y-0.5">
-          {sections.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => jump(s.id)}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors",
-                active === s.id ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-              )}
-            >
-              <span className={cn("h-3.5 w-0.5 rounded-full", active === s.id ? "bg-primary" : "bg-transparent")} />
-              <span className="flex-1 truncate">{s.label}</span>
-              {showErrors && errorSections.has(s.id) ? (
-                <span className="size-1.5 rounded-full bg-destructive" aria-label="Has errors" />
-              ) : s.count !== undefined ? (
-                <span className="font-data text-[11px] text-subtle-foreground">{s.count}</span>
-              ) : null}
-            </button>
-          ))}
-          <div className="mt-4 space-y-2 border-t border-border pt-4">
-            <Button className="w-full" size="sm" onClick={() => void save()} disabled={saving || (!dirty && !!config)}>
-              {saving ? <Spinner /> : <Save />}
-              {config ? "Save" : "Create"}
-            </Button>
-            <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
-              {dirty ? (
-                <>
+    <Tabs value={activeTab} onValueChange={setActive} className="min-w-0 gap-4">
+        {/* Section bar */}
+        <div className="sticky top-12 z-20 flex min-w-0 items-center gap-3 border-b border-border bg-background">
+          <div className="min-w-0 flex-1 overflow-x-auto">
+            <TabsList aria-label="Config sections" className="h-11 justify-start gap-1 rounded-none border-0 bg-transparent p-0">
+            {sections.map((s) => (
+              <TabsTrigger
+                key={s.id}
+                value={s.id}
+                className={cn(
+                  "relative h-11 shrink-0 flex-none gap-2 rounded-none border-0 px-3 text-[13px]",
+                  "after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:bg-transparent",
+                  "data-[state=active]:border-transparent data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:bg-foreground"
+                )}
+              >
+                {s.label}
+                {showErrors && errorSections.has(s.id === "editor" ? "raw" : s.id) ? (
+                  <span className="size-1.5 rounded-full bg-destructive" aria-label="Has errors" />
+                ) : s.count !== undefined ? (
+                  <span className="font-data text-[11px] text-subtle-foreground tabular-nums">{s.count}</span>
+                ) : null}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          </div>
+          <div className="flex h-11 shrink-0 items-center gap-2 text-xs text-muted-foreground">
+            {dirty ? (
+              <>
+                <span className="hidden items-center gap-1.5 sm:inline-flex">
                   <span className="size-1.5 rounded-full bg-warning" />
-                  Unsaved changes
-                </>
-              ) : (
-                <>
-                  <Kbd>Ctrl</Kbd>
-                  <Kbd>S</Kbd>
-                </>
-              )}
-            </div>
+                  Unsaved
+                </span>
+                <Button size="xs" onClick={() => void save()} disabled={saving}>
+                  {saving ? <Spinner /> : <Save />}
+                  {config ? "Save" : "Create"}
+                </Button>
+              </>
+            ) : (
+              <span className="hidden items-center gap-1 2xl:inline-flex" title="Save with Ctrl+S">
+                <Kbd>Ctrl</Kbd>
+                <Kbd>S</Kbd>
+              </span>
+            )}
           </div>
         </div>
-      </nav>
 
-      {/* Form */}
-      <div className="min-w-0 space-y-4">
+      <TabsContent value="basics" forceMount className="@container rounded-lg border border-border bg-card data-[state=inactive]:hidden">
         <BasicsSection {...sp} />
-        {!structured ? (
-          <RawSection {...sp} />
-        ) : f.isPassthrough ? (
-          <PassthroughSection {...sp} />
-        ) : (
-          <>
-            <SslSection {...sp} />
-            <ProxySection {...sp} />
-            <PhpSection {...sp} />
-            <SecuritySection {...sp} />
-            <EndpointRulesSection enabled={f.endpointBlocking} rules={rules} onAdd={addRule} onDelete={deleteRule} pendingCreate={pendingRules} />
-            <LocationsSection {...sp} landings={landings} />
-          </>
-        )}
+      </TabsContent>
+      {structured && f.isPassthrough && (
+      <TabsContent value="passthrough" forceMount className="@container rounded-lg border border-border bg-card data-[state=inactive]:hidden">
+        <PassthroughSection {...sp} />
+      </TabsContent>
+      )}
+      {structured && !f.isPassthrough && (
+      <TabsContent value="ssl" forceMount className="@container rounded-lg border border-border bg-card data-[state=inactive]:hidden">
+        <SslSection {...sp} />
+      </TabsContent>
+      )}
+      {structured && !f.isPassthrough && (
+      <TabsContent value="proxy" forceMount className="@container rounded-lg border border-border bg-card data-[state=inactive]:hidden">
+        <ProxySection {...sp} />
+      </TabsContent>
+      )}
+      {structured && !f.isPassthrough && (
+      <TabsContent value="php" forceMount className="@container rounded-lg border border-border bg-card data-[state=inactive]:hidden">
+        <PhpSection {...sp} />
+      </TabsContent>
+      )}
+      {structured && !f.isPassthrough && (
+      <TabsContent value="security" forceMount className="@container rounded-lg border border-border bg-card data-[state=inactive]:hidden">
+        <SecuritySection {...sp} />
+      </TabsContent>
+      )}
+      {structured && !f.isPassthrough && (
+      <TabsContent value="endpoints" forceMount className="@container rounded-lg border border-border bg-card data-[state=inactive]:hidden">
+        <EndpointRulesSection enabled={f.endpointBlocking} rules={rules} onAdd={addRule} onDelete={deleteRule} pendingCreate={pendingRules} />
+      </TabsContent>
+      )}
+      {structured && !f.isPassthrough && (
+      <TabsContent value="locations" forceMount className="@container rounded-lg border border-border bg-card data-[state=inactive]:hidden">
+        <LocationsSection {...sp} landings={landings} />
+      </TabsContent>
+      )}
+      <TabsContent value="domains" forceMount className="@container rounded-lg border border-border bg-card data-[state=inactive]:hidden">
         <ConfigDomainsSection config={liveConfig ?? config} onApplied={onDomainsChanged} />
-
-        {/* Mobile / lg preview */}
-        {structured && (
-          <div className="xl:hidden">
-            <PreviewPanel preview={preview} lines={previewLines} domain={sampleDomain} previewDomain={previewDomain} setPreviewDomain={setPreviewDomain} passthrough={f.isPassthrough} height={420} />
+      </TabsContent>
+      <TabsContent value="editor">
+        {structured ? (
+          <PreviewPanel {...previewProps} height="max(480px, calc(100svh - 240px))" />
+        ) : (
+          <div className="@container rounded-lg border border-border bg-card">
+            <RawSection {...sp} />
           </div>
         )}
-      </div>
-
-      {/* Preview (xl) */}
-      <aside className="hidden xl:block">
-        <div className="sticky top-16">
-          {structured ? (
-            <PreviewPanel
-              preview={preview}
-              lines={previewLines}
-              domain={sampleDomain}
-              previewDomain={previewDomain}
-              setPreviewDomain={setPreviewDomain}
-              passthrough={f.isPassthrough}
-              height="calc(100vh - 170px)"
-            />
-          ) : (
-            <div className="rounded-lg border border-border bg-card p-4 text-xs text-muted-foreground">
-              Raw mode: the editor on the left is exactly what gets written for each domain. Use <span className="font-data">$host</span> or hardcode the
-              server_name.
-            </div>
-          )}
-        </div>
-      </aside>
-    </div>
+      </TabsContent>
+    </Tabs>
   );
 }
 
@@ -382,32 +375,36 @@ function PreviewPanel({
   height: string | number;
 }) {
   return (
-    <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-card" style={{ height }}>
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <Eye className="size-3.5 text-muted-foreground" />
-        <span className="text-[13px] font-medium">Generated config</span>
-        <Badge variant="muted" className="font-data">
-          {lines} lines
-        </Badge>
-        {passthrough && <Badge variant="warning">approx.</Badge>}
+    <section aria-label="Generated config" className="flex flex-col overflow-hidden rounded-lg border border-border bg-card" style={{ height }}>
+      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-2 pl-4">
+        <h2 className="text-[13px] font-semibold tracking-[-0.01em]">Generated config</h2>
+        <span className="font-data text-[11px] text-subtle-foreground tabular-nums">{lines} lines</span>
+        {passthrough && (
+          <Badge variant="warning" className="ml-1">
+            approx.
+          </Badge>
+        )}
         <div className="ml-auto">
-          <CopyButton value={preview} label="Copy config" />
+          <CopyButton value={preview} label="Copy config" size="sm" />
         </div>
-      </div>
-      <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
-        <span className="shrink-0 text-[11px] text-muted-foreground">server_name</span>
+      </header>
+      <label className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface-2/40 pr-2 pl-4">
+        <span className="font-data shrink-0 text-[11.5px] text-subtle-foreground">server_name</span>
         <Input
           value={previewDomain}
           onChange={(e) => setPreviewDomain(e.target.value)}
           placeholder={domain}
-          className="font-data h-6 border-transparent bg-transparent px-1 text-xs shadow-none focus-visible:border-border"
+          className="font-data h-7 border-transparent bg-transparent px-1.5 text-xs shadow-none hover:border-border focus-visible:border-border dark:bg-transparent"
           aria-label="Preview domain"
+          spellCheck={false}
         />
-      </div>
+      </label>
       <div className="min-h-0 flex-1">
         <NginxMonaco value={preview} readOnly />
       </div>
-      <div className="border-t border-border px-3 py-1.5 text-[11px] text-subtle-foreground">Live preview · rendered on the server per domain at apply time</div>
-    </div>
+      <footer className="shrink-0 border-t border-border px-4 py-2 text-[11px] text-subtle-foreground">
+        Live preview. The server renders it per domain at apply time.
+      </footer>
+    </section>
   );
 }

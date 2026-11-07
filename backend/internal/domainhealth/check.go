@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -25,6 +26,10 @@ type Result struct {
 	StatusCode *int   // HTTP status of the probe (nil when no HTTP response)
 	ResponseMS *int   // time to response headers of the successful probe
 	Error      string // short reason when no HTTP response was received, or why the response didn't match
+	// What the probe got back (set whenever there was an HTTP response).
+	Headers       string // "Key: value" lines, sorted
+	Body          string // first MaxStoredBody bytes, valid UTF-8
+	BodyTruncated bool
 }
 
 // ValidPath reports whether p is acceptable as a health check path.
@@ -99,13 +104,15 @@ func Check(in Input) Result {
 		},
 	}
 
-	statusCode, ms, body, err := probeHTTP(client, "https://"+in.FQDN+path, needle != "")
+	p, err := probeHTTP(client, "https://"+in.FQDN+path)
 	if err != nil {
-		statusCode, ms, body, err = probeHTTP(client, "http://"+in.FQDN+path, needle != "")
+		p, err = probeHTTP(client, "http://"+in.FQDN+path)
 	}
 
 	if err == nil {
-		res := Result{StatusCode: &statusCode, ResponseMS: &ms, Status: "unhealthy"}
+		statusCode, ms, body := p.status, p.ms, p.body
+		res := Result{StatusCode: &statusCode, ResponseMS: &ms, Status: "unhealthy", Headers: p.headers}
+		res.Body, res.BodyTruncated = storedBody(body, p.bodyTruncated)
 		switch {
 		case !spec.Match(statusCode):
 			res.Error = "Expected " + spec.String()
@@ -130,23 +137,65 @@ func Check(in Input) Result {
 	return res
 }
 
-// maxBodyRead caps how much of the response is searched for Rules.BodyContains.
-const maxBodyRead = 256 << 10
+const (
+	// maxBodyRead caps how much of the response is read (and searched for Rules.BodyContains).
+	maxBodyRead = 256 << 10
+	// MaxStoredBody caps the body kept for display after a failed check.
+	MaxStoredBody = 32 << 10
+	maxStoredHeaders = 8 << 10
+)
 
-func probeHTTP(client *http.Client, url string, readBody bool) (int, int, string, error) {
+type probe struct {
+	status, ms    int
+	headers, body string
+	bodyTruncated bool // more than maxBodyRead was available
+}
+
+func probeHTTP(client *http.Client, url string) (probe, error) {
 	start := time.Now()
 	resp, err := client.Get(url)
 	if err != nil {
-		return 0, 0, "", err
+		return probe{}, err
 	}
 	defer resp.Body.Close()
-	ms := int(time.Since(start).Milliseconds())
-	var body string
-	if readBody {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyRead))
-		body = string(b)
+	p := probe{status: resp.StatusCode, ms: int(time.Since(start).Milliseconds()), headers: formatHeaders(resp.Header)}
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyRead+1))
+	if len(b) > maxBodyRead {
+		b, p.bodyTruncated = b[:maxBodyRead], true
 	}
-	return resp.StatusCode, ms, body, nil
+	p.body = string(b)
+	return p, nil
+}
+
+func formatHeaders(h http.Header) string {
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for _, k := range keys {
+		for _, v := range h[k] {
+			sb.WriteString(k + ": " + v + "\n")
+		}
+	}
+	return sanitizeText(sb.String(), maxStoredHeaders)
+}
+
+// storedBody trims the body for storage; Postgres TEXT needs valid UTF-8 without NUL bytes.
+func storedBody(body string, truncated bool) (string, bool) {
+	if len(body) > MaxStoredBody {
+		body, truncated = body[:MaxStoredBody], true
+	}
+	return sanitizeText(body, MaxStoredBody+64), truncated
+}
+
+func sanitizeText(s string, max int) string {
+	s = strings.ToValidUTF8(strings.ReplaceAll(s, "\x00", ""), "\uFFFD")
+	if len(s) > max {
+		s = strings.ToValidUTF8(s[:max], "")
+	}
+	return s
 }
 
 func shortErr(err error) string {

@@ -480,6 +480,10 @@ type DomainWithConfig struct {
 	CheckExpected       string `db:"eff_expected" json:"check_expected"`
 	CheckBodyContains   string `db:"eff_body_contains" json:"check_body_contains"`
 	CheckTimeoutSeconds int    `db:"eff_timeout_seconds" json:"check_timeout_seconds"`
+	// Last failed check's response (migration 043); served by GET /domains/{id}/check-response.
+	LastCheckResponseHeaders *string `db:"last_check_response_headers" json:"-"`
+	LastCheckResponseBody    *string `db:"last_check_response_body" json:"-"`
+	LastCheckBodyTruncated   bool    `db:"last_check_body_truncated" json:"-"`
 }
 
 // ListDomains returns all domains with their machine and config info

@@ -33,4 +33,8 @@ type Domain struct {
 	HealthCheckExpected       *string    `db:"health_check_expected" json:"health_check_expected"`
 	HealthCheckBodyContains   *string    `db:"health_check_body_contains" json:"health_check_body_contains"`
 	HealthCheckTimeoutSeconds *int       `db:"health_check_timeout_seconds" json:"health_check_timeout_seconds"`
+	// Last failed check's response (migration 043); served by GET /domains/{id}/check-response.
+	LastCheckResponseHeaders *string `db:"last_check_response_headers" json:"-"`
+	LastCheckResponseBody    *string `db:"last_check_response_body" json:"-"`
+	LastCheckBodyTruncated   bool    `db:"last_check_body_truncated" json:"-"`
 }

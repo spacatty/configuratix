@@ -24,6 +24,7 @@ import { CopyButton, KeyValueList, RelativeTime, SectionCard, openJobLogs } from
 import { formatDateTime } from "@/lib/format";
 
 import type { DomainRowActions } from "./domain-columns";
+import { CheckResponseDetails } from "./check-response";
 import { DomainApplyCell, DomainHealthCell } from "./domain-status";
 import { GroupChip } from "./group-chip";
 import { describeRules, domainApplyState, domainCheckRules, isApplyActive } from "./domain-utils";
@@ -197,6 +198,9 @@ export function DomainSheet({
                     },
                   ]}
                 />
+                {d.status !== "healthy" && typeof d.last_check_status_code === "number" && (
+                  <CheckResponseDetails domainId={d.id} checkedAt={d.last_check_at} className="mt-3" />
+                )}
               </SectionCard>
 
               <SectionCard

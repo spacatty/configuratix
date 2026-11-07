@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { HeartPulse } from "lucide-react";
+import { ChevronRight, HeartPulse } from "lucide-react";
 import { toast } from "sonner";
 
 import { api, type BulkHealthCheckResult, type Domain, type HealthCheckPreset, type HealthCheckRules } from "@/lib/api";
@@ -10,8 +10,10 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Spinner, StatusDot, errorMessage } from "@/components/app";
+import { cn } from "@/lib/utils";
 
 import { DEFAULT_CHECK_RULES, describeRules, domainCheckRules } from "./domain-utils";
+import { CheckResponseDetails } from "./check-response";
 import { RulesSourcePicker, settingsFor, type RulesSource } from "./health-check-dialog";
 
 export interface BulkHealthCheckDialogProps {
@@ -50,6 +52,7 @@ export function BulkHealthCheckDialog({
   const [run, setRun] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [result, setResult] = React.useState<BulkHealthCheckResult | null>(null);
+  const [expanded, setExpanded] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!open) return;
@@ -58,6 +61,7 @@ export function BulkHealthCheckDialog({
     setRules(DEFAULT_CHECK_RULES);
     setRun(true);
     setResult(null);
+    setExpanded(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -135,18 +139,40 @@ export function BulkHealthCheckDialog({
               )}
             </div>
             {failing.length > 0 && (
-              <ul className="max-h-64 divide-y divide-border overflow-y-auto rounded-md border border-border">
+              <ul className="max-h-96 divide-y divide-border overflow-y-auto rounded-md border border-border">
                 {failing.map((r) => {
                   const d = byId.get(r.id);
+                  const hasResponse = !r.error && typeof d?.last_check_status_code === "number";
+                  const isOpen = expanded === r.id;
                   return (
-                    <li key={r.id} className="flex items-center gap-3 px-3 py-2">
-                      <StatusDot status="unhealthy" pulse={false} />
-                      <span className="font-data min-w-0 flex-1 truncate text-[12.5px]">{d?.fqdn ?? r.id}</span>
-                      <span className="font-data max-w-[55%] shrink-0 truncate text-[12px] text-muted-foreground" title={r.error ?? d?.last_check_error ?? undefined}>
-                        {r.error ??
-                          d?.last_check_error ??
-                          (typeof d?.last_check_status_code === "number" ? `HTTP ${d.last_check_status_code}` : r.status)}
-                      </span>
+                    <li key={r.id}>
+                      <button
+                        type="button"
+                        disabled={!hasResponse}
+                        onClick={() => setExpanded(isOpen ? null : r.id)}
+                        className="flex w-full items-center gap-3 px-3 py-2 text-left enabled:hover:bg-accent/50"
+                        aria-expanded={hasResponse ? isOpen : undefined}
+                      >
+                        <ChevronRight
+                          className={cn(
+                            "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                            isOpen && "rotate-90",
+                            !hasResponse && "invisible"
+                          )}
+                        />
+                        <StatusDot status="unhealthy" pulse={false} />
+                        <span className="font-data min-w-0 flex-1 truncate text-[12.5px]">{d?.fqdn ?? r.id}</span>
+                        <span className="font-data max-w-[55%] shrink-0 truncate text-[12px] text-muted-foreground" title={r.error ?? d?.last_check_error ?? undefined}>
+                          {r.error ??
+                            d?.last_check_error ??
+                            (typeof d?.last_check_status_code === "number" ? `HTTP ${d.last_check_status_code}` : r.status)}
+                        </span>
+                      </button>
+                      {isOpen && d && (
+                        <div className="px-3 pb-3">
+                          <CheckResponseDetails domainId={d.id} checkedAt={d.last_check_at} defaultOpen />
+                        </div>
+                      )}
                     </li>
                   );
                 })}

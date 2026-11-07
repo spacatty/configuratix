@@ -22,6 +22,7 @@ import {
   rulesError,
   sameRules,
 } from "./domain-utils";
+import { CheckResponseDetails } from "./check-response";
 import { HealthCheckRulesFields } from "./health-check-rules-fields";
 
 export type RulesSource = "keep" | "preset" | "custom";
@@ -288,6 +289,9 @@ export function HealthCheckDialog({
               },
             ]}
           />
+          {domain && domain.status !== "healthy" && typeof domain.last_check_status_code === "number" && (
+            <CheckResponseDetails domainId={domain.id} checkedAt={domain.last_check_at} />
+          )}
 
           <div className="border-t border-border pt-4">
             <RulesSourcePicker

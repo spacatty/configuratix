@@ -571,6 +571,18 @@ export interface Domain {
   check_timeout_seconds?: number;
 }
 
+export interface DomainCheckResponse {
+  status_code: number | null;
+  response_ms: number | null;
+  error: string | null;
+  checked_at: string | null;
+  /** "Key: value" lines */
+  headers: string | null;
+  body: string | null;
+  /** The body was cut off (only the first 32 KB is kept). */
+  truncated: boolean;
+}
+
 /** Probe settings: path, accepted statuses ("200", "200,301-302", "2xx"), optional body match, timeout. */
 export interface HealthCheckRules {
   path: string;
@@ -1699,6 +1711,11 @@ class ApiClient {
 
   async deleteHealthCheckPreset(id: string): Promise<void> {
     await this.request(`/api/health-check-presets/${id}`, { method: "DELETE" });
+  }
+
+  /** What the last failed health check got back (body/headers are null after a passing check). */
+  async getDomainCheckResponse(id: string): Promise<DomainCheckResponse> {
+    return this.request<DomainCheckResponse>(`/api/domains/${id}/check-response`);
   }
 
   async triggerDomainHealthCheck(id: string): Promise<{ status: string }> {

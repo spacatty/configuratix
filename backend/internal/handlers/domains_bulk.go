@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"configuratix/backend/internal/auth"
 	"configuratix/backend/internal/domainhealth"
@@ -305,6 +306,42 @@ func (h *DomainsHandler) BulkHealthCheck(w http.ResponseWriter, r *http.Request)
 		"results": results,
 		"errors":  errs,
 	})
+}
+
+// GetDomainCheckResponse returns what the last failed health check got back.
+func (h *DomainsHandler) GetDomainCheckResponse(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value("claims").(*auth.Claims)
+	userID, _ := uuid.Parse(claims.UserID)
+
+	id, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid domain ID", http.StatusBadRequest)
+		return
+	}
+	if !h.domainAccessible(claims, userID, id) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	var resp struct {
+		StatusCode *int       `db:"last_check_status_code" json:"status_code"`
+		ResponseMS *int       `db:"last_check_response_ms" json:"response_ms"`
+		Error      *string    `db:"last_check_error" json:"error"`
+		CheckedAt  *time.Time `db:"last_check_at" json:"checked_at"`
+		Headers    *string    `db:"last_check_response_headers" json:"headers"`
+		Body       *string    `db:"last_check_response_body" json:"body"`
+		Truncated  bool       `db:"last_check_body_truncated" json:"truncated"`
+	}
+	err = h.db.Get(&resp, `
+		SELECT last_check_status_code, last_check_response_ms, last_check_error, last_check_at,
+			last_check_response_headers, last_check_response_body, last_check_body_truncated
+		FROM domains WHERE id = $1
+	`, id)
+	if err != nil {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // TriggerDomainHealthCheck runs an immediate health check for one domain.

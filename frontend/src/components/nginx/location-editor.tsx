@@ -46,7 +46,7 @@ export function LocationsEditor({
   const add = () => onChange([...locations, { path: "/api", match_type: "prefix", type: "proxy", proxy_url: "" }]);
 
   return (
-    <div className="space-y-3">
+    <div className="divide-y divide-border overflow-hidden rounded-md border border-border">
       {locations.map((loc, i) => (
         <LocationCard
           key={i}
@@ -63,10 +63,14 @@ export function LocationsEditor({
           onDuplicate={() => duplicate(i)}
         />
       ))}
-      <Button type="button" variant="outline" size="sm" onClick={add} className="w-full border-dashed">
-        <Plus />
+      <button
+        type="button"
+        onClick={add}
+        className="flex h-9 w-full items-center justify-center gap-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:bg-accent/50 focus-visible:outline-none"
+      >
+        <Plus className="size-4" />
         Add location
-      </Button>
+      </button>
     </div>
   );
 }
@@ -101,8 +105,8 @@ function LocationCard({
   const source = loc.static_type || "local";
   const pathErr = errors[`loc.${i}.path`];
   return (
-    <div className={cn("rounded-lg border bg-card/40", pathErr || errors[`loc.${i}.proxy_url`] ? "border-destructive/40" : "border-border")}>
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+    <div className={cn(pathErr || errors[`loc.${i}.proxy_url`] ? "bg-destructive/[0.04]" : undefined)}>
+      <div className="flex h-10 items-center gap-2 bg-surface-2/50 pr-1.5 pl-3">
         <span className="font-data text-[11px] text-subtle-foreground">#{i + 1}</span>
         <span className="font-data min-w-0 flex-1 truncate text-[12.5px]">
           location {MATCH_LABEL[match] ? <span className="text-warning">{MATCH_LABEL[match]} </span> : null}
@@ -132,7 +136,7 @@ function LocationCard({
           )}
         </div>
       </div>
-      <div className="space-y-4 p-3">
+      <div className="space-y-4 p-4">
         <div className="grid gap-3 sm:grid-cols-[150px_minmax(0,1fr)_auto]">
           <Field label="Match">
             <Select value={match} onValueChange={(v) => onUpdate({ match_type: v })}>
@@ -243,7 +247,7 @@ function LocationCard({
                 />
               </Field>
             ) : (
-              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+              <label className="flex cursor-pointer items-center justify-between gap-3">
                 <span>
                   <span className="block text-[13px]">Replace on deploy</span>
                   <span className="block text-xs text-muted-foreground">Overwrite files when the content is redeployed</span>

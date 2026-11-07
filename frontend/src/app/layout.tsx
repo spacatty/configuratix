@@ -19,6 +19,7 @@ const fontMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
+  icons: { icon: "/favicon.svg" },
   title: {
     default: "Configuratix",
     template: "%s · Configuratix",

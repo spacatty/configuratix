@@ -196,6 +196,7 @@ func main() {
 	apiRouter.HandleFunc("/domains/{id}/notes", domainsHandler.UpdateDomainNotes).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/health-check", domainsHandler.UpdateDomainHealthCheck).Methods("PUT", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/check", domainsHandler.TriggerDomainHealthCheck).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/domains/{id}/check-response", domainsHandler.GetDomainCheckResponse).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}/apply", domainsHandler.ApplyDomain).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/domains/{id}", domainsHandler.DeleteDomain).Methods("DELETE", "OPTIONS")
 

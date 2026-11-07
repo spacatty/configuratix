@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Globe, RefreshCw, ScrollText, TriangleAlert, Upload } from "lucide-react";
+import { RefreshCw, ScrollText, TriangleAlert, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { api, type NginxConfig, type NginxConfigApplyResult, type NginxConfigDomainRef } from "@/lib/api";
@@ -118,7 +118,7 @@ export function ConfigDomainsSection({ config, onApplied }: { config: NginxConfi
     <EditorSection
       id="domains"
       title="Domains using this config"
-      icon={Globe}
+      flush={domains.length > 0}
       description={config ? `${domains.length} domain${domains.length === 1 ? "" : "s"} · ${config.out_of_sync_count ?? 0} out of sync` : "Save the config, then assign it to domains."}
       actions={
         domains.length > 0 ? (
@@ -138,15 +138,15 @@ export function ConfigDomainsSection({ config, onApplied }: { config: NginxConfi
           .
         </p>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border">
+        <div className="overflow-x-auto">
           <table className="w-full text-[13px]">
             <thead>
-              <tr className="border-b border-border bg-surface-2/60 text-left text-xs text-muted-foreground">
-                <th className="px-3 py-2 font-medium">Domain</th>
-                <th className="px-3 py-2 font-medium">Machine</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 text-right font-medium">Last applied</th>
-                <th className="w-[90px] px-3 py-2" />
+              <tr className="border-y border-border text-left text-xs text-muted-foreground">
+                <th className="w-[42%] py-2 pr-3 pl-5 font-medium">Domain</th>
+                <th className="w-[22%] px-3 py-2 font-medium">Machine</th>
+                <th className="px-3 py-2 font-medium whitespace-nowrap">Status</th>
+                <th className="px-3 py-2 text-right font-medium whitespace-nowrap">Last applied</th>
+                <th className="w-[80px] py-2 pr-4 pl-2" />
               </tr>
             </thead>
             <tbody>
@@ -163,8 +163,8 @@ export function ConfigDomainsSection({ config, onApplied }: { config: NginxConfi
 
 function DomainRow({ d, busy, onApply }: { d: NginxConfigDomainRef; busy: boolean; onApply: () => void }) {
   return (
-    <tr className="border-b border-border/60 last:border-0">
-      <td className="max-w-0 px-3 py-2">
+    <tr className="border-b border-border/60 transition-colors last:border-0 hover:bg-accent/30">
+      <td className="max-w-0 py-2 pr-3 pl-5">
         <Link href={`/domains?q=${encodeURIComponent(d.fqdn)}`} className="font-data block truncate hover:underline underline-offset-2">
           {d.fqdn}
         </Link>
@@ -192,7 +192,7 @@ function DomainRow({ d, busy, onApply }: { d: NginxConfigDomainRef; busy: boolea
       <td className="px-3 py-2 text-right whitespace-nowrap text-muted-foreground">
         <RelativeTime date={d.last_applied_at} />
       </td>
-      <td className="px-2 py-2">
+      <td className="py-2 pr-4 pl-2">
         <div className="flex items-center justify-end gap-0.5">
           {d.last_job_id && (
             <Tooltip>

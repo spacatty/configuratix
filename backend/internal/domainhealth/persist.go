@@ -57,14 +57,21 @@ func RunCheckAndPersist(db *database.DB, id uuid.UUID) (newStatus string, err er
 	if res.Error != "" {
 		checkErr = &res.Error
 	}
+	// The response is only kept when the check failed, for debugging.
+	var headers, body *string
+	truncated := false
+	if newStatus != "healthy" && res.StatusCode != nil {
+		headers, body, truncated = &res.Headers, &res.Body, res.BodyTruncated
+	}
 
 	// updated_at only changes with the status (it feeds other change tracking).
 	_, err = db.Exec(`
 		UPDATE domains SET status = $1::text, last_check_at = NOW(),
 			last_check_status_code = $3, last_check_response_ms = $4, last_check_error = $5,
+			last_check_response_headers = $6, last_check_response_body = $7, last_check_body_truncated = $8,
 			updated_at = CASE WHEN status::text IS DISTINCT FROM $1::text THEN NOW() ELSE updated_at END
 		WHERE id = $2
-	`, newStatus, id, res.StatusCode, res.ResponseMS, checkErr)
+	`, newStatus, id, res.StatusCode, res.ResponseMS, checkErr, headers, body, truncated)
 	return newStatus, err
 }
 

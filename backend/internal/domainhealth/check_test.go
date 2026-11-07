@@ -47,4 +47,24 @@ func TestCheckRules(t *testing.T) {
 			t.Errorf("%s: unhealthy result should explain why", c.name)
 		}
 	}
+
+	res := check(Rules{Path: "/missing", Expected: "200"})
+	if !strings.Contains(res.Body, "404 page not found") {
+		t.Errorf("body not captured: %q", res.Body)
+	}
+	if !strings.Contains(res.Headers, "Content-Type: text/plain") {
+		t.Errorf("headers not captured: %q", res.Headers)
+	}
+}
+
+func TestStoredBody(t *testing.T) {
+	big := strings.Repeat("a", MaxStoredBody+10)
+	body, truncated := storedBody(big, false)
+	if len(body) != MaxStoredBody || !truncated {
+		t.Errorf("len %d truncated %v", len(body), truncated)
+	}
+	body, _ = storedBody("ok\x00\xff", false)
+	if body != "ok�" {
+		t.Errorf("not sanitized: %q", body)
+	}
 }
