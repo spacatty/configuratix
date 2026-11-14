@@ -42,8 +42,10 @@ func (h *DomainsHandler) BulkAssignDomains(w http.ResponseWriter, r *http.Reques
 
 	var req struct {
 		bulkDomainIDsRequest
-		MachineID *uuid.UUID `json:"machine_id"`
-		ConfigID  *uuid.UUID `json:"config_id"`
+		MachineID     *uuid.UUID `json:"machine_id"`
+		ConfigID      *uuid.UUID `json:"config_id"`
+		SourceCleanup string     `json:"source_cleanup"`
+		SkipApply     bool       `json:"skip_apply"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -68,7 +70,7 @@ func (h *DomainsHandler) BulkAssignDomains(w http.ResponseWriter, r *http.Reques
 			errors = append(errors, itemErr{ID: sid, Error: "forbidden"})
 			continue
 		}
-		assignReq := AssignDomainRequest{MachineID: req.MachineID, ConfigID: req.ConfigID}
+		assignReq := AssignDomainRequest{MachineID: req.MachineID, ConfigID: req.ConfigID, SourceCleanup: req.SourceCleanup, SkipApply: req.SkipApply}
 		created, err := h.assignDomainCore(id, assignReq, jobs.UserID(r))
 		if err != nil {
 			log.Printf("bulk assign %s: %v", id, err)

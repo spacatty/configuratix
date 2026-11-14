@@ -14,17 +14,19 @@ import (
 const (
 	defaultJobTimeoutSeconds = 900
 	// reaperGrace lets the agent report its own timeout before the server does.
-	reaperGrace    = 60 * time.Second
-	reaperInterval = 60 * time.Second
+	reaperGrace = 60 * time.Second
+	// Short enough that a pending job with a 60s deadline is failed within about a minute.
+	reaperInterval = 20 * time.Second
 )
 
 // StartAgentJobReaper periodically:
 //   - fails `running` jobs whose started_at + COALESCE(timeout_seconds, 900s)
 //     (+ grace) has passed, unless the agent's heartbeat still reports that job
 //     as running (and the agent was seen in the last 10 minutes);
-//   - fails agent updates that were not confirmed within 5 minutes.
+//   - fails agent updates that were not confirmed within 5 minutes;
+//   - fails `pending` jobs whose pending_expires_at has passed (no agent claimed them).
 //
-// Pending jobs are left alone.
+// Other pending jobs are left alone.
 func StartAgentJobReaper(db *database.DB) {
 	go func() {
 		t := time.NewTicker(reaperInterval)
@@ -46,6 +48,7 @@ func reapOnce(db *database.DB) {
 	defer cancel()
 
 	reapStaleAgentUpdates(ctx, db)
+	reapExpiredPendingJobs(ctx, db)
 
 	var ids []uuid.UUID
 	err := db.SelectContext(ctx, &ids, `
@@ -79,6 +82,36 @@ func reapOnce(db *database.DB) {
 	for _, id := range ids {
 		db.ExecContext(ctx, `UPDATE agents SET running_job_id = NULL WHERE running_job_id = $1`, id)
 		h.updateL7CertificateStatuses(id, "failed", "timed out")
+		jobhooks.OnJobFinished(context.Background(), db, id.String())
+	}
+}
+
+// reapExpiredPendingJobs fails pending jobs nobody claimed before their deadline (typically the
+// agent is offline) and runs their hooks.
+func reapExpiredPendingJobs(ctx context.Context, db *database.DB) {
+	var ids []uuid.UUID
+	err := db.SelectContext(ctx, &ids, `
+		UPDATE jobs SET
+			status = 'failed',
+			error_message = 'Machine did not pick up the job within ' ||
+				GREATEST(1, ROUND(EXTRACT(EPOCH FROM (pending_expires_at - created_at))))::text || 's (agent offline?)',
+			finished_at = NOW(),
+			updated_at = NOW(),
+			logs = COALESCE(logs, '') || E'
+[server] Job expired: no agent claimed it before ' || pending_expires_at::text || E'
+'
+		WHERE status = 'pending' AND pending_expires_at IS NOT NULL AND pending_expires_at < NOW()
+		RETURNING id
+	`)
+	if err != nil {
+		log.Printf("Job reaper (pending expiry): %v", err)
+		return
+	}
+	if len(ids) == 0 {
+		return
+	}
+	log.Printf("Job reaper: expired %d unclaimed pending job(s)", len(ids))
+	for _, id := range ids {
 		jobhooks.OnJobFinished(context.Background(), db, id.String())
 	}
 }

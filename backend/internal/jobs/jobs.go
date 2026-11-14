@@ -55,6 +55,9 @@ type Spec struct {
 	TimeoutSeconds int // 0 = derived from step timeouts
 	ParentJobID    *uuid.UUID
 	Attempts       int
+	// PendingTimeoutSeconds > 0 fails the job if no agent claims it within that long
+	// (reaper). Use for cleanup on machines that may be offline.
+	PendingTimeoutSeconds int
 }
 
 // Create inserts a pending job and returns it.
@@ -83,11 +86,12 @@ func Create(ctx context.Context, q Querier, spec Spec) (*models.Job, error) {
 	var job models.Job
 	err = sqlx.GetContext(ctx, q, &job, `
 		INSERT INTO jobs (id, agent_id, type, payload_json, status, title, action, created_by,
-			entity_type, entity_id, timeout_seconds, parent_job_id, attempts, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'pending', $5, NULLIF($6, ''), $7, NULLIF($8, ''), NULLIF($9, ''), $10, $11, $12, NOW(), NOW())
+			entity_type, entity_id, timeout_seconds, parent_job_id, attempts, pending_expires_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'pending', $5, NULLIF($6, ''), $7, NULLIF($8, ''), NULLIF($9, ''), $10, $11, $12,
+			CASE WHEN $13::int > 0 THEN NOW() + make_interval(secs => $13::int) END, NOW(), NOW())
 		RETURNING `+models.JobColumns,
 		spec.ID, spec.AgentID, spec.Type, payload, spec.Title, spec.Action, spec.CreatedBy,
-		spec.EntityType, spec.EntityID, spec.TimeoutSeconds, spec.ParentJobID, spec.Attempts)
+		spec.EntityType, spec.EntityID, spec.TimeoutSeconds, spec.ParentJobID, spec.Attempts, spec.PendingTimeoutSeconds)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create job: %w", err)
 	}

@@ -625,6 +625,14 @@ func (h *DomainsHandler) CreateDomain(w http.ResponseWriter, r *http.Request) {
 type AssignDomainRequest struct {
 	MachineID *uuid.UUID `json:"machine_id"`
 	ConfigID  *uuid.UUID `json:"config_id"`
+	// SourceCleanup controls what happens on the machine the domain is moved away from:
+	// "" / "remove" queues a remove_domain job there (fails after removeDomainPendingTimeout
+	// seconds if the machine never picks it up); "skip" leaves the old machine untouched
+	// (it is offline or already gone).
+	SourceCleanup string `json:"source_cleanup,omitempty"`
+	// SkipApply links machine + config without queuing an apply job (used to revert a
+	// migration back to a machine that still has the config).
+	SkipApply bool `json:"skip_apply,omitempty"`
 }
 
 // AssignDomain assigns a domain to a machine and config

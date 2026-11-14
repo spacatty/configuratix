@@ -337,6 +337,7 @@ func (h *AgentHandler) GetJobs(w http.ResponseWriter, r *http.Request) {
 		WHERE j.id IN (
 			SELECT id FROM jobs
 			WHERE agent_id = $1 AND status = 'pending' AND NOT COALESCE(cancel_requested, false)
+				AND (pending_expires_at IS NULL OR pending_expires_at > NOW())
 			ORDER BY created_at, seq
 			LIMIT $2
 			FOR UPDATE SKIP LOCKED

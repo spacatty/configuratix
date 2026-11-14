@@ -623,6 +623,25 @@ export interface BulkHealthCheckResult {
   errors: { id: string; error: string }[];
 }
 
+/** Extra knobs for (re)assigning a domain. */
+export interface AssignDomainOptions {
+  /**
+   * What to do on the machine the domain moves away from. "remove" (default) queues a
+   * remove_domain job there, which the backend fails after ~60 s if that machine never picks
+   * it up. "skip" leaves the old machine untouched (offline or already deleted).
+   */
+  sourceCleanup?: "remove" | "skip";
+  /** Link machine + config without queuing an apply job (revert of a migration). */
+  skipApply?: boolean;
+}
+
+function assignOptionsBody(opts: AssignDomainOptions): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (opts.sourceCleanup) body.source_cleanup = opts.sourceCleanup;
+  if (opts.skipApply) body.skip_apply = true;
+  return body;
+}
+
 /** Job references a domain mutation may return (assign / apply / bulk-assign). */
 export interface DomainJobsResponse {
   message?: string;
@@ -1652,10 +1671,15 @@ class ApiClient {
     });
   }
 
-  async assignDomain(id: string, machineId: string | null, configId: string | null): Promise<DomainJobsResponse> {
+  async assignDomain(
+    id: string,
+    machineId: string | null,
+    configId: string | null,
+    opts: AssignDomainOptions = {}
+  ): Promise<DomainJobsResponse> {
     const res = await this.request<DomainJobsResponse | null>(`/api/domains/${id}/assign`, {
       method: "PUT",
-      body: JSON.stringify({ machine_id: machineId, config_id: configId }),
+      body: JSON.stringify({ machine_id: machineId, config_id: configId, ...assignOptionsBody(opts) }),
     });
     return res ?? {};
   }
@@ -1725,7 +1749,8 @@ class ApiClient {
   async bulkAssignDomains(
     domainIds: string[],
     machineId: string | null,
-    configId: string | null
+    configId: string | null,
+    opts: AssignDomainOptions = {}
   ): Promise<{ ok: number; errors: { id: string; error: string }[] } & DomainJobsResponse> {
     return this.request("/api/domains/bulk/assign", {
       method: "POST",
@@ -1733,6 +1758,7 @@ class ApiClient {
         domain_ids: domainIds,
         machine_id: machineId,
         config_id: configId,
+        ...assignOptionsBody(opts),
       }),
     });
   }

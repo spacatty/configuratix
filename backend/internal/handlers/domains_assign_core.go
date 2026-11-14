@@ -243,6 +243,11 @@ func queueDomainApply(ctx context.Context, tx *sqlx.Tx, db *database.DB, domainI
 	return created, nil
 }
 
+// removeDomainPendingTimeout bounds how long a remove_domain job waits for its agent. The old
+// machine of a migration may be down or already deleted, so the cleanup must fail fast (never
+// more than a minute) instead of leaving the migration hanging.
+const removeDomainPendingTimeout = 60
+
 // queueDomainRemove creates a remove_domain job on a machine. markDomain=true records it as
 // the domain's last job (used when the domain is unassigned, not when it moves).
 func queueDomainRemove(ctx context.Context, tx *sqlx.Tx, domainID uuid.UUID, fqdn string, machineID uuid.UUID,
@@ -259,6 +264,7 @@ func queueDomainRemove(ctx context.Context, tx *sqlx.Tx, domainID uuid.UUID, fqd
 	spec.EntityType = jobs.EntityDomain
 	spec.EntityID = domainID.String()
 	spec.CreatedBy = createdBy
+	spec.PendingTimeoutSeconds = removeDomainPendingTimeout
 	job, err := jobs.Create(ctx, tx, spec)
 	if err != nil {
 		return nil, err
@@ -314,7 +320,8 @@ func (h *DomainsHandler) assignDomainCore(id uuid.UUID, req AssignDomainRequest,
 	var domainFQDN string
 	tx.Get(&domainFQDN, "SELECT fqdn FROM domains WHERE id = $1", id)
 
-	if currentMachineID != nil && (req.MachineID == nil || *currentMachineID != *req.MachineID) {
+	moving := currentMachineID != nil && (req.MachineID == nil || *currentMachineID != *req.MachineID)
+	if moving && req.SourceCleanup != "skip" {
 		// Moving away from (or unassigning) the old machine: clean it up there.
 		if rj, err := queueDomainRemove(ctx, tx, id, domainFQDN, *currentMachineID, createdBy, req.MachineID == nil); err != nil {
 			return nil, fmt.Errorf("failed to queue removal: %w", err)
@@ -326,7 +333,7 @@ func (h *DomainsHandler) assignDomainCore(id uuid.UUID, req AssignDomainRequest,
 		tx.Exec(`UPDATE domains SET apply_status = CASE WHEN apply_status = 'removing' THEN 'removing' ELSE NULL END WHERE id = $1`, id)
 	}
 
-	if req.MachineID != nil && req.ConfigID != nil {
+	if req.MachineID != nil && req.ConfigID != nil && !req.SkipApply {
 		applied, err := queueDomainApply(ctx, tx, h.db, id, domainFQDN, *req.MachineID, *req.ConfigID, createdBy)
 		if err != nil {
 			return nil, err
