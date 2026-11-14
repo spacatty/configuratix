@@ -1,7 +1,11 @@
 package domainhealth
 
 import (
+	"context"
+	"errors"
+	"net"
 	"net/http"
+	"net/url"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -66,5 +70,30 @@ func TestStoredBody(t *testing.T) {
 	body, _ = storedBody("ok\x00\xff", false)
 	if body != "ok�" {
 		t.Errorf("not sanitized: %q", body)
+	}
+}
+
+func TestShortErr(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{&url.Error{Op: "Get", URL: "http://x.test/", Err: context.DeadlineExceeded}, "Timed out waiting for a response"},
+		{errors.New(`Get "https://x.test/": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`), "Timed out waiting for a response"},
+		{errors.New(`Get "http://x.test/": dial tcp 127.0.0.1:80: connectex: No connection could be made because the target machine actively refused it.`), "Connection refused"},
+		{errors.New(`Get "http://x.test/": dial tcp 1.2.3.4:80: connect: connection refused`), "Connection refused"},
+		{errors.New(`Get "https://x.test/": http: server gave HTTP response to HTTPS client`), "Plain HTTP on the HTTPS port"},
+		{errors.New(`Get "https://x.test/": tls: first record does not look like a TLS handshake`), "TLS handshake failed: first record does not look like a TLS handshake"},
+		{errors.New(`Get "http://x.test/": EOF`), "Connection closed before a response"},
+		{errors.New(`Get "http://x.test/": something odd happened`), "Something odd happened"},
+		{errors.New("plain"), "Plain"},
+	}
+	for _, c := range cases {
+		if got := shortErr(c.err); got != c.want {
+			t.Errorf("shortErr(%v) = %q, want %q", c.err, got, c.want)
+		}
+	}
+	if got := dnsReason(&net.DNSError{Err: "no such host", Name: "x.test", IsNotFound: true}); got != "DNS lookup failed: no such host" {
+		t.Errorf("dnsReason = %q", got)
 	}
 }

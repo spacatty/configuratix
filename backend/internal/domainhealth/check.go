@@ -1,10 +1,14 @@
 package domainhealth
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -128,7 +132,7 @@ func Check(in Input) Result {
 	switch {
 	case dnsErr != nil:
 		res.Status = "unhealthy"
-		res.Error = "DNS lookup failed: " + shortErr(dnsErr)
+		res.Error = dnsReason(dnsErr)
 	case dnsMatchesMachine:
 		res.Status = "unhealthy"
 	default:
@@ -198,10 +202,63 @@ func sanitizeText(s string, max int) string {
 	return s
 }
 
+// shortErr turns a probe error into a one-line reason a person can read: the request URL
+// prefix Go adds is dropped and the common network failures get plain wording.
 func shortErr(err error) string {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		err = ue.Err
+	}
 	s := err.Error()
+	// Unwrap "Get \"url\": ..." when it wasn't a *url.Error (e.g. already stringified).
+	if m := requestPrefix.FindStringSubmatch(s); m != nil {
+		s = m[1]
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), strings.Contains(s, "Client.Timeout exceeded"), strings.Contains(s, "i/o timeout"):
+		return "Timed out waiting for a response"
+	case strings.Contains(s, "actively refused"), strings.Contains(s, "connection refused"):
+		return "Connection refused"
+	case strings.Contains(s, "no such host"), strings.Contains(s, "server misbehaving"):
+		return "DNS lookup failed"
+	case strings.Contains(s, "connection reset"):
+		return "Connection reset by the server"
+	case strings.Contains(s, "no route to host"), strings.Contains(s, "network is unreachable"):
+		return "Host unreachable"
+	case strings.Contains(s, "gave HTTP response to HTTPS client"):
+		return "Plain HTTP on the HTTPS port"
+	case strings.HasPrefix(s, "tls:"), strings.Contains(s, "x509:"):
+		return "TLS handshake failed: " + strings.TrimSpace(strings.TrimPrefix(s, "tls:"))
+	case strings.Contains(s, "EOF"):
+		return "Connection closed before a response"
+	}
+	// Last resort: the raw message without the noisy "dial tcp 1.2.3.4:443:" prefix.
+	if i := strings.LastIndex(s, ": "); i >= 0 && strings.HasPrefix(s, "dial ") {
+		s = s[i+2:]
+	}
 	if len(s) > 300 {
 		s = s[:300]
 	}
-	return s
+	if s == "" {
+		return "Request failed"
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+var requestPrefix = regexp.MustCompile(`^(?:Get|Head|Post) "[^"]*": (.*)$`)
+
+// dnsReason explains a failed lookup without repeating the host or Go's resolver internals.
+func dnsReason(err error) string {
+	var de *net.DNSError
+	if errors.As(err, &de) {
+		switch {
+		case de.IsNotFound:
+			return "DNS lookup failed: no such host"
+		case de.IsTimeout:
+			return "DNS lookup failed: timed out"
+		case de.Err != "":
+			return "DNS lookup failed: " + de.Err
+		}
+	}
+	return "DNS lookup failed"
 }

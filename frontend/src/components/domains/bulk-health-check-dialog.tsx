@@ -142,30 +142,44 @@ export function BulkHealthCheckDialog({
               <ul className="max-h-96 divide-y divide-border overflow-y-auto rounded-md border border-border">
                 {failing.map((r) => {
                   const d = byId.get(r.id);
-                  const hasResponse = !r.error && typeof d?.last_check_status_code === "number";
+                  const code = typeof d?.last_check_status_code === "number" ? d.last_check_status_code : null;
+                  const hasResponse = !r.error && code !== null;
                   const isOpen = expanded === r.id;
+                  // Why it failed: the check's reason, else a label for the status it ended in.
+                  const reason = r.error ?? d?.last_check_error ?? (code !== null ? `HTTP ${code}` : r.status === "proxied" ? "Proxied" : null);
+                  const meta = [
+                    code !== null ? `HTTP ${code}` : null,
+                    typeof d?.last_check_response_ms === "number" ? `${d.last_check_response_ms} ms` : null,
+                  ].filter(Boolean);
                   return (
                     <li key={r.id}>
                       <button
                         type="button"
                         disabled={!hasResponse}
                         onClick={() => setExpanded(isOpen ? null : r.id)}
-                        className="flex w-full items-center gap-3 px-3 py-2 text-left enabled:hover:bg-accent/50"
+                        className="flex w-full items-start gap-3 px-3 py-2 text-left enabled:hover:bg-accent/50"
                         aria-expanded={hasResponse ? isOpen : undefined}
                       >
                         <ChevronRight
                           className={cn(
-                            "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                            "mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform",
                             isOpen && "rotate-90",
                             !hasResponse && "invisible"
                           )}
                         />
-                        <StatusDot status="unhealthy" pulse={false} />
-                        <span className="font-data min-w-0 flex-1 truncate text-[12.5px]">{d?.fqdn ?? r.id}</span>
-                        <span className="font-data max-w-[55%] shrink-0 truncate text-[12px] text-muted-foreground" title={r.error ?? d?.last_check_error ?? undefined}>
-                          {r.error ??
-                            d?.last_check_error ??
-                            (typeof d?.last_check_status_code === "number" ? `HTTP ${d.last_check_status_code}` : r.status)}
+                        <StatusDot status="unhealthy" pulse={false} className="mt-1" />
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-baseline justify-between gap-3">
+                            <span className="font-data min-w-0 truncate text-[12.5px]">{d?.fqdn ?? r.id}</span>
+                            {meta.length > 0 && (
+                              <span className="font-data shrink-0 text-[11.5px] text-muted-foreground">{meta.join(" · ")}</span>
+                            )}
+                          </span>
+                          {reason && (
+                            <span className="mt-0.5 block text-[12px] leading-snug break-words text-destructive/90">
+                              {reason}
+                            </span>
+                          )}
                         </span>
                       </button>
                       {isOpen && d && (
